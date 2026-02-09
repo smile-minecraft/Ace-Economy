@@ -67,29 +67,30 @@ public class EconomyProvider {
      * @return 操作是否成功的 CompletableFuture
      */
     public CompletableFuture<Boolean> deposit(UUID uuid, double amount) {
-        if (amount <= 0) {
-            return CompletableFuture.completedFuture(false);
-        }
+        return CompletableFuture.supplyAsync(() -> {
+            if (amount <= 0) {
+                return false;
+            }
 
-        // 檢查帳戶是否在快取中
-        if (!currencyManager.hasAccount(uuid)) {
-            return CompletableFuture.completedFuture(false);
-        }
+            // 檢查帳戶是否在快取中
+            if (!currencyManager.hasAccount(uuid)) {
+                return false;
+            }
 
-        double currentBalance = currencyManager.getBalance(uuid);
+            double currentBalance = currencyManager.getBalance(uuid);
 
-        // 觸發交易事件
-        EconomyTransactionEvent event = new EconomyTransactionEvent(
-                uuid, amount, EconomyTransactionEvent.TransactionType.DEPOSIT, currentBalance);
-        Bukkit.getPluginManager().callEvent(event);
+            // 觸發交易事件
+            EconomyTransactionEvent event = new EconomyTransactionEvent(
+                    uuid, amount, EconomyTransactionEvent.TransactionType.DEPOSIT, currentBalance);
+            Bukkit.getPluginManager().callEvent(event);
 
-        if (event.isCancelled()) {
-            return CompletableFuture.completedFuture(false);
-        }
+            if (event.isCancelled()) {
+                return false;
+            }
 
-        // 執行存款
-        boolean success = currencyManager.deposit(uuid, amount);
-        return CompletableFuture.completedFuture(success);
+            // 執行存款
+            return currencyManager.deposit(uuid, amount);
+        });
     }
 
     /**
@@ -104,34 +105,35 @@ public class EconomyProvider {
      * @return 操作是否成功的 CompletableFuture
      */
     public CompletableFuture<Boolean> withdraw(UUID uuid, double amount) {
-        if (amount <= 0) {
-            return CompletableFuture.completedFuture(false);
-        }
+        return CompletableFuture.supplyAsync(() -> {
+            if (amount <= 0) {
+                return false;
+            }
 
-        // 檢查帳戶是否在快取中
-        if (!currencyManager.hasAccount(uuid)) {
-            return CompletableFuture.completedFuture(false);
-        }
+            // 檢查帳戶是否在快取中
+            if (!currencyManager.hasAccount(uuid)) {
+                return false;
+            }
 
-        double currentBalance = currencyManager.getBalance(uuid);
+            double currentBalance = currencyManager.getBalance(uuid);
 
-        // 檢查餘額是否足夠（在觸發事件前）
-        if (currentBalance < amount) {
-            return CompletableFuture.completedFuture(false);
-        }
+            // 檢查餘額是否足夠（在觸發事件前）
+            if (currentBalance < amount) {
+                return false;
+            }
 
-        // 觸發交易事件
-        EconomyTransactionEvent event = new EconomyTransactionEvent(
-                uuid, amount, EconomyTransactionEvent.TransactionType.WITHDRAW, currentBalance);
-        Bukkit.getPluginManager().callEvent(event);
+            // 觸發交易事件
+            EconomyTransactionEvent event = new EconomyTransactionEvent(
+                    uuid, amount, EconomyTransactionEvent.TransactionType.WITHDRAW, currentBalance);
+            Bukkit.getPluginManager().callEvent(event);
 
-        if (event.isCancelled()) {
-            return CompletableFuture.completedFuture(false);
-        }
+            if (event.isCancelled()) {
+                return false;
+            }
 
-        // 執行提款
-        boolean success = currencyManager.withdraw(uuid, amount);
-        return CompletableFuture.completedFuture(success);
+            // 執行提款
+            return currencyManager.withdraw(uuid, amount);
+        });
     }
 
     /**
@@ -145,29 +147,30 @@ public class EconomyProvider {
      * @return 操作是否成功的 CompletableFuture
      */
     public CompletableFuture<Boolean> setBalance(UUID uuid, double amount) {
-        if (amount < 0) {
-            return CompletableFuture.completedFuture(false);
-        }
+        return CompletableFuture.supplyAsync(() -> {
+            if (amount < 0) {
+                return false;
+            }
 
-        // 檢查帳戶是否在快取中
-        if (!currencyManager.hasAccount(uuid)) {
-            return CompletableFuture.completedFuture(false);
-        }
+            // 檢查帳戶是否在快取中
+            if (!currencyManager.hasAccount(uuid)) {
+                return false;
+            }
 
-        double currentBalance = currencyManager.getBalance(uuid);
+            double currentBalance = currencyManager.getBalance(uuid);
 
-        // 觸發交易事件
-        EconomyTransactionEvent event = new EconomyTransactionEvent(
-                uuid, amount, EconomyTransactionEvent.TransactionType.SET, currentBalance);
-        Bukkit.getPluginManager().callEvent(event);
+            // 觸發交易事件
+            EconomyTransactionEvent event = new EconomyTransactionEvent(
+                    uuid, amount, EconomyTransactionEvent.TransactionType.SET, currentBalance);
+            Bukkit.getPluginManager().callEvent(event);
 
-        if (event.isCancelled()) {
-            return CompletableFuture.completedFuture(false);
-        }
+            if (event.isCancelled()) {
+                return false;
+            }
 
-        // 執行設定餘額
-        boolean success = currencyManager.setBalance(uuid, amount);
-        return CompletableFuture.completedFuture(success);
+            // 執行設定餘額
+            return currencyManager.setBalance(uuid, amount);
+        });
     }
 
     /**
@@ -183,55 +186,57 @@ public class EconomyProvider {
      * @return 操作是否成功的 CompletableFuture
      */
     public CompletableFuture<Boolean> transfer(UUID from, UUID to, double amount) {
-        if (amount <= 0) {
-            return CompletableFuture.completedFuture(false);
-        }
+        return CompletableFuture.supplyAsync(() -> {
+            if (amount <= 0) {
+                return false;
+            }
 
-        // 檢查雙方帳戶是否在快取中
-        if (!currencyManager.hasAccount(from) || !currencyManager.hasAccount(to)) {
-            return CompletableFuture.completedFuture(false);
-        }
+            // 檢查雙方帳戶是否在快取中
+            if (!currencyManager.hasAccount(from) || !currencyManager.hasAccount(to)) {
+                return false;
+            }
 
-        double fromBalance = currencyManager.getBalance(from);
-        double toBalance = currencyManager.getBalance(to);
+            double fromBalance = currencyManager.getBalance(from);
+            double toBalance = currencyManager.getBalance(to);
 
-        // 檢查發送方餘額
-        if (fromBalance < amount) {
-            return CompletableFuture.completedFuture(false);
-        }
+            // 檢查發送方餘額
+            if (fromBalance < amount) {
+                return false;
+            }
 
-        // 觸發發送方事件
-        EconomyTransactionEvent fromEvent = new EconomyTransactionEvent(
-                from, amount, EconomyTransactionEvent.TransactionType.TRANSFER_OUT, fromBalance);
-        Bukkit.getPluginManager().callEvent(fromEvent);
+            // 觸發發送方事件
+            EconomyTransactionEvent fromEvent = new EconomyTransactionEvent(
+                    from, amount, EconomyTransactionEvent.TransactionType.TRANSFER_OUT, fromBalance);
+            Bukkit.getPluginManager().callEvent(fromEvent);
 
-        if (fromEvent.isCancelled()) {
-            return CompletableFuture.completedFuture(false);
-        }
+            if (fromEvent.isCancelled()) {
+                return false;
+            }
 
-        // 觸發接收方事件
-        EconomyTransactionEvent toEvent = new EconomyTransactionEvent(
-                to, amount, EconomyTransactionEvent.TransactionType.TRANSFER_IN, toBalance);
-        Bukkit.getPluginManager().callEvent(toEvent);
+            // 觸發接收方事件
+            EconomyTransactionEvent toEvent = new EconomyTransactionEvent(
+                    to, amount, EconomyTransactionEvent.TransactionType.TRANSFER_IN, toBalance);
+            Bukkit.getPluginManager().callEvent(toEvent);
 
-        if (toEvent.isCancelled()) {
-            return CompletableFuture.completedFuture(false);
-        }
+            if (toEvent.isCancelled()) {
+                return false;
+            }
 
-        // 執行轉帳：先提款再存款
-        boolean withdrawSuccess = currencyManager.withdraw(from, amount);
-        if (!withdrawSuccess) {
-            return CompletableFuture.completedFuture(false);
-        }
+            // 執行轉帳：先提款再存款
+            boolean withdrawSuccess = currencyManager.withdraw(from, amount);
+            if (!withdrawSuccess) {
+                return false;
+            }
 
-        boolean depositSuccess = currencyManager.deposit(to, amount);
-        if (!depositSuccess) {
-            // 退回發送方的金額（回滾）
-            currencyManager.deposit(from, amount);
-            return CompletableFuture.completedFuture(false);
-        }
+            boolean depositSuccess = currencyManager.deposit(to, amount);
+            if (!depositSuccess) {
+                // 退回發送方的金額（回滾）
+                currencyManager.deposit(from, amount);
+                return false;
+            }
 
-        return CompletableFuture.completedFuture(true);
+            return true;
+        });
     }
 
     /**

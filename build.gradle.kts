@@ -35,8 +35,8 @@ dependencies {
     // HikariCP (資料庫連線池)
     implementation("com.zaxxer:HikariCP:5.1.0")
 
-    // SLF4J (HikariCP 日誌)
-    implementation("org.slf4j:slf4j-simple:2.0.9")
+    // SLF4J (HikariCP 日誌 - 使用 NOP 禁止輸出)
+    implementation("org.slf4j:slf4j-nop:2.0.9")
 
     // Testing
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.0")
