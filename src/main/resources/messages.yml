@@ -54,3 +54,12 @@ messages:
 
   # 設定重載
   reload-success: "<green>設定檔已重新載入！</green>"
+
+  # 資料遷移
+  migration-start: "<yellow>開始從 <white><plugin></white> 匯入資料...</yellow>"
+  migration-progress: "<gray>匯入進度：<white><current>/<total></white></gray>"
+  migration-complete: "<green>遷移完成！成功：<white><success></white>，失敗：<white><fail></white></green>"
+  migration-error: "<red>遷移失敗：<white><error></white></red>"
+  migration-not-available: "<red>找不到 <white><plugin></white> 的資料資料夾！</red>"
+  migration-in-progress: "<red>已有遷移任務正在進行中！</red>"
+  migration-usage: "<gray>用法：<white>/aceeco import <essentials|cmi></white></gray>"
