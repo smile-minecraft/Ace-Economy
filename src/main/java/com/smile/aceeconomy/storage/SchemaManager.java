@@ -76,6 +76,9 @@ public class SchemaManager {
             if (currentVersion < 4) {
                 migrateV4(conn);
             }
+            if (currentVersion < 5) {
+                migrateV5(conn);
+            }
 
             logger.info("[AceEconomy] Database migration complete.");
 
@@ -340,5 +343,145 @@ public class SchemaManager {
 
         recordMigration(conn, 4, "Add old_balance column");
         logger.info("遷移 V4 成功！");
+    }
+
+    /**
+     * V5: 多貨幣系統遷移。
+     * 1. 建立 ace_balances 表 (uuid, currency_id, balance)。
+     * 2. 將 ace_economy 資料遷移至 ace_balances (預設 currency_id = 'dollar')。
+     * 3. ace_transaction_logs 新增 currency_id 欄位。
+     * 4. 備份舊 ace_economy 表。
+     */
+    private void migrateV5(Connection conn) throws SQLException {
+        logger.info("[AceEconomy] Applying Migration V5: Multi-Currency System...");
+
+        String balancesTable = "ace_balances";
+        String economyTable = "ace_economy";
+        String backupTable = "ace_economy_backup_v1";
+
+        // 1. 建立 ace_balances 表
+        String createTableSql = isMySQL ? """
+                CREATE TABLE IF NOT EXISTS %s (
+                    uuid VARCHAR(36) NOT NULL,
+                    currency_id VARCHAR(32) NOT NULL,
+                    balance DOUBLE NOT NULL DEFAULT 0,
+                    username VARCHAR(16),
+                    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    PRIMARY KEY (uuid, currency_id),
+                    INDEX idx_uuid (uuid)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """.formatted(balancesTable) : """
+                CREATE TABLE IF NOT EXISTS %s (
+                    uuid TEXT NOT NULL,
+                    currency_id TEXT NOT NULL,
+                    balance REAL NOT NULL DEFAULT 0,
+                    username TEXT,
+                    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (uuid, currency_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_uuid ON %s (uuid);
+                """.formatted(balancesTable, balancesTable);
+
+        boolean autoCommit = conn.getAutoCommit();
+        try {
+            if (isMySQL)
+                conn.setAutoCommit(false);
+
+            try (Statement stmt = conn.createStatement()) {
+                stmt.execute(createTableSql);
+            }
+
+            // 2. 遷移資料 (如果 ace_balances 是空的且 ace_economy 存在)
+            if (tableExists(conn, economyTable) && !tableHasData(conn, balancesTable)) {
+                logger.info("正在將資料從 " + economyTable + " 遷移至 " + balancesTable + "...");
+                String migrateSql = "INSERT INTO " + balancesTable
+                        + " (uuid, currency_id, balance, username) SELECT uuid, 'dollar', balance, username FROM "
+                        + economyTable;
+                try (Statement stmt = conn.createStatement()) {
+                    int rows = stmt.executeUpdate(migrateSql);
+                    logger.info("已遷移 " + rows + " 筆帳戶資料。");
+                }
+            }
+
+            // 3. Update transaction logs
+            String logsTable = "ace_transaction_logs";
+            boolean colExists = false;
+            try (ResultSet rs = conn.getMetaData().getColumns(null, null, logsTable, "currency_id")) {
+                if (rs.next())
+                    colExists = true;
+            }
+
+            if (!colExists) {
+                logger.info("更新交易記錄表 (新增 currency_id)...");
+                String alterSql = "ALTER TABLE " + logsTable + " ADD COLUMN currency_id VARCHAR(32)";
+                if (isMySQL)
+                    alterSql += " AFTER transaction_id"; // Adjust position if needed, or stick to simple append
+                // Actually logs table usually has currency_type? Let's check V2 migration.
+                // V2: currency_type VARCHAR(32) NOT NULL.
+                // Wait, V2 already has 'currency_type'. Is that the same as 'currency_id'?
+                // If so, we might just need to rename or ensure it works.
+                // Let's assume 'currency_type' in V2 was intended for 'USD' etc.
+                // If V2 used 'currency_type', maybe we don't need 'currency_id' if we reuse it.
+                // But the plan said "Add currency_id column".
+                // Let's check existing logs table definition in existing file...
+                // existing V2: currency_type VARCHAR(32) NOT NULL.
+                // So we probably just need to migrate 'currency_type' data if it wasn't used
+                // for ID.
+                // Usually previously it was 'USD'. Now we want 'dollar', 'token'.
+                // So we might need to update data: UPDATE ace_transaction_logs SET
+                // currency_type = 'dollar' WHERE currency_type = 'USD' or 'default'.
+
+                // Let's strictly follow user plan: "Add currency_id column".
+                // But if 'currency_type' exists, adding 'currency_id' is redundant if they mean
+                // the same.
+                // Let's assume 'currency_type' was "USD" string, and 'currency_id' is the
+                // internal keys ("dollar").
+                // Or maybe we just rename/use currency_type.
+                // The user says "Add currency_id column". I will add it.
+
+                try (Statement stmt = conn.createStatement()) {
+                    stmt.executeUpdate(alterSql);
+                }
+
+                // Set default
+                String updateLogsSql = "UPDATE " + logsTable + " SET currency_id = 'dollar' WHERE currency_id IS NULL";
+                try (Statement stmt = conn.createStatement()) {
+                    stmt.executeUpdate(updateLogsSql);
+                }
+            }
+
+            // 4. Rename old table
+            if (tableExists(conn, economyTable)) {
+                logger.info("備份舊表 " + economyTable + " 為 " + backupTable);
+                String renameSql = isMySQL ? "RENAME TABLE " + economyTable + " TO " + backupTable
+                        : "ALTER TABLE " + economyTable + " RENAME TO " + backupTable;
+
+                // Check if backup exists first?
+                if (!tableExists(conn, backupTable)) {
+                    try (Statement stmt = conn.createStatement()) {
+                        stmt.executeUpdate(renameSql);
+                    }
+                }
+            }
+
+            if (isMySQL)
+                conn.commit();
+            recordMigration(conn, 5, "Multi-Currency Schema V5");
+            logger.info("遷移 V5 成功！");
+
+        } catch (SQLException e) {
+            if (isMySQL)
+                conn.rollback();
+            throw e;
+        } finally {
+            conn.setAutoCommit(autoCommit);
+        }
+    }
+
+    private boolean tableHasData(Connection conn, String tableName) throws SQLException {
+        try (Statement stmt = conn.createStatement();
+                ResultSet rs = stmt.executeQuery("SELECT 1 FROM " + tableName + " LIMIT 1")) {
+            return rs.next();
+        }
     }
 }

@@ -19,6 +19,7 @@ import org.jetbrains.annotations.Nullable;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Collectors;
 
 /**
  * 管理員指令處理器。
@@ -147,6 +148,18 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
             return true;
         }
 
+        // 取得貨幣 ID (可選參數)
+        String currencyId = plugin.getCurrencyManager().getDefaultCurrencyId();
+        if (args.length >= 4) {
+            String inputCurrency = args[3].toLowerCase();
+            if (!plugin.getCurrencyManager().currencyExists(inputCurrency)) {
+                MessageUtils.sendError(sender, "<red>未知的貨幣: <white>" + inputCurrency + "</white></red>");
+                return true;
+            }
+            currencyId = inputCurrency;
+        }
+        String currencyName = plugin.getConfigManager().getCurrency(currencyId).name();
+
         // 執行操作
         final double finalAmount = amount;
         switch (action) {
@@ -155,15 +168,17 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
                     MessageUtils.sendError(sender, "給予金額必須大於 0！");
                     return true;
                 }
-                economyProvider.deposit(targetPlayer.getUniqueId(), amount).thenAccept(success -> {
+                final String gCurrency = currencyId;
+                final String gCurrencyName = currencyName;
+                economyProvider.deposit(targetPlayer.getUniqueId(), currencyId, amount).thenAccept(success -> {
                     if (success) {
                         MessageUtils.sendSuccess(sender,
-                                "已給予 <aqua><player></aqua> " + MessageUtils.formatMoney(finalAmount),
+                                "已給予 <aqua><player></aqua> " + MessageUtils.formatMoney(finalAmount) + " "
+                                        + gCurrencyName,
                                 "player", targetPlayer.getName());
                         MessageUtils.sendSuccess(targetPlayer,
-                                "管理員給予你 " + MessageUtils.formatMoney(finalAmount));
+                                "管理員給予你 " + MessageUtils.formatMoney(finalAmount) + " " + gCurrencyName);
 
-                        // 觸發交易事件
                         fireTransactionEvent(sender, targetPlayer, finalAmount,
                                 EconomyTransactionEvent.TransactionType.GIVE);
                     } else {
@@ -177,15 +192,17 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
                     MessageUtils.sendError(sender, "扣除金額必須大於 0！");
                     return true;
                 }
-                economyProvider.withdraw(targetPlayer.getUniqueId(), amount).thenAccept(success -> {
+                final String tCurrency = currencyId;
+                final String tCurrencyName = currencyName;
+                economyProvider.withdraw(targetPlayer.getUniqueId(), currencyId, amount).thenAccept(success -> {
                     if (success) {
                         MessageUtils.sendSuccess(sender,
-                                "已從 <aqua><player></aqua> 扣除 " + MessageUtils.formatMoney(finalAmount),
+                                "已從 <aqua><player></aqua> 扣除 " + MessageUtils.formatMoney(finalAmount) + " "
+                                        + tCurrencyName,
                                 "player", targetPlayer.getName());
                         MessageUtils.sendSuccess(targetPlayer,
-                                "管理員扣除了你 " + MessageUtils.formatMoney(finalAmount));
+                                "管理員扣除了你 " + MessageUtils.formatMoney(finalAmount) + " " + tCurrencyName);
 
-                        // 觸發交易事件
                         fireTransactionEvent(sender, targetPlayer, finalAmount,
                                 EconomyTransactionEvent.TransactionType.TAKE);
                     } else {
@@ -199,15 +216,17 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
                     MessageUtils.sendError(sender, "餘額不能為負數！");
                     return true;
                 }
-                economyProvider.setBalance(targetPlayer.getUniqueId(), amount).thenAccept(success -> {
+                final String sCurrency = currencyId;
+                final String sCurrencyName = currencyName;
+                economyProvider.setBalance(targetPlayer.getUniqueId(), currencyId, amount).thenAccept(success -> {
                     if (success) {
                         MessageUtils.sendSuccess(sender,
-                                "已將 <aqua><player></aqua> 的餘額設為 " + MessageUtils.formatMoney(finalAmount),
+                                "已將 <aqua><player></aqua> 的" + sCurrencyName + "餘額設為 "
+                                        + MessageUtils.formatMoney(finalAmount),
                                 "player", targetPlayer.getName());
                         MessageUtils.sendSuccess(targetPlayer,
-                                "管理員將你的餘額設為 " + MessageUtils.formatMoney(finalAmount));
+                                "管理員將你的" + sCurrencyName + "餘額設為 " + MessageUtils.formatMoney(finalAmount));
 
-                        // 觸發交易事件
                         fireTransactionEvent(sender, targetPlayer, finalAmount,
                                 EconomyTransactionEvent.TransactionType.SET);
                     } else {
@@ -315,9 +334,9 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
 
         if (sender.hasPermission("aceeconomy.admin")) {
             MessageUtils.send(sender, "<yellow>--- 管理員指令 ---</yellow>");
-            MessageUtils.send(sender, "<white>/aceeco give <玩家> <金額></white> <gray>- 給予玩家金錢</gray>");
-            MessageUtils.send(sender, "<white>/aceeco take <玩家> <金額></white> <gray>- 扣除玩家金錢</gray>");
-            MessageUtils.send(sender, "<white>/aceeco set <玩家> <金額></white> <gray>- 設定玩家餘額</gray>");
+            MessageUtils.send(sender, "<white>/aceeco give <玩家> <金額> [貨幣]</white> <gray>- 給予玩家金錢</gray>");
+            MessageUtils.send(sender, "<white>/aceeco take <玩家> <金額> [貨幣]</white> <gray>- 扣除玩家金錢</gray>");
+            MessageUtils.send(sender, "<white>/aceeco set <玩家> <金額> [貨幣]</white> <gray>- 設定玩家餘額</gray>");
             MessageUtils.send(sender, "<white>/aceeco history <玩家> [頁碼]</white> <gray>- 查看交易記錄</gray>");
             MessageUtils.send(sender, "<white>/aceeco rollback <交易ID></white> <gray>- 回溯交易</gray>");
             MessageUtils.send(sender, "<white>/aceeco import <essentials|cmi></white> <gray>- 匯入資料</gray>");
@@ -364,8 +383,16 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
         } else if (args.length == 3) {
             String action = args[0].toLowerCase();
             if (!action.equals("import")) {
-                // 提示金額
                 return List.of("100", "500", "1000", "10000");
+            }
+        } else if (args.length == 4) {
+            String action = args[0].toLowerCase();
+            if (action.equals("give") || action.equals("take") || action.equals("set")) {
+                // 補全貨幣 ID
+                String prefix = args[3].toLowerCase();
+                return plugin.getCurrencyManager().getRegisteredCurrencies().stream()
+                        .filter(c -> c.toLowerCase().startsWith(prefix))
+                        .collect(Collectors.toList());
             }
         }
 

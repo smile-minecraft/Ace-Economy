@@ -15,6 +15,7 @@ import org.jetbrains.annotations.Nullable;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * 餘額查詢指令處理器。
@@ -49,26 +50,44 @@ public class BalanceCommand implements CommandExecutor, TabCompleter {
             return true;
         }
 
-        // /money 或 /balance（無參數）- 查看自己餘額
+        // /money 或 /balance（無參數）- 查看自己餘額 (預設貨幣)
         if (args.length == 0) {
             if (!(sender instanceof Player player)) {
                 MessageUtils.sendError(sender, "控制台必須指定玩家名稱！");
                 return true;
             }
 
-            double balance = currencyManager.getBalance(player.getUniqueId());
-            MessageUtils.send(sender, "你的餘額：" + MessageUtils.formatMoney(balance));
+            String defaultCurrency = currencyManager.getDefaultCurrencyId();
+            double balance = currencyManager.getBalance(player.getUniqueId(), defaultCurrency);
+            String currencyName = plugin.getConfigManager().getCurrency(defaultCurrency).name();
+            MessageUtils.send(sender, "你的" + currencyName + "餘額：" + MessageUtils.formatMoney(balance));
             return true;
         }
 
-        // /balance <player> - 查看他人餘額
+        // /balance <player> [貨幣] - 查看他人餘額
         String targetName = args[0];
+
+        // 取得貨幣 ID (可選參數)
+        String currencyId = currencyManager.getDefaultCurrencyId();
+        if (args.length >= 2) {
+            String inputCurrency = args[1].toLowerCase();
+            if (!currencyManager.currencyExists(inputCurrency)) {
+                MessageUtils.sendError(sender, "<red>未知的貨幣: <white>" + inputCurrency + "</white></red>");
+                return true;
+            }
+            currencyId = inputCurrency;
+        }
+
+        final String finalCurrencyId = currencyId;
+        String currencyName = plugin.getConfigManager().getCurrency(currencyId).name();
+
         Player targetPlayer = Bukkit.getPlayer(targetName);
 
         if (targetPlayer != null) {
             // 在線玩家
-            double balance = currencyManager.getBalance(targetPlayer.getUniqueId());
-            MessageUtils.send(sender, "<aqua><player></aqua> 的餘額：" + MessageUtils.formatMoney(balance),
+            double balance = currencyManager.getBalance(targetPlayer.getUniqueId(), finalCurrencyId);
+            MessageUtils.send(sender,
+                    "<aqua><player></aqua> 的" + currencyName + "餘額：" + MessageUtils.formatMoney(balance),
                     "player", targetPlayer.getName());
         } else {
             // 離線玩家 - 非同步查詢
@@ -86,7 +105,8 @@ public class BalanceCommand implements CommandExecutor, TabCompleter {
                         MessageUtils.sendError(sender, "該玩家沒有帳戶資料！");
                     } else {
                         MessageUtils.send(sender,
-                                "<aqua><player></aqua> 的餘額：" + MessageUtils.formatMoney(account.getBalance()),
+                                "<aqua><player></aqua> 的" + currencyName + "餘額："
+                                        + MessageUtils.formatMoney(account.getBalance(finalCurrencyId)),
                                 "player", offlinePlayer.getName() != null ? offlinePlayer.getName() : targetName);
                     }
                 });
@@ -109,6 +129,12 @@ public class BalanceCommand implements CommandExecutor, TabCompleter {
                 }
             }
             return completions;
+        } else if (args.length == 2) {
+            // 補全貨幣 ID
+            String prefix = args[1].toLowerCase();
+            return currencyManager.getRegisteredCurrencies().stream()
+                    .filter(c -> c.toLowerCase().startsWith(prefix))
+                    .collect(Collectors.toList());
         }
         return List.of();
     }

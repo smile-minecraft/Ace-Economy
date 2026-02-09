@@ -1,6 +1,7 @@
 package com.smile.aceeconomy.manager;
 
 import com.smile.aceeconomy.AceEconomy;
+import com.smile.aceeconomy.data.Currency;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
@@ -13,7 +14,6 @@ import java.io.File;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
-import java.text.DecimalFormat;
 import java.util.Map;
 
 /**
@@ -41,10 +41,10 @@ public class ConfigManager {
     private String mysqlUsername;
     private String mysqlPassword;
 
-    private String currencySymbol;
-    private String currencyFormat;
-    private DecimalFormat moneyFormatter;
+    private final Map<String, Currency> currencies = new java.util.HashMap<>();
+    private Currency defaultCurrency;
 
+    // Legacy support fields
     private double startBalance;
     private String prefix;
     private String mainCommandAlias;
@@ -200,9 +200,7 @@ public class ConfigManager {
         mysqlPassword = config.getString("storage.mysql.password", "password");
 
         // 貨幣設定
-        currencySymbol = config.getString("currency.symbol", "$");
-        currencyFormat = config.getString("currency.format", "#,##0.00");
-        moneyFormatter = new DecimalFormat(currencySymbol + currencyFormat);
+        loadCurrencies();
 
         // 起始餘額
         startBalance = config.getDouble("start-balance", 1000.0);
@@ -284,34 +282,114 @@ public class ConfigManager {
         return mysqlPassword;
     }
 
-    // ==================== 貨幣設定 ====================
+    /**
+     * 載入貨幣設定。
+     */
+    private void loadCurrencies() {
+        currencies.clear();
+
+        // 檢查是否有新的 currencies 區塊
+        if (config.isConfigurationSection("currencies")) {
+            var section = config.getConfigurationSection("currencies");
+            for (String key : section.getKeys(false)) {
+                String name = section.getString(key + ".name", "Unknown");
+                String symbol = section.getString(key + ".symbol", "$");
+                String format = section.getString(key + ".format", "#,##0.00");
+                boolean isDefault = section.getBoolean(key + ".default", false);
+
+                Currency currency = new Currency(key, name, symbol, format, isDefault);
+                currencies.put(key, currency);
+
+                if (isDefault) {
+                    defaultCurrency = currency;
+                }
+            }
+        }
+
+        // 若沒有設定或未找到預設貨幣，建立預設值 (相容舊版 config)
+        if (defaultCurrency == null) {
+            String symbol = config.getString("currency.symbol", "$");
+            String format = config.getString("currency.format", "#,##0.00");
+
+            // 嘗試保留舊版設定
+            defaultCurrency = new Currency("dollar", "金幣", symbol, format, true);
+            currencies.put("dollar", defaultCurrency);
+
+            plugin.getLogger().warning("未找到預設貨幣設定，已使用 fallback 配置 (dollar)。");
+        }
+
+        // 初始化舊版 formatter (用於相容)
+        // moneyFormatter = new DecimalFormat(defaultCurrency.symbol() +
+        // defaultCurrency.format());
+    }
 
     /**
-     * 取得貨幣符號。
+     * 取得所有貨幣。
+     * 
+     * @return 貨幣 Map (ID -> Currency)
+     */
+    public Map<String, Currency> getCurrencies() {
+        return java.util.Collections.unmodifiableMap(currencies);
+    }
+
+    /**
+     * 取得指定 ID 的貨幣。
+     * 
+     * @param id 貨幣 ID
+     * @return 貨幣物件，若找不到回傳預設貨幣
+     */
+    public Currency getCurrency(String id) {
+        return currencies.getOrDefault(id, defaultCurrency);
+    }
+
+    /**
+     * 取得預設貨幣。
+     * 
+     * @return 預設貨幣
+     */
+    public Currency getDefaultCurrency() {
+        return defaultCurrency;
+    }
+
+    // ==================== 貨幣設定 (舊版相容 API) ====================
+
+    /**
+     * 取得貨幣符號 (預設貨幣)。
      *
      * @return 貨幣符號
      */
     public String getCurrencySymbol() {
-        return currencySymbol;
+        return defaultCurrency.symbol();
     }
 
     /**
-     * 取得貨幣格式。
+     * 取得貨幣格式 (預設貨幣)。
      *
      * @return 貨幣格式字串
      */
     public String getCurrencyFormat() {
-        return currencyFormat;
+        return defaultCurrency.format();
     }
 
     /**
-     * 格式化金額。
+     * 格式化金額 (預設貨幣)。
      *
      * @param amount 金額
      * @return 格式化後的金額字串
      */
     public String formatMoney(double amount) {
-        return moneyFormatter.format(amount);
+        return defaultCurrency.format(amount);
+    }
+
+    /**
+     * 格式化金額 (指定貨幣)。
+     *
+     * @param amount   金額
+     * @param currency 貨幣物件
+     * @return 格式化後的金額字串
+     */
+    public String formatMoney(double amount, Currency currency) {
+        return currency.format(amount);
     }
 
     /**

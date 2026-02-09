@@ -15,6 +15,7 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Collectors;
 
 /**
  * 轉帳指令處理器。
@@ -27,6 +28,7 @@ import java.util.List;
  */
 public class PayCommand implements CommandExecutor, TabCompleter {
 
+    private final AceEconomy plugin;
     private final EconomyProvider economyProvider;
 
     /**
@@ -35,6 +37,7 @@ public class PayCommand implements CommandExecutor, TabCompleter {
      * @param plugin 插件實例
      */
     public PayCommand(AceEconomy plugin) {
+        this.plugin = plugin;
         this.economyProvider = plugin.getEconomyProvider();
     }
 
@@ -54,9 +57,9 @@ public class PayCommand implements CommandExecutor, TabCompleter {
             return true;
         }
 
-        // 參數檢查
+        // 參數檢查: /pay <玩家> <金額> [貨幣]
         if (args.length < 2) {
-            MessageUtils.send(sender, "用法：<white>/pay <玩家> <金額></white>");
+            MessageUtils.send(sender, "用法：<white>/pay <玩家> <金額> [貨幣]</white>");
             return true;
         }
 
@@ -97,20 +100,42 @@ public class PayCommand implements CommandExecutor, TabCompleter {
             return true;
         }
 
-        // 執行轉帳（使用 EconomyProvider 的原子 transfer 方法）
+        // 取得貨幣 ID (可選參數)
+        String currencyId = plugin.getCurrencyManager().getDefaultCurrencyId();
+        if (args.length >= 3) {
+            String inputCurrency = args[2].toLowerCase();
+            if (!plugin.getCurrencyManager().currencyExists(inputCurrency)) {
+                MessageUtils.sendError(sender, "<red>未知的貨幣: <white>" + inputCurrency + "</white></red>");
+                return true;
+            }
+            currencyId = inputCurrency;
+        }
+
+        // 檢查餘額是否足夠
+        double currentBalance = plugin.getCurrencyManager().getBalance(player.getUniqueId(), currencyId);
+        if (currentBalance < amount) {
+            String currencyName = plugin.getConfigManager().getCurrency(currencyId).name();
+            MessageUtils.sendError(sender, "<red>你沒有足夠的 " + currencyName + "！</red>");
+            return true;
+        }
+
+        // 執行轉帳
         final double finalAmount = amount;
-        economyProvider.transfer(player.getUniqueId(), targetPlayer.getUniqueId(), amount)
+        final String finalCurrencyId = currencyId;
+        String currencyName = plugin.getConfigManager().getCurrency(currencyId).name();
+
+        economyProvider.transfer(player.getUniqueId(), targetPlayer.getUniqueId(), currencyId, amount)
                 .thenAccept(success -> {
                     if (success) {
-                        // 發送成功訊息給雙方
                         MessageUtils.sendSuccess(player,
-                                "已轉帳 " + MessageUtils.formatMoney(finalAmount) + " 給 <aqua><player></aqua>！",
+                                "已轉帳 " + MessageUtils.formatMoney(finalAmount) + " " + currencyName
+                                        + " 給 <aqua><player></aqua>！",
                                 "player", targetPlayer.getName());
                         MessageUtils.sendSuccess(targetPlayer,
-                                "收到來自 <aqua><player></aqua> 的轉帳：" + MessageUtils.formatMoney(finalAmount),
+                                "收到來自 <aqua><player></aqua> 的轉帳：" + MessageUtils.formatMoney(finalAmount) + " "
+                                        + currencyName,
                                 "player", player.getName());
 
-                        // 觸發交易事件（非同步事件）
                         EconomyTransactionEvent event = new EconomyTransactionEvent(
                                 player.getUniqueId(), player.getName(),
                                 targetPlayer.getUniqueId(), targetPlayer.getName(),
@@ -138,8 +163,13 @@ public class PayCommand implements CommandExecutor, TabCompleter {
             }
             return completions;
         } else if (args.length == 2) {
-            // 提示金額
             return List.of("100", "500", "1000");
+        } else if (args.length == 3) {
+            // 補全貨幣 ID
+            String prefix = args[2].toLowerCase();
+            return plugin.getCurrencyManager().getRegisteredCurrencies().stream()
+                    .filter(c -> c.toLowerCase().startsWith(prefix))
+                    .collect(Collectors.toList());
         }
         return List.of();
     }

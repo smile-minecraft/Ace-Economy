@@ -356,6 +356,15 @@ public final class AceEconomy extends JavaPlugin implements Listener {
     }
 
     /**
+     * 取得排行榜管理器。
+     *
+     * @return 排行榜管理器實例
+     */
+    public com.smile.aceeconomy.manager.LeaderboardManager getLeaderboardManager() {
+        return leaderboardManager;
+    }
+
+    /**
      * 取得儲存處理器。
      *
      * @return 儲存處理器實例

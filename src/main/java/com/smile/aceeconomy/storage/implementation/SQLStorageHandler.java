@@ -24,27 +24,74 @@ public class SQLStorageHandler implements StorageHandler {
     private final DatabaseConnection databaseConnection;
     private final Logger logger;
 
-    private static final String TABLE_NAME = "ace_economy";
+    private static final String TABLE_NAME = "ace_balances";
 
-    private static final String SELECT_ACCOUNT = "SELECT * FROM %s WHERE uuid = ?";
+    // Select all balances for a user
+    private static final String SELECT_BALANCES = "SELECT currency_id, balance FROM %s WHERE uuid = ?";
 
-    // MySQL 使用 ON DUPLICATE KEY UPDATE
+    // Select username (We need a separate table for users? Or just rely on one
+    // entry?
+    // In V5 schema, we removed `username` from `ace_balances`?
+    // Wait, V1 `ace_economy` had `username`. V5 `ace_balances` creation SQL above
+    // did NOT include `username`.
+    // We lost username storage if we drop `ace_economy`.
+    // The user plan didn't specify where to store username.
+    // Usually plugins store username in a `ace_users` or similar, or just update it
+    // on login in the balances table.
+    // Let's check V5 SQL again: "uuid, currency_id, balance, last_updated". No
+    // username.
+    // We need a place to store username for `/baltop` or display.
+    // I should probably add `username` to `ace_balances` for simplicity, or create
+    // `ace_users`.
+    // Adding to `ace_balances` means redundant username storage for every currency
+    // row, but it's simplest for now.
+    // OR create `ace_users` table. User request didn't specify `ace_users`.
+    // Constraint: "Goal: Transform AceEconomy from a Single-Currency to a
+    // Multi-Currency plugin."
+    // Let's modify SQLStorageHandler to just use `ace_balances` and maybe I should
+    // have added `username` to V5.
+    // Let me check V5 SQL in SchemaManager again... I only defined uuid,
+    // currency_id, balance.
+    // I should updated V5 implementation to include username, or handle it.
+    // If I don't store username, `Account` object needs it.
+    // I will stick to adding `username` to `ace_balances` for now as redundant
+    // column,
+    // or better: assume `ace_user_data` or similar.
+    // Given usage, let's create `ace_players` table in V5 as well? Or just add
+    // username to `ace_balances`.
+    // Redundant is fine for simpler migration.
+
+    // UPDATE: I will perform a quick fix to SchemaManager V5 to include `username`
+    // column,
+    // matching V1 legacy behavior but per-row. It effectively acts as a cache.
+    // Wait, if I change SchemaManager now, I need to do another tool call.
+    // SQLStorageHandler needs `loadAccount` which requires `username`.
+
+    // Let's assume for this step I will update SQLStorageHandler to use
+    // `ace_balances` and expect `username` column?
+    // No, I need to fix V5 first.
+
+    // Let's look at `SQLStorageHandler` again.
+    // `SELECT * FROM ace_economy WHERE uuid = ?` -> gives username.
+    // I will quick-fix SchemaManager V5 to add `username` column.
+
+    // AND update SQLStorageHandler queries.
+
     private static final String UPSERT_MYSQL = """
-            INSERT INTO %s (uuid, username, balance, last_updated)
-            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            INSERT INTO %s (uuid, currency_id, balance, username, last_updated)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON DUPLICATE KEY UPDATE
-                username = VALUES(username),
                 balance = VALUES(balance),
+                username = VALUES(username),
                 last_updated = CURRENT_TIMESTAMP
             """;
 
-    // SQLite 使用 ON CONFLICT
     private static final String UPSERT_SQLITE = """
-            INSERT INTO %s (uuid, username, balance, last_updated)
-            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(uuid) DO UPDATE SET
-                username = excluded.username,
+            INSERT INTO %s (uuid, currency_id, balance, username, last_updated)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(uuid, currency_id) DO UPDATE SET
                 balance = excluded.balance,
+                username = excluded.username,
                 last_updated = CURRENT_TIMESTAMP
             """;
 
@@ -68,18 +115,30 @@ public class SQLStorageHandler implements StorageHandler {
     @Override
     public CompletableFuture<Account> loadAccount(UUID uuid) {
         return CompletableFuture.supplyAsync(() -> {
-            String sql = SELECT_ACCOUNT.formatted(TABLE_NAME);
-
+            // Query all currency balances for a user, including username
+            String query = "SELECT currency_id, balance, username FROM " + TABLE_NAME + " WHERE uuid = ?";
             try (Connection conn = databaseConnection.getConnection();
-                    PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                    PreparedStatement pstmt = conn.prepareStatement(query)) {
 
                 pstmt.setString(1, uuid.toString());
 
                 try (ResultSet rs = pstmt.executeQuery()) {
-                    if (rs.next()) {
-                        String username = rs.getString("username");
+                    java.util.Map<String, Double> balances = new java.util.HashMap<>();
+                    String username = "Unknown";
+                    boolean found = false;
+
+                    while (rs.next()) {
+                        found = true;
+                        String currency = rs.getString("currency_id");
                         double balance = rs.getDouble("balance");
-                        return new Account(uuid, username, balance);
+                        if (rs.getString("username") != null) {
+                            username = rs.getString("username");
+                        }
+                        balances.put(currency, balance);
+                    }
+
+                    if (found) {
+                        return new Account(uuid, username, balances);
                     }
                 }
 
@@ -102,11 +161,20 @@ public class SQLStorageHandler implements StorageHandler {
             try (Connection conn = databaseConnection.getConnection();
                     PreparedStatement pstmt = conn.prepareStatement(sql)) {
 
-                pstmt.setString(1, account.getOwner().toString());
-                pstmt.setString(2, account.getOwnerName());
-                pstmt.setDouble(3, account.getBalance());
+                // Batch update for all currencies
+                conn.setAutoCommit(false);
 
-                pstmt.executeUpdate();
+                for (java.util.Map.Entry<String, Double> entry : account.getBalances().entrySet()) {
+                    pstmt.setString(1, account.getOwner().toString());
+                    pstmt.setString(2, entry.getKey()); // currency_id
+                    pstmt.setDouble(3, entry.getValue());
+                    pstmt.setString(4, account.getOwnerName());
+                    pstmt.addBatch();
+                }
+
+                pstmt.executeBatch();
+                conn.commit();
+                conn.setAutoCommit(true);
 
             } catch (SQLException e) {
                 logger.severe("儲存帳戶時發生錯誤 (" + account.getOwner() + "): " + e.getMessage());

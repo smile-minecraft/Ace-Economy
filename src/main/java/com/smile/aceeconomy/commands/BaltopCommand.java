@@ -40,10 +40,34 @@ public class BaltopCommand implements CommandExecutor, TabCompleter {
             return true;
         }
 
+        MessageUtils.send(sender, "<gray>正在載入排行榜...</gray>");
+
+        // 解析參數: /baltop [貨幣] [頁碼]
+        String currencyId = plugin.getCurrencyManager().getDefaultCurrencyId();
         int page = 1;
+
+        // 檢查第一個參數
         if (args.length > 0) {
+            // 檢查是否是數字 (頁碼) 或貨幣 ID
             try {
                 page = Integer.parseInt(args[0]);
+                if (page < 1)
+                    page = 1;
+            } catch (NumberFormatException e) {
+                // 不是數字，檢查是否是貨幣 ID
+                if (plugin.getCurrencyManager().currencyExists(args[0].toLowerCase())) {
+                    currencyId = args[0].toLowerCase();
+                } else {
+                    MessageUtils.sendError(sender, "<red>未知的貨幣: <white>" + args[0] + "</white></red>");
+                    return true;
+                }
+            }
+        }
+
+        // 檢查第二個參數 (頁碼)
+        if (args.length > 1) {
+            try {
+                page = Integer.parseInt(args[1]);
                 if (page < 1)
                     page = 1;
             } catch (NumberFormatException e) {
@@ -53,10 +77,11 @@ public class BaltopCommand implements CommandExecutor, TabCompleter {
         }
 
         final int finalPage = page;
-        MessageUtils.send(sender, "<gray>正在載入排行榜...</gray>");
+        final String finalCurrencyId = currencyId;
+        String currencyName = plugin.getConfigManager().getCurrency(currencyId).name();
 
         // 非同步取得資料
-        leaderboardManager.getTopAccounts().thenAccept(entries -> {
+        leaderboardManager.getTopAccounts(finalCurrencyId).thenAccept(entries -> {
             // 回到主執行緒顯示 (雖然 adventure 允許非同步發送訊息，但為了安全與一致性)
             // Folia: CommandSender 若是 Player，可以用 getScheduler。若是 Console 則直接發。
             // 這裡使用 AceEconomy 實例的排程器 (Global for Console / Player context sensitive usually
@@ -79,7 +104,7 @@ public class BaltopCommand implements CommandExecutor, TabCompleter {
             int startIndex = (finalPage - 1) * pageSize;
             int endIndex = Math.min(startIndex + pageSize, entries.size());
 
-            Component header = mm.deserialize("<gold>=== 🏆 富豪排行榜 (Top Balances) ===</gold>");
+            Component header = mm.deserialize("<gold>=== 🏆 " + currencyName + " 排行榜 ===</gold>");
             sender.sendMessage(header);
 
             for (int i = startIndex; i < endIndex; i++) {
@@ -90,15 +115,16 @@ public class BaltopCommand implements CommandExecutor, TabCompleter {
             }
 
             // Footer / Pagination
-            long timeAgoSeconds = (System.currentTimeMillis() - leaderboardManager.getLastUpdated()) / 1000;
+            long timeAgoSeconds = (System.currentTimeMillis() - leaderboardManager.getLastUpdated(finalCurrencyId))
+                    / 1000;
             String timeAgo = formatTimeAgo(timeAgoSeconds);
 
             Component footer = mm.deserialize("<gray>更新於: " + timeAgo + " 前 <dark_gray>| </dark_gray>")
                     .append(mm.deserialize("<gold>[上一頁]</gold>")
-                            .clickEvent(ClickEvent.runCommand("/baltop " + (finalPage - 1))))
+                            .clickEvent(ClickEvent.runCommand("/baltop " + finalCurrencyId + " " + (finalPage - 1))))
                     .append(mm.deserialize(" <gray>(" + finalPage + "/" + totalPages + ") </gray>"))
                     .append(mm.deserialize("<gold>[下一頁]</gold>")
-                            .clickEvent(ClickEvent.runCommand("/baltop " + (finalPage + 1))));
+                            .clickEvent(ClickEvent.runCommand("/baltop " + finalCurrencyId + " " + (finalPage + 1))));
 
             sender.sendMessage(footer);
         });
@@ -118,6 +144,14 @@ public class BaltopCommand implements CommandExecutor, TabCompleter {
     public @Nullable List<String> onTabComplete(@NotNull CommandSender sender, @NotNull Command command,
             @NotNull String label, @NotNull String[] args) {
         if (args.length == 1) {
+            // 可以是貨幣 ID 或頁碼
+            List<String> completions = new java.util.ArrayList<>(plugin.getCurrencyManager().getRegisteredCurrencies());
+            completions.add("1");
+            completions.add("2");
+            return completions.stream()
+                    .filter(c -> c.toLowerCase().startsWith(args[0].toLowerCase()))
+                    .toList();
+        } else if (args.length == 2) {
             return List.of("1", "2", "3");
         }
         return Collections.emptyList();

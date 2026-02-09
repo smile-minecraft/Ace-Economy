@@ -40,6 +40,7 @@ public class JsonStorageHandler implements StorageHandler {
         this.logger = logger;
         this.gson = new GsonBuilder()
                 .setPrettyPrinting()
+                .registerTypeAdapter(Account.class, new AccountDeserializer())
                 .create();
     }
 
@@ -101,5 +102,40 @@ public class JsonStorageHandler implements StorageHandler {
      */
     private Path getAccountFile(UUID uuid) {
         return dataFolder.resolve(uuid.toString() + ".json");
+    }
+
+    /**
+     * 自定義 Account 反序列化器，用於處理舊版資料 (balance -> balances)。
+     */
+    private static class AccountDeserializer implements com.google.gson.JsonDeserializer<Account> {
+        @Override
+        public Account deserialize(com.google.gson.JsonElement json, java.lang.reflect.Type typeOfT,
+                com.google.gson.JsonDeserializationContext context) throws com.google.gson.JsonParseException {
+            com.google.gson.JsonObject jsonObject = json.getAsJsonObject();
+
+            UUID owner = UUID.fromString(jsonObject.get("owner").getAsString());
+            // Support both ownerName and (legacy) username if accidentally used, though
+            // Account has ownerName.
+            String ownerName = jsonObject.has("ownerName") ? jsonObject.get("ownerName").getAsString() : "Unknown";
+
+            java.util.Map<String, Double> balances = new java.util.HashMap<>();
+
+            // 檢查是否有新的 balances 欄位
+            if (jsonObject.has("balances")) {
+                com.google.gson.JsonObject balancesObj = jsonObject.getAsJsonObject("balances");
+                for (java.util.Map.Entry<String, com.google.gson.JsonElement> entry : balancesObj.entrySet()) {
+                    balances.put(entry.getKey(), entry.getValue().getAsDouble());
+                }
+            }
+
+            // 檢查舊的 balance 欄位 (migration)
+            if (jsonObject.has("balance")) {
+                double legacyBalance = jsonObject.get("balance").getAsDouble();
+                // 若 balances 中沒有 dollar，則加入舊餘額
+                balances.putIfAbsent("dollar", legacyBalance);
+            }
+
+            return new Account(owner, ownerName, balances);
+        }
     }
 }

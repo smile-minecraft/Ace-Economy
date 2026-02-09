@@ -24,12 +24,18 @@ settings:
   # 若設定為 "bank"，則可以使用 /bank 來執行 /aceeco 指令
   main-command-alias: "aceeco"
 
-# 貨幣設定
-currency:
-  # 貨幣符號
-  symbol: "$"
-  # 數字格式（Java DecimalFormat）
-  format: "#,##0.00"
+# 貨幣設定 (Multi-Currency System)
+currencies:
+  dollar: # 內部 ID
+    name: "金幣"
+    symbol: "$"
+    format: "#,##0.00"
+    default: true # 這是 Vault 使用的主要貨幣
+  token:
+    name: "活動代幣"
+    symbol: "ⓒ"
+    format: "#,##0"
+    default: false
 
 # 玩家新建帳戶時的預設餘額
 start-balance: 1000.0

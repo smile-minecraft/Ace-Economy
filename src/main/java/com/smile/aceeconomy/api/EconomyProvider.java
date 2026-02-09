@@ -36,50 +36,71 @@ public class EconomyProvider {
     }
 
     /**
-     * 取得玩家餘額。
-     * <p>
-     * 若玩家在線，直接從快取讀取（即時）。
-     * 若玩家離線，嘗試從儲存載入。
-     * </p>
+     * 取得預設貨幣 ID。
+     */
+    private String getDefaultCurrencyId() {
+        if (plugin.getConfigManager() != null && plugin.getConfigManager().getDefaultCurrency() != null) {
+            return plugin.getConfigManager().getDefaultCurrency().id();
+        }
+        return "dollar";
+    }
+
+    /**
+     * 取得玩家餘額 (預設貨幣)。
+     * 適用於 Vault 相容性。
      *
      * @param uuid 玩家 UUID
      * @return 包含餘額的 CompletableFuture
      */
     public CompletableFuture<Double> getBalance(UUID uuid) {
-        // 優先從快取讀取
-        if (currencyManager.hasAccount(uuid)) {
-            return CompletableFuture.completedFuture(currencyManager.getBalance(uuid));
-        }
-
-        // 離線玩家：從儲存載入
-        return plugin.getStorageHandler().loadAccount(uuid)
-                .thenApply(account -> account != null ? account.getBalance() : 0.0);
+        return getBalance(uuid, getDefaultCurrencyId());
     }
 
     /**
-     * 存款至玩家帳戶。
-     * <p>
-     * 會觸發 {@link EconomyTransactionEvent}，若事件被取消則操作失敗。
-     * </p>
+     * 取得玩家指定貨幣的餘額。
+     *
+     * @param uuid       玩家 UUID
+     * @param currencyId 貨幣 ID
+     * @return 包含餘額的 CompletableFuture
+     */
+    public CompletableFuture<Double> getBalance(UUID uuid, String currencyId) {
+        if (currencyManager.hasAccount(uuid)) {
+            return CompletableFuture.completedFuture(currencyManager.getBalance(uuid, currencyId));
+        }
+
+        return plugin.getStorageHandler().loadAccount(uuid)
+                .thenApply(account -> account != null ? account.getBalance(currencyId) : 0.0);
+    }
+
+    /**
+     * 存款至玩家帳戶 (預設貨幣)。Vault 相容。
      *
      * @param uuid   玩家 UUID
-     * @param amount 存款金額（必須為正數）
+     * @param amount 存款金額
      * @return 操作是否成功的 CompletableFuture
      */
     public CompletableFuture<Boolean> deposit(UUID uuid, double amount) {
+        return deposit(uuid, getDefaultCurrencyId(), amount);
+    }
+
+    /**
+     * 存款至玩家帳戶 (指定貨幣)。
+     *
+     * @param uuid       玩家 UUID
+     * @param currencyId 貨幣 ID
+     * @param amount     存款金額
+     * @return 操作是否成功的 CompletableFuture
+     */
+    public CompletableFuture<Boolean> deposit(UUID uuid, String currencyId, double amount) {
         return CompletableFuture.supplyAsync(() -> {
             if (amount <= 0) {
                 return false;
             }
-
-            // 檢查帳戶是否在快取中
             if (!currencyManager.hasAccount(uuid)) {
                 return false;
             }
 
-            double currentBalance = currencyManager.getBalance(uuid);
-
-            // 觸發交易事件
+            double currentBalance = currencyManager.getBalance(uuid, currencyId);
             EconomyTransactionEvent event = new EconomyTransactionEvent(
                     uuid, amount, EconomyTransactionEvent.TransactionType.DEPOSIT, currentBalance);
             Bukkit.getPluginManager().callEvent(event);
@@ -88,41 +109,43 @@ public class EconomyProvider {
                 return false;
             }
 
-            // 執行存款
-            return currencyManager.deposit(uuid, amount);
+            return currencyManager.deposit(uuid, currencyId, amount);
         });
     }
 
     /**
-     * 從玩家帳戶提款。
-     * <p>
-     * 會觸發 {@link EconomyTransactionEvent}，若事件被取消則操作失敗。
-     * 若餘額不足，操作也會失敗。
-     * </p>
+     * 從玩家帳戶提款 (預設貨幣)。Vault 相容。
      *
      * @param uuid   玩家 UUID
-     * @param amount 提款金額（必須為正數）
+     * @param amount 提款金額
      * @return 操作是否成功的 CompletableFuture
      */
     public CompletableFuture<Boolean> withdraw(UUID uuid, double amount) {
+        return withdraw(uuid, getDefaultCurrencyId(), amount);
+    }
+
+    /**
+     * 從玩家帳戶提款 (指定貨幣)。
+     *
+     * @param uuid       玩家 UUID
+     * @param currencyId 貨幣 ID
+     * @param amount     提款金額
+     * @return 操作是否成功的 CompletableFuture
+     */
+    public CompletableFuture<Boolean> withdraw(UUID uuid, String currencyId, double amount) {
         return CompletableFuture.supplyAsync(() -> {
             if (amount <= 0) {
                 return false;
             }
-
-            // 檢查帳戶是否在快取中
             if (!currencyManager.hasAccount(uuid)) {
                 return false;
             }
 
-            double currentBalance = currencyManager.getBalance(uuid);
-
-            // 檢查餘額是否足夠（在觸發事件前）
+            double currentBalance = currencyManager.getBalance(uuid, currencyId);
             if (currentBalance < amount) {
                 return false;
             }
 
-            // 觸發交易事件
             EconomyTransactionEvent event = new EconomyTransactionEvent(
                     uuid, amount, EconomyTransactionEvent.TransactionType.WITHDRAW, currentBalance);
             Bukkit.getPluginManager().callEvent(event);
@@ -131,35 +154,39 @@ public class EconomyProvider {
                 return false;
             }
 
-            // 執行提款
-            return currencyManager.withdraw(uuid, amount);
+            return currencyManager.withdraw(uuid, currencyId, amount, null);
         });
     }
 
     /**
-     * 設定玩家餘額。
-     * <p>
-     * 會觸發 {@link EconomyTransactionEvent}，若事件被取消則操作失敗。
-     * </p>
+     * 設定玩家餘額 (預設貨幣)。
      *
      * @param uuid   玩家 UUID
-     * @param amount 新餘額（必須為非負數）
+     * @param amount 新餘額
      * @return 操作是否成功的 CompletableFuture
      */
     public CompletableFuture<Boolean> setBalance(UUID uuid, double amount) {
+        return setBalance(uuid, getDefaultCurrencyId(), amount);
+    }
+
+    /**
+     * 設定玩家指定貨幣的餘額。
+     *
+     * @param uuid       玩家 UUID
+     * @param currencyId 貨幣 ID
+     * @param amount     新餘額
+     * @return 操作是否成功的 CompletableFuture
+     */
+    public CompletableFuture<Boolean> setBalance(UUID uuid, String currencyId, double amount) {
         return CompletableFuture.supplyAsync(() -> {
             if (amount < 0) {
                 return false;
             }
-
-            // 檢查帳戶是否在快取中
             if (!currencyManager.hasAccount(uuid)) {
                 return false;
             }
 
-            double currentBalance = currencyManager.getBalance(uuid);
-
-            // 觸發交易事件
+            double currentBalance = currencyManager.getBalance(uuid, currencyId);
             EconomyTransactionEvent event = new EconomyTransactionEvent(
                     uuid, amount, EconomyTransactionEvent.TransactionType.SET, currentBalance);
             Bukkit.getPluginManager().callEvent(event);
@@ -168,70 +195,70 @@ public class EconomyProvider {
                 return false;
             }
 
-            // 執行設定餘額
-            return currencyManager.setBalance(uuid, amount);
+            return currencyManager.setBalance(uuid, currencyId, amount);
         });
     }
 
     /**
-     * 在兩個玩家之間轉帳。
-     * <p>
-     * 會為發送方和接收方各觸發一個 {@link EconomyTransactionEvent}，
-     * 任一事件被取消則整個轉帳操作失敗。
-     * </p>
+     * 在兩個玩家之間轉帳 (預設貨幣)。
      *
      * @param from   發送方 UUID
      * @param to     接收方 UUID
-     * @param amount 轉帳金額（必須為正數）
+     * @param amount 轉帳金額
      * @return 操作是否成功的 CompletableFuture
      */
     public CompletableFuture<Boolean> transfer(UUID from, UUID to, double amount) {
+        return transfer(from, to, getDefaultCurrencyId(), amount);
+    }
+
+    /**
+     * 在兩個玩家之間轉帳 (指定貨幣)。
+     *
+     * @param from       發送方 UUID
+     * @param to         接收方 UUID
+     * @param currencyId 貨幣 ID
+     * @param amount     轉帳金額
+     * @return 操作是否成功的 CompletableFuture
+     */
+    public CompletableFuture<Boolean> transfer(UUID from, UUID to, String currencyId, double amount) {
         return CompletableFuture.supplyAsync(() -> {
             if (amount <= 0) {
                 return false;
             }
-
-            // 檢查雙方帳戶是否在快取中
             if (!currencyManager.hasAccount(from) || !currencyManager.hasAccount(to)) {
                 return false;
             }
 
-            double fromBalance = currencyManager.getBalance(from);
-            double toBalance = currencyManager.getBalance(to);
+            double fromBalance = currencyManager.getBalance(from, currencyId);
+            double toBalance = currencyManager.getBalance(to, currencyId);
 
-            // 檢查發送方餘額
             if (fromBalance < amount) {
                 return false;
             }
 
-            // 觸發發送方事件
             EconomyTransactionEvent fromEvent = new EconomyTransactionEvent(
                     from, amount, EconomyTransactionEvent.TransactionType.TRANSFER_OUT, fromBalance);
             Bukkit.getPluginManager().callEvent(fromEvent);
-
             if (fromEvent.isCancelled()) {
                 return false;
             }
 
-            // 觸發接收方事件
             EconomyTransactionEvent toEvent = new EconomyTransactionEvent(
                     to, amount, EconomyTransactionEvent.TransactionType.TRANSFER_IN, toBalance);
             Bukkit.getPluginManager().callEvent(toEvent);
-
             if (toEvent.isCancelled()) {
                 return false;
             }
 
-            // 執行轉帳：先提款再存款
-            boolean withdrawSuccess = currencyManager.withdraw(from, amount);
+            boolean withdrawSuccess = currencyManager.withdraw(from, currencyId, amount, null);
             if (!withdrawSuccess) {
                 return false;
             }
 
-            boolean depositSuccess = currencyManager.deposit(to, amount);
+            boolean depositSuccess = currencyManager.deposit(to, currencyId, amount);
             if (!depositSuccess) {
-                // 退回發送方的金額（回滾）
-                currencyManager.deposit(from, amount);
+                // Rollback
+                currencyManager.deposit(from, currencyId, amount);
                 return false;
             }
 

@@ -33,6 +33,7 @@ public class CurrencyManager {
     private final StorageHandler storageHandler;
     private final Logger logger;
     private final double defaultBalance;
+    private ConfigManager configManager;
 
     private LogManager logManager;
 
@@ -51,6 +52,59 @@ public class CurrencyManager {
 
     public void setLogManager(LogManager logManager) {
         this.logManager = logManager;
+    }
+
+    public void setConfigManager(ConfigManager configManager) {
+        this.configManager = configManager;
+    }
+
+    /**
+     * 取得所有已註冊的貨幣 ID。
+     *
+     * @return 貨幣 ID 集合
+     */
+    public java.util.Set<String> getRegisteredCurrencies() {
+        if (configManager != null) {
+            return configManager.getCurrencies().keySet();
+        }
+        return java.util.Set.of("dollar");
+    }
+
+    /**
+     * 檢查貨幣 ID 是否存在。
+     *
+     * @param currencyId 貨幣 ID
+     * @return 是否存在
+     */
+    public boolean currencyExists(String currencyId) {
+        if (configManager != null) {
+            return configManager.getCurrency(currencyId) != null;
+        }
+        return "dollar".equals(currencyId);
+    }
+
+    /**
+     * 取得預設貨幣 ID。
+     *
+     * @return 預設貨幣 ID
+     */
+    public String getDefaultCurrencyId() {
+        if (configManager != null && configManager.getDefaultCurrency() != null) {
+            return configManager.getDefaultCurrency().id();
+        }
+        return "dollar"; // fallback
+    }
+
+    /**
+     * 驗證貨幣 ID 是否有效。
+     *
+     * @param currencyId 貨幣 ID
+     * @throws IllegalArgumentException 如果貨幣 ID 無效
+     */
+    private void validateCurrency(String currencyId) {
+        if (configManager != null && configManager.getCurrency(currencyId) == null) {
+            throw new IllegalArgumentException("無效的貨幣 ID: " + currencyId);
+        }
     }
 
     /**
@@ -117,15 +171,23 @@ public class CurrencyManager {
     }
 
     /**
-     * 取得玩家餘額。
-     * <p>
-     * 直接從快取讀取，使用讀取鎖確保一致性。
-     * </p>
+     * 取得玩家餘額 (預設貨幣)。
      *
      * @param uuid 玩家 UUID
-     * @return 玩家餘額，若帳戶不存在則回傳 0
+     * @return 玩家餘額
      */
     public double getBalance(UUID uuid) {
+        return getBalance(uuid, getDefaultCurrencyId());
+    }
+
+    /**
+     * 取得玩家指定貨幣的餘額。
+     *
+     * @param uuid       玩家 UUID
+     * @param currencyId 貨幣 ID
+     * @return 玩家餘額，若帳戶不存在或該貨幣無記錄則回傳 0
+     */
+    public double getBalance(UUID uuid, String currencyId) {
         Account account = accountCache.get(uuid);
         if (account == null) {
             return 0.0;
@@ -134,26 +196,36 @@ public class CurrencyManager {
         ReentrantReadWriteLock lock = getLock(uuid);
         lock.readLock().lock();
         try {
-            return account.getBalance();
+            return account.getBalance(currencyId);
         } finally {
             lock.readLock().unlock();
         }
     }
 
     /**
-     * 存款至玩家帳戶。
-     * <p>
-     * 執行緒安全的餘額增加操作。
-     * </p>
+     * 存款至玩家帳戶 (預設貨幣)。
      *
      * @param uuid   玩家 UUID
-     * @param amount 存款金額（必須為正數）
+     * @param amount 存款金額
      * @return 操作是否成功
      */
     public boolean deposit(UUID uuid, double amount) {
+        return deposit(uuid, getDefaultCurrencyId(), amount);
+    }
+
+    /**
+     * 存款至玩家帳戶 (指定貨幣)。
+     *
+     * @param uuid       玩家 UUID
+     * @param currencyId 貨幣 ID
+     * @param amount     存款金額
+     * @return 操作是否成功
+     */
+    public boolean deposit(UUID uuid, String currencyId, double amount) {
         if (amount <= 0) {
             return false;
         }
+        validateCurrency(currencyId);
 
         Account account = accountCache.get(uuid);
         if (account == null) {
@@ -163,12 +235,12 @@ public class CurrencyManager {
         ReentrantReadWriteLock lock = getLock(uuid);
         lock.writeLock().lock();
         try {
-            double newBalance = account.getBalance() + amount;
-            account.setBalance(newBalance);
+            double currentBalance = account.getBalance(currencyId);
+            double newBalance = currentBalance + amount;
+            account.setBalance(currencyId, newBalance);
 
-            // 記錄交易
             if (logManager != null) {
-                logManager.logTransaction(null, uuid, amount, "USD",
+                logManager.logTransaction(null, uuid, amount, currencyId,
                         com.smile.aceeconomy.data.TransactionType.DEPOSIT, null, "System Deposit", null);
             }
 
@@ -179,22 +251,30 @@ public class CurrencyManager {
     }
 
     /**
-     * 從玩家帳戶提款。
-     * <p>
-     * 執行緒安全的餘額減少操作，會檢查餘額是否足夠。
-     * </p>
-     *
-     * @param uuid   玩家 UUID
-     * @param amount 提款金額（必須為正數）
-     * @return 操作是否成功（餘額足夠時回傳 true）
+     * 從玩家帳戶提款 (預設貨幣)。
      */
-    /**
-     * 從玩家帳戶提款 (包含支票 UUID)。
-     */
+    public boolean withdraw(UUID uuid, double amount) {
+        return withdraw(uuid, getDefaultCurrencyId(), amount, null);
+    }
+
     public boolean withdraw(UUID uuid, double amount, UUID banknoteUuid) {
+        return withdraw(uuid, getDefaultCurrencyId(), amount, banknoteUuid);
+    }
+
+    /**
+     * 從玩家帳戶提款 (指定貨幣)。
+     *
+     * @param uuid         玩家 UUID
+     * @param currencyId   貨幣 ID
+     * @param amount       提款金額
+     * @param banknoteUuid 支票 UUID (可為 null)
+     * @return 操作是否成功
+     */
+    public boolean withdraw(UUID uuid, String currencyId, double amount, UUID banknoteUuid) {
         if (amount <= 0) {
             return false;
         }
+        validateCurrency(currencyId);
 
         Account account = accountCache.get(uuid);
         if (account == null) {
@@ -204,16 +284,14 @@ public class CurrencyManager {
         ReentrantReadWriteLock lock = getLock(uuid);
         lock.writeLock().lock();
         try {
-            double currentBalance = account.getBalance();
+            double currentBalance = account.getBalance(currencyId);
             if (currentBalance < amount) {
-                // 餘額不足
                 return false;
             }
-            account.setBalance(currentBalance - amount);
+            account.setBalance(currencyId, currentBalance - amount);
 
-            // 記錄交易
             if (logManager != null) {
-                logManager.logTransaction(uuid, null, amount, "USD",
+                logManager.logTransaction(uuid, null, amount, currencyId,
                         com.smile.aceeconomy.data.TransactionType.WITHDRAW, banknoteUuid, "System Withdraw", null);
             }
 
@@ -224,30 +302,25 @@ public class CurrencyManager {
     }
 
     /**
-     * 從玩家帳戶提款。
-     * <p>
-     * 執行緒安全的餘額減少操作，會檢查餘額是否足夠。
-     * </p>
-     *
-     * @param uuid   玩家 UUID
-     * @param amount 提款金額（必須為正數）
-     * @return 操作是否成功（餘額足夠時回傳 true）
+     * 設定玩家餘額 (預設貨幣)。
      */
-    public boolean withdraw(UUID uuid, double amount) {
-        return withdraw(uuid, amount, null);
+    public boolean setBalance(UUID uuid, double amount) {
+        return setBalance(uuid, getDefaultCurrencyId(), amount);
     }
 
     /**
-     * 設定玩家餘額。
+     * 設定玩家指定貨幣的餘額。
      *
-     * @param uuid   玩家 UUID
-     * @param amount 新餘額（必須為非負數）
+     * @param uuid       玩家 UUID
+     * @param currencyId 貨幣 ID
+     * @param amount     新餘額
      * @return 操作是否成功
      */
-    public boolean setBalance(UUID uuid, double amount) {
+    public boolean setBalance(UUID uuid, String currencyId, double amount) {
         if (amount < 0) {
             return false;
         }
+        validateCurrency(currencyId);
 
         Account account = accountCache.get(uuid);
         if (account == null) {
@@ -257,13 +330,12 @@ public class CurrencyManager {
         ReentrantReadWriteLock lock = getLock(uuid);
         lock.writeLock().lock();
         try {
-            double currentBalance = account.getBalance();
-            account.setBalance(amount);
+            double oldBalance = account.getBalance(currencyId);
+            account.setBalance(currencyId, amount);
 
-            // 記錄交易
             if (logManager != null) {
-                logManager.logTransaction(null, uuid, amount, "USD",
-                        com.smile.aceeconomy.data.TransactionType.SET, null, "Set Balance", currentBalance);
+                logManager.logTransaction(null, uuid, amount, currencyId,
+                        com.smile.aceeconomy.data.TransactionType.SET, null, "Set Balance", oldBalance);
             }
 
             return true;
