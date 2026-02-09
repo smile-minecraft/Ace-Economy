@@ -78,7 +78,8 @@ public class CurrencyManager {
      */
     public boolean currencyExists(String currencyId) {
         if (configManager != null) {
-            return configManager.getCurrency(currencyId) != null;
+            // 使用 containsKey 而非 getCurrency，因為 getCurrency 會返回預設貨幣
+            return configManager.getCurrencies().containsKey(currencyId);
         }
         return "dollar".equals(currencyId);
     }
