@@ -393,6 +393,18 @@ public class ConfigManager {
     }
 
     /**
+     * 格式化金額 (透過貨幣 ID)。
+     *
+     * @param amount     金額
+     * @param currencyId 貨幣 ID
+     * @return 格式化後的金額字串
+     */
+    public String formatMoney(double amount, String currencyId) {
+        Currency currency = getCurrency(currencyId);
+        return currency.format(amount);
+    }
+
+    /**
      * 取得新玩家起始餘額。
      *
      * @return 起始餘額

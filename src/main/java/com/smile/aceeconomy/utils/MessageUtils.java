@@ -153,4 +153,27 @@ public final class MessageUtils {
     public static String formatMoneyPlain(double amount) {
         return "$" + MONEY_FORMAT.format(amount);
     }
+
+    /**
+     * 格式化金額顯示（使用指定貨幣）。
+     *
+     * @param amount       金額
+     * @param currencyName 貨幣名稱
+     * @param symbol       貨幣符號
+     * @return 格式化後的金額字串
+     */
+    public static String formatMoney(double amount, String currencyName, String symbol) {
+        return "<yellow>" + symbol + MONEY_FORMAT.format(amount) + "</yellow>";
+    }
+
+    /**
+     * 格式化金額為純數字字串（使用指定貨幣，不含顏色）。
+     *
+     * @param amount 金額
+     * @param symbol 貨幣符號
+     * @return 格式化後的金額字串
+     */
+    public static String formatMoneyPlain(double amount, String symbol) {
+        return symbol + MONEY_FORMAT.format(amount);
+    }
 }

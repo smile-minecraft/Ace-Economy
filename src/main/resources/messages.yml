@@ -4,7 +4,7 @@
 # ============================================
 
 # 設定檔版本（請勿修改）
-config-version: 1.0
+config-version: 1.1
 
 # 前綴
 prefix: "<gold>[AceEconomy]</gold> <gray>"
@@ -14,10 +14,14 @@ messages:
   # 餘額查詢
   balance-check: "你的餘額：<yellow><balance></yellow>"
   balance-check-other: "<aqua><player></aqua> 的餘額：<yellow><balance></yellow>"
+  balance-check-currency: "你的<currency_name>餘額：<yellow><balance></yellow>"
+  balance-check-currency-other: "<aqua><player></aqua> 的<currency_name>餘額：<yellow><balance></yellow>"
 
   # 轉帳
   payment-sent: "<green>已轉帳 <yellow><amount></yellow> 給 <aqua><player></aqua>！</green>"
   payment-received: "<green>收到來自 <aqua><player></aqua> 的轉帳：<yellow><amount></yellow></green>"
+  payment-sent-currency: "<green>已轉帳 <yellow><amount></yellow> <currency_name> 給 <aqua><player></aqua>！</green>"
+  payment-received-currency: "<green>收到來自 <aqua><player></aqua> 的轉帳：<yellow><amount></yellow> <currency_name></green>"
 
   # 管理員操作
   admin-give: "<green>已給予 <aqua><player></aqua> <yellow><amount></yellow></green>"
@@ -26,6 +30,13 @@ messages:
   admin-notify-give: "<green>管理員給予你 <yellow><amount></yellow></green>"
   admin-notify-take: "<green>管理員扣除了你 <yellow><amount></yellow></green>"
   admin-notify-set: "<green>管理員將你的餘額設為 <yellow><amount></yellow></green>"
+  # 多幣種管理員操作
+  admin-give-currency: "<green>已給予 <aqua><player></aqua> <yellow><amount></yellow> <currency_name></green>"
+  admin-take-currency: "<green>已從 <aqua><player></aqua> 扣除 <yellow><amount></yellow> <currency_name></green>"
+  admin-set-currency: "<green>已將 <aqua><player></aqua> 的 <currency_name> 餘額設為 <yellow><amount></yellow></green>"
+  admin-notify-give-currency: "<green>管理員給予你 <yellow><amount></yellow> <currency_name></green>"
+  admin-notify-take-currency: "<green>管理員扣除了你 <yellow><amount></yellow> <currency_name></green>"
+  admin-notify-set-currency: "<green>管理員將你的 <currency_name> 餘額設為 <yellow><amount></yellow></green>"
 
   # 支票
   withdraw-success: "<green>已提領支票：<yellow><amount></yellow></green>"
@@ -33,6 +44,7 @@ messages:
 
   # 錯誤訊息
   insufficient-funds: "<red>餘額不足！</red>"
+  insufficient-funds-currency: "<red>你的 <currency_name> 餘額不足 (需要: <amount>)！</red>"
   invalid-amount: "<red>無效的金額：<white><amount></white></red>"
   amount-must-be-positive: "<red>金額必須大於 0！</red>"
   player-not-found: "<red>找不到玩家：<white><player></white></red>"
@@ -46,14 +58,17 @@ messages:
   no-permission: "<red>你沒有權限使用此指令！</red>"
   console-only-player: "<red>此指令只能由玩家執行！</red>"
   console-specify-player: "<red>控制台必須指定玩家名稱！</red>"
+  unknown-currency: "<red>錯誤: 找不到貨幣 <white><currency></white>。</red>"
 
   # 使用說明
-  usage-pay: "<gray>用法：<white>/pay <玩家> <金額></white></gray>"
+  usage-pay: "<gray>用法：<white>/pay <玩家> <金額> [貨幣]</white></gray>"
   usage-withdraw: "<gray>用法：<white>/withdraw <金額></white></gray>"
+  usage-balance: "<gray>用法：<white>/balance [玩家] [貨幣]</white></gray>"
+  usage-baltop: "<gray>用法：<white>/baltop [貨幣] [頁碼]</white></gray>"
   usage-admin: "<yellow>--- AceEconomy 管理指令 ---</yellow>"
-  usage-admin-give: "<white>/aceeco give <玩家> <金額></white> - 給予玩家金錢"
-  usage-admin-take: "<white>/aceeco take <玩家> <金額></white> - 扣除玩家金錢"
-  usage-admin-set: "<white>/aceeco set <玩家> <金額></white> - 設定玩家餘額"
+  usage-admin-give: "<white>/aceeco give <玩家> <金額> [貨幣]</white> - 給予玩家金錢"
+  usage-admin-take: "<white>/aceeco take <玩家> <金額> [貨幣]</white> - 扣除玩家金錢"
+  usage-admin-set: "<white>/aceeco set <玩家> <金額> [貨幣]</white> - 設定玩家餘額"
 
   # 設定重載
   reload-success: "<green>設定檔已重新載入！</green>"
@@ -66,3 +81,9 @@ messages:
   migration-not-available: "<red>找不到 <white><plugin></white> 的資料資料夾！</red>"
   migration-in-progress: "<red>已有遷移任務正在進行中！</red>"
   migration-usage: "<gray>用法：<white>/aceeco import <essentials|cmi></white></gray>"
+
+# 貨幣格式設定
+currency-format:
+  # 格式樣式: {symbol}{amount} 或 {amount}{symbol}
+  style: "{symbol}{amount}"
+
