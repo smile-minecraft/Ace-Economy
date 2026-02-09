@@ -42,3 +42,12 @@ discord:
   webhook-url: ""
   # 僅記錄超過此金額的交易
   min-amount: 10000.0
+
+# 排行榜設定
+leaderboard:
+  # 是否啟用排行榜
+  enabled: true
+  # 快取更新時間 (秒)，預設 5 分鐘
+  cache-time-seconds: 300
+  # 每頁顯示數量
+  page-size: 10

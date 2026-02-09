@@ -24,6 +24,10 @@ commands:
   withdraw:
     description: 提領銀行支票
     usage: /<command> <金額>
+  baltop:
+    description: 查看富豪排行榜
+    usage: /<command> [頁碼]
+    aliases: [balancetop, top]
 
 permissions:
   aceeconomy.use:
@@ -34,6 +38,9 @@ permissions:
     default: true
   aceeconomy.withdraw:
     description: 允許使用提領支票指令
+    default: true
+  aceeconomy.command.baltop:
+    description: 允許使用排行榜指令
     default: true
   aceeconomy.admin:
     description: 允許使用管理指令

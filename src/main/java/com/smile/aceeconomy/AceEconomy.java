@@ -48,6 +48,7 @@ public final class AceEconomy extends JavaPlugin implements Listener {
     private CurrencyManager currencyManager;
     private EconomyProvider economyProvider;
     private DiscordWebhook discordWebhook;
+    private com.smile.aceeconomy.manager.LeaderboardManager leaderboardManager;
 
     /**
      * 取得插件實例。
@@ -77,6 +78,13 @@ public final class AceEconomy extends JavaPlugin implements Listener {
         com.smile.aceeconomy.manager.LogManager logManager = new com.smile.aceeconomy.manager.LogManager(this,
                 databaseConnection, currencyManager);
         currencyManager.setLogManager(logManager);
+
+        // 初始化排行榜管理器 (僅當使用 SQL 時)
+        if (databaseConnection != null && databaseConnection.isHealthy()) {
+            leaderboardManager = new com.smile.aceeconomy.manager.LeaderboardManager(this, databaseConnection);
+        } else {
+            getLogger().warning("未使用 SQL 資料庫或連線失敗，排行榜功能將失效。");
+        }
 
         // 初始化經濟服務提供者
         economyProvider = new EconomyProvider(this);
@@ -184,6 +192,17 @@ public final class AceEconomy extends JavaPlugin implements Listener {
         if (withdrawCmd != null) {
             withdrawCmd.setExecutor(withdrawCommand);
             withdrawCmd.setTabCompleter(withdrawCommand);
+        }
+
+        // /baltop
+        if (leaderboardManager != null) {
+            com.smile.aceeconomy.commands.BaltopCommand baltopCommand = new com.smile.aceeconomy.commands.BaltopCommand(
+                    this, leaderboardManager);
+            PluginCommand baltopCmd = getCommand("baltop");
+            if (baltopCmd != null) {
+                baltopCmd.setExecutor(baltopCommand);
+                baltopCmd.setTabCompleter(baltopCommand);
+            }
         }
 
         getLogger().info("已註冊所有指令");
