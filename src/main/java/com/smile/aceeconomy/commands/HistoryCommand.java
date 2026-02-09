@@ -87,9 +87,20 @@ public class HistoryCommand implements CommandExecutor {
                         type = type + " (已回溯)";
                     }
 
-                    sender.sendMessage(
-                            Component.text(String.format("[%s] %s %.2f %s %s", time, type, amount, currency, partner),
-                                    log.reverted() ? NamedTextColor.GRAY : NamedTextColor.GREEN));
+                    Component message;
+                    if (log.type() == com.smile.aceeconomy.data.TransactionType.SET && log.oldBalance() != null) {
+                        // SET: old -> new
+                        message = Component.text(
+                                String.format("[%s] %s %.2f \u2794 %.2f %s %s", time, type, log.oldBalance(),
+                                        log.amount(), currency, partner),
+                                log.reverted() ? NamedTextColor.GRAY : NamedTextColor.YELLOW);
+                    } else {
+                        message = Component.text(
+                                String.format("[%s] %s %.2f %s %s", time, type, amount, currency, partner),
+                                log.reverted() ? NamedTextColor.GRAY : NamedTextColor.GREEN);
+                    }
+
+                    sender.sendMessage(message);
                     sender.sendMessage(Component.text("  ID: " + log.transactionId(), NamedTextColor.DARK_GRAY));
                 }
             }).exceptionally(throwable -> {

@@ -32,8 +32,8 @@ public class LogManager {
 
     private static final String INSERT_LOG = """
             INSERT INTO ace_transaction_logs
-            (transaction_id, banknote_uuid, sender_uuid, receiver_uuid, currency_type, amount, type, reverted)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (transaction_id, banknote_uuid, sender_uuid, receiver_uuid, currency_type, amount, type, reverted, old_balance)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """;
 
     private static final String SELECT_HISTORY = """
@@ -65,9 +65,10 @@ public class LogManager {
      * @param type         交易類型
      * @param banknoteUuid 支票 UUID (可為 null)
      * @param context      上下文資訊 (例如交易 ID 或額外備註)
+     * @param oldBalance   變更前的餘額 (僅適用於 SET/RESET 等操作，可為 null)
      */
     public void logTransaction(UUID sender, UUID receiver, double amount, String currency, TransactionType type,
-            UUID banknoteUuid, String context) {
+            UUID banknoteUuid, String context, Double oldBalance) {
         CompletableFuture.runAsync(() -> {
             try (Connection conn = databaseConnection.getConnection();
                     PreparedStatement pstmt = conn.prepareStatement(INSERT_LOG)) {
@@ -82,6 +83,11 @@ public class LogManager {
                 pstmt.setDouble(6, amount);
                 pstmt.setString(7, type.name());
                 pstmt.setBoolean(8, false);
+                if (oldBalance != null) {
+                    pstmt.setDouble(9, oldBalance);
+                } else {
+                    pstmt.setNull(9, java.sql.Types.DOUBLE);
+                }
 
                 pstmt.executeUpdate();
 
@@ -97,7 +103,48 @@ public class LogManager {
      */
     public void logTransaction(UUID sender, UUID receiver, double amount, String currency, TransactionType type,
             String context) {
-        logTransaction(sender, receiver, amount, currency, type, null, context);
+        logTransaction(sender, receiver, amount, currency, type, null, context, null);
+    }
+
+    /**
+     * 取得符合條件的交易記錄 (用於進階回溯)。
+     *
+     * @param player   玩家 UUID (發送者或接收者)
+     * @param since    起始時間戳 (毫秒)
+     * @param category 類別過濾 (all, trade, admin)
+     * @return 交易記錄列表
+     */
+    public CompletableFuture<List<TransactionLog>> getLogs(UUID player, long since, String category) {
+        return CompletableFuture.supplyAsync(() -> {
+            List<TransactionLog> logs = new ArrayList<>();
+            StringBuilder sql = new StringBuilder(
+                    "SELECT * FROM ace_transaction_logs WHERE (sender_uuid = ? OR receiver_uuid = ?) AND timestamp >= ? AND reverted = 0");
+
+            if ("trade".equalsIgnoreCase(category)) {
+                sql.append(" AND type IN ('PAY', 'WITHDRAW', 'DEPOSIT')");
+            } else if ("admin".equalsIgnoreCase(category)) {
+                sql.append(" AND type IN ('GIVE', 'TAKE', 'SET')");
+            }
+
+            try (Connection conn = databaseConnection.getConnection();
+                    PreparedStatement pstmt = conn.prepareStatement(sql.toString())) {
+
+                pstmt.setString(1, player.toString());
+                pstmt.setString(2, player.toString());
+                pstmt.setTimestamp(3, new Timestamp(since));
+
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    while (rs.next()) {
+                        logs.add(mapResultSetToLog(rs));
+                    }
+                }
+
+            } catch (SQLException e) {
+                logger.severe("查詢回溯記錄失敗: " + e.getMessage());
+                e.printStackTrace();
+            }
+            return logs;
+        });
     }
 
     /**
@@ -259,8 +306,9 @@ public class LogManager {
                     }
 
                     // 3. 記錄回溯操作本身
+                    // 3. 記錄回溯操作本身
                     logTransaction(null, null, amount, "USD", TransactionType.ROLLBACK, null,
-                            "Rollback of " + transactionId);
+                            "Rollback of " + transactionId, null);
 
                     return "<green>交易 " + transactionId + " 已成功回溯！</green>";
 
@@ -318,7 +366,17 @@ public class LogManager {
                 rs.getString("currency_type"),
                 rs.getDouble("amount"),
                 TransactionType.valueOf(rs.getString("type")),
-                rs.getBoolean("reverted"));
+                rs.getBoolean("reverted"),
+                mapOldBalance(rs));
+    }
+
+    private Double mapOldBalance(ResultSet rs) {
+        try {
+            double val = rs.getDouble("old_balance");
+            return rs.wasNull() ? null : val;
+        } catch (SQLException e) {
+            return null;
+        }
     }
 
     public record TransactionLog(
@@ -331,6 +389,7 @@ public class LogManager {
             String currencyType,
             double amount,
             TransactionType type,
-            boolean reverted) {
+            boolean reverted,
+            Double oldBalance) {
     }
 }

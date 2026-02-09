@@ -73,6 +73,9 @@ public class SchemaManager {
             if (currentVersion < 3) {
                 migrateV3(conn);
             }
+            if (currentVersion < 4) {
+                migrateV4(conn);
+            }
 
             logger.info("[AceEconomy] Database migration complete.");
 
@@ -306,5 +309,36 @@ public class SchemaManager {
 
         recordMigration(conn, 3, "Add banknote_uuid column");
         logger.info("遷移 V3 成功！");
+    }
+
+    /**
+     * V4: 新增 old_balance 欄位 (用於 SET 指令還原)。
+     */
+    private void migrateV4(Connection conn) throws SQLException {
+        logger.info("[AceEconomy] Applying Migration V4: Add old_balance column...");
+
+        String tableName = "ace_transaction_logs";
+        boolean columnExists = false;
+        try (ResultSet rs = conn.getMetaData().getColumns(null, null, tableName, "old_balance")) {
+            if (rs.next()) {
+                columnExists = true;
+            }
+        }
+
+        if (columnExists) {
+            logger.info("欄位 old_balance 已存在，跳過 ALTER TABLE。");
+        } else {
+            String sql = "ALTER TABLE " + tableName + " ADD COLUMN old_balance DOUBLE DEFAULT NULL";
+            if (isMySQL) {
+                sql += " AFTER amount";
+            }
+
+            try (Statement stmt = conn.createStatement()) {
+                stmt.executeUpdate(sql);
+            }
+        }
+
+        recordMigration(conn, 4, "Add old_balance column");
+        logger.info("遷移 V4 成功！");
     }
 }

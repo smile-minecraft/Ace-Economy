@@ -169,7 +169,7 @@ public class CurrencyManager {
             // 記錄交易
             if (logManager != null) {
                 logManager.logTransaction(null, uuid, amount, "USD",
-                        com.smile.aceeconomy.data.TransactionType.DEPOSIT, "System Deposit");
+                        com.smile.aceeconomy.data.TransactionType.DEPOSIT, null, "System Deposit", null);
             }
 
             return true;
@@ -214,7 +214,7 @@ public class CurrencyManager {
             // 記錄交易
             if (logManager != null) {
                 logManager.logTransaction(uuid, null, amount, "USD",
-                        com.smile.aceeconomy.data.TransactionType.WITHDRAW, banknoteUuid, "System Withdraw");
+                        com.smile.aceeconomy.data.TransactionType.WITHDRAW, banknoteUuid, "System Withdraw", null);
             }
 
             return true;
@@ -257,12 +257,13 @@ public class CurrencyManager {
         ReentrantReadWriteLock lock = getLock(uuid);
         lock.writeLock().lock();
         try {
+            double currentBalance = account.getBalance();
             account.setBalance(amount);
 
             // 記錄交易
             if (logManager != null) {
                 logManager.logTransaction(null, uuid, amount, "USD",
-                        com.smile.aceeconomy.data.TransactionType.SET, "Set Balance");
+                        com.smile.aceeconomy.data.TransactionType.SET, null, "Set Balance", currentBalance);
             }
 
             return true;
