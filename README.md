@@ -1,334 +1,230 @@
 # AceEconomy
 
-<div align="center">
+[![Folia](https://img.shields.io/badge/Folia-Supported-brightgreen?style=flat-square)](https://papermc.io/software/folia)
+[![Paper](https://img.shields.io/badge/Paper-1.21+-blue?style=flat-square)](https://papermc.io/)
+[![Java](https://img.shields.io/badge/Java-21+-orange?style=flat-square)](https://adoptium.net/)
+[![License](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
 
-[![Folia](https://img.shields.io/badge/Folia-Supported-brightgreen?style=for-the-badge)](https://papermc.io/software/folia)
-[![Paper](https://img.shields.io/badge/Paper-1.21+-blue?style=for-the-badge)](https://papermc.io/)
-[![Java](https://img.shields.io/badge/Java-21+-orange?style=for-the-badge)](https://adoptium.net/)
-[![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)](LICENSE)
+**AceEconomy** is a modern, high-performance economy plugin designed specifically for the Folia architecture. It leverages regionized multithreading to ensure zero main thread blocking, making it ideal for large-scale servers.
 
-**一個輕量、高效、完全支援 Folia 的 Minecraft 經濟插件**
-
-*A lightweight, high-performance, Folia-compatible economy plugin for Minecraft*
-
-[中文](#中文文檔) | [English](#english-documentation)
-
-</div>
+[中文](#中文說明) | [English](#english-documentation)
 
 ---
 
-# 中文文檔
+# 中文說明
 
-## ✨ 特色功能
+AceEconomy 專為現代 Minecraft 伺服器設計，特別針對 Folia 的多執行緒架構進行了優化。它不依賴傳統的同步主執行緒操作，而是採用非同步與執行緒安全的設計模式，確保在高負載下仍能保持流暢的經濟交易體驗。
 
-- 🚀 **Folia 完全相容** — 使用區域化多執行緒，零阻塞主執行緒
-- 🔒 **執行緒安全** — 使用 `ConcurrentHashMap` 和 `ReentrantReadWriteLock`
-- 💾 **JSON 持久化** — 輕量級資料儲存，易於備份
-- 🔌 **Vault 整合** — 相容所有支援 Vault 的插件
-- 📊 **PlaceholderAPI** — 提供餘額佔位符
-- 💵 **銀行支票** — 可轉讓的實體貨幣物品
+## 主要功能
 
----
+### Folia 架構支援
+本插件完全遵循 Folia 的 API 規範，利用 `RegionScheduler` 和 `GlobalRegionScheduler` 進行任務調度。所有的資料存取都經過嚴格的執行緒安全處理，使用 `ConcurrentHashMap` 與 `ReentrantReadWriteLock` 來保證資料的一致性。
 
-## 📦 安裝
+### 彈性資料儲存
+支援多種資料儲存方式。對於小型伺服器，預設使用 **SQLite** 本地資料庫，無需額外設定即可運作。對於需要跨伺服器同步或更高性能的大型網路，支援 **MySQL** 資料庫連線，並採用 connection pool 技術優化連線效率。
 
-1. 下載最新版 `AceEconomy-x.x.x-reobf.jar`
-2. 放入伺服器 `plugins/` 資料夾
-3. 確保已安裝 [Vault](https://www.spigotmc.org/resources/vault.34315/)
-4. 重啟伺服器
+### 資料遷移工具
+為了方便從其他經濟插件轉移，AceEconomy 內建了強大的遷移工具。目前支援從 **EssentialsX** 和 **CMI** 匯入玩家資料。遷移過程完全非同步執行，並具備錯誤容忍機制，會自動跳過損壞的檔案並產生詳細報告。
 
-### 相依插件
+### Discord 整合
+內建交易監控系統，可透過 Webhook 將大額交易即時發送至 Discord 頻道。管理員可以自訂觸發通知的金額門檻，所有管理員操作（如給予、扣除、設定餘額）都會以不同顏色標示，方便查核。
 
-| 插件 | 必要性 | 說明 |
-|------|--------|------|
-| [Vault](https://www.spigotmc.org/resources/vault.34315/) | **必要** | 經濟 API 橋接 |
-| [PlaceholderAPI](https://www.spigotmc.org/resources/placeholderapi.6245/) | 可選 | 佔位符支援 |
+### 實體銀行支票
+玩家可以透過指令將虛擬貨幣轉換為實體支票物品。這些支票使用 **PersistentDataContainer (PDC)** 技術儲存面額，防止 NBT 標籤被偽造。支票可以自由交易、丟棄或存入箱子，右鍵點擊即可兌換回帳戶餘額。
 
----
+## 安裝指南
 
-## 🎮 指令
+1. 下載最新版本的 `AceEconomy-x.x.x.jar`。
+2. 將檔案放入伺服器的 `plugins/` 資料夾。
+3. 確保已安裝 [Vault](https://www.spigotmc.org/resources/vault.34315/)，這是經濟插件運作的必要依賴。
+4. 啟動伺服器，插件將自動產生 `config.yml` 與 `messages.yml`。
+
+如有需要，您可以安裝 [PlaceholderAPI](https://www.spigotmc.org/resources/placeholderapi.6245/) 來使用相關變數。
+
+## 指令與權限
+
+### 一般玩家指令
 
 | 指令 | 說明 | 權限 |
 |------|------|------|
-| `/money` | 查看自己餘額 | `aceeconomy.use` |
-| `/balance [玩家]` | 查看餘額 | `aceeconomy.use` |
-| `/pay <玩家> <金額>` | 轉帳給其他玩家 | `aceeconomy.pay` |
-| `/withdraw <金額>` | 提領銀行支票 | `aceeconomy.withdraw` |
-| `/aceeco give <玩家> <金額>` | 給予金錢 | `aceeconomy.admin` |
-| `/aceeco take <玩家> <金額>` | 扣除金錢 | `aceeconomy.admin` |
-| `/aceeco set <玩家> <金額>` | 設定餘額 | `aceeconomy.admin` |
+| `/money` 或 `/balance` | 查看自己的帳戶餘額。 | `aceeconomy.use` |
+| `/balance <玩家>` | 查看其他玩家的餘額。 | `aceeconomy.use` |
+| `/pay <玩家> <金額>` | 轉帳給其他線上玩家。 | `aceeconomy.pay` |
+| `/withdraw <金額>` | 將餘額提領為實體支票。 | `aceeconomy.withdraw` |
 
----
+### 管理員指令
 
-## 🔑 權限
+所有管理員指令需要 `aceeconomy.admin` 權限。
 
-| 權限節點 | 預設值 | 說明 |
-|----------|--------|------|
-| `aceeconomy.use` | 所有人 | 使用基本經濟指令 |
-| `aceeconomy.pay` | 所有人 | 使用轉帳功能 |
-| `aceeconomy.withdraw` | 所有人 | 提領銀行支票 |
-| `aceeconomy.admin` | OP | 管理員指令 |
+| 指令 | 說明 |
+|------|------|
+| `/aceeco give <玩家> <金額>` | 給予玩家指定金額。 |
+| `/aceeco take <玩家> <金額>` | 從玩家帳戶扣除指定金額。 |
+| `/aceeco set <玩家> <金額>` | 直接設定玩家的餘額。 |
+| `/aceeco import <essentials\|cmi>` | 從其他插件匯入資料。 |
 
----
+## 資料遷移
 
-## 📊 PlaceholderAPI 佔位符
+若您想從 EssentialsX 或 CMI 遷移資料，請依照以下步驟：
 
-| 佔位符 | 輸出範例 |
-|--------|----------|
-| `%aceeco_balance%` | `1234.56` |
-| `%aceeco_balance_formatted%` | `$1,234.56` |
-| `%aceeco_balance_commas%` | `1,234` |
-| `%aceeco_balance_int%` | `1234` |
+1. 確保伺服器已關閉或無玩家在線上（建議）。
+2. 在 `plugins/Essentials/userdata` 或 `plugins/CMI/playerdata` 中確認有 `.yml` 資料檔。
+3. 執行指令 `/aceeco import essentials` 或 `/aceeco import cmi`。
+4. 系統將會開始非同步處理，並在完成後顯示成功與失敗的筆數。
 
----
+## 開發者 API
 
-## 💵 銀行支票系統
+AceEconomy 提供了簡單易用的 API 供其他開發者串接。
 
-使用 `/withdraw` 可將虛擬貨幣轉換為實體支票物品：
-
-- 支票使用 **PDC (PersistentDataContainer)** 儲存數值，防止偽造
-- **右鍵點擊**支票即可兌換回虛擬貨幣
-- 支票可在玩家間自由交易
-
----
-
-## ⚙️ 設定檔
-
-```yaml
-# config.yml
-default-balance: 0.0  # 新玩家預設餘額
-```
-
----
-
-## 🔧 開發者 API
-
-### 取得 EconomyProvider
+### 獲取 EconomyProvider
 
 ```java
 EconomyProvider economy = Bukkit.getServicesManager()
     .getRegistration(EconomyProvider.class)
     .getProvider();
+```
 
-// 非同步操作
-economy.getBalance(uuid).thenAccept(balance -> {
-    System.out.println("餘額: " + balance);
+### 非同步操作範例
+
+由於 Folia 的特性，建議盡量使用非同步方法：
+
+```java
+// 查詢餘額
+economy.getBalance(playerItems).thenAccept(balance -> {
+    player.sendMessage("您的餘額: " + balance);
 });
 
-economy.deposit(uuid, 100.0).thenAccept(success -> {
+// 存款
+economy.deposit(playerUuid, 100.0).thenAccept(success -> {
     if (success) {
-        System.out.println("存款成功");
+        // 處理成功邏輯
     }
 });
 ```
 
 ### 監聽交易事件
 
+您可以監聽 `EconomyTransactionEvent` 來處理自訂邏輯：
+
 ```java
 @EventHandler
 public void onTransaction(EconomyTransactionEvent event) {
-    if (event.getAmount() > 10000) {
-        event.setCancelled(true); // 取消大額交易
+    if (event.getAmount() > 100000) {
+        // 記錄超大額交易
+        getLogger().info("大額交易: " + event.getSenderName() + " -> " + event.getReceiverName());
     }
 }
 ```
-
----
-
-## 🤝 貢獻指南
-
-歡迎任何形式的貢獻
-
-### 如何貢獻
-
-1. **Fork** 此倉庫
-2. 建立功能分支：`git checkout -b feature/amazing-feature`
-3. 提交變更：`git commit -m 'Add amazing feature'`
-4. 推送分支：`git push origin feature/amazing-feature`
-5. 開啟 **Pull Request**
-
-### 開發環境設置
-
-```bash
-# 克隆專案
-git clone https://github.com/your-username/AceEconomy.git
-cd AceEconomy
-
-# 建置專案
-./gradlew build
-
-# 產出 JAR 位於 build/libs/
-```
-
-### 程式碼規範
-
-- 使用 **Java 21** 語法
-- 遵循 Folia 執行緒模型（禁止使用 `Bukkit.getScheduler()`）
-- 所有註解使用**繁體中文**
-- 提交訊息使用英文
 
 ---
 
 # English Documentation
 
-## ✨ Features
+**AceEconomy** is a modern economy plugin tailored for the Folia architecture. Eschewing traditional synchronous main-thread operations, it adopts an asynchronous, thread-safe design pattern to ensure smooth economic transactions even under high server loads.
 
-- 🚀 **Folia Compatible** — Regionized multithreading, zero main thread blocking
-- 🔒 **Thread-Safe** — Uses `ConcurrentHashMap` and `ReentrantReadWriteLock`
-- 💾 **JSON Storage** — Lightweight data persistence, easy backup
-- 🔌 **Vault Integration** — Works with all Vault-compatible plugins
-- 📊 **PlaceholderAPI** — Balance placeholders support
-- 💵 **Banknotes** — Transferable physical currency items
+## Key Features
 
----
+### Folia Native Support
+Fully compliant with Folia's API specifications, utilizing `RegionScheduler` and `GlobalRegionScheduler`. All data access involves strict thread-safety measures, employing `ConcurrentHashMap` and `ReentrantReadWriteLock` to guarantee data consistency.
 
-## 📦 Installation
+### Flexible Data Storage
+Supports multiple storage backends. For smaller servers, it defaults to a local **SQLite** database requiring no extra configuration. For larger networks needing cross-server synchronization, it supports **MySQL** with connection pooling for optimized performance.
 
-1. Download the latest `AceEconomy-x.x.x-reobf.jar`
-2. Place it in your server's `plugins/` folder
-3. Ensure [Vault](https://www.spigotmc.org/resources/vault.34315/) is installed
-4. Restart the server
+### Data Migration Tools
+To facilitate switching from other economy plugins, AceEconomy includes robust migration tools. Currently supports importing player data from **EssentialsX** and **CMI**. The migration process runs purely asynchronously and features error tolerance, skipping corrupted files and generating detailed reports.
 
-### Dependencies
+### Discord Integration
+Features a built-in transaction monitoring system that sends real-time webhooks to a Discord channel for large transactions. Administrators can customize the monetary threshold for alerts. Admin actions (Give, Take, Set) are color-coded for easy auditing.
 
-| Plugin | Required | Description |
-|--------|----------|-------------|
-| [Vault](https://www.spigotmc.org/resources/vault.34315/) | **Yes** | Economy API bridge |
-| [PlaceholderAPI](https://www.spigotmc.org/resources/placeholderapi.6245/) | Optional | Placeholder support |
+### Physical Banknotes
+Players can convert virtual currency into physical banknote items via command. These banknotes use **PersistentDataContainer (PDC)** to store value, preventing NBT forgery. They can be traded, dropped, or stored, and redeemed back into account balance by right-clicking.
 
----
+## Installation
 
-## 🎮 Commands
+1. Download the latest `AceEconomy-x.x.x.jar`.
+2. Place the file into your server's `plugins/` directory.
+3. Ensure [Vault](https://www.spigotmc.org/resources/vault.34315/) is installed (required dependency).
+4. Start the server; context files `config.yml` and `messages.yml` will be generated.
+
+Optionally, install [PlaceholderAPI](https://www.spigotmc.org/resources/placeholderapi.6245/) for variable support.
+
+## Commands & Permissions
+
+### Player Commands
 
 | Command | Description | Permission |
 |---------|-------------|------------|
-| `/money` | Check your balance | `aceeconomy.use` |
-| `/balance [player]` | Check balance | `aceeconomy.use` |
-| `/pay <player> <amount>` | Transfer money | `aceeconomy.pay` |
-| `/withdraw <amount>` | Withdraw banknote | `aceeconomy.withdraw` |
-| `/aceeco give <player> <amount>` | Give money | `aceeconomy.admin` |
-| `/aceeco take <player> <amount>` | Take money | `aceeconomy.admin` |
-| `/aceeco set <player> <amount>` | Set balance | `aceeconomy.admin` |
+| `/money` or `/balance` | Check your account balance. | `aceeconomy.use` |
+| `/balance <player>` | Check another player's balance. | `aceeconomy.use` |
+| `/pay <player> <amount>` | Transfer money to an online player. | `aceeconomy.pay` |
+| `/withdraw <amount>` | Withdraw balance as a physical banknote. | `aceeconomy.withdraw` |
 
----
+### Admin Commands
 
-## 🔑 Permissions
+All admin commands require the `aceeconomy.admin` permission.
 
-| Permission | Default | Description |
-|------------|---------|-------------|
-| `aceeconomy.use` | Everyone | Basic economy commands |
-| `aceeconomy.pay` | Everyone | Transfer money |
-| `aceeconomy.withdraw` | Everyone | Withdraw banknotes |
-| `aceeconomy.admin` | OP | Admin commands |
+| Command | Description |
+|---------|-------------|
+| `/aceeco give <player> <amount>` | Give a specified amount to a player. |
+| `/aceeco take <player> <amount>` | Take a specified amount from a player. |
+| `/aceeco set <player> <amount>` | Set a player's balance directly. |
+| `/aceeco import <essentials\|cmi>` | Import data from other plugins. |
 
----
+## Data Migration
 
-## 📊 PlaceholderAPI Placeholders
+To migrate data from EssentialsX or CMI:
 
-| Placeholder | Example Output |
-|-------------|----------------|
-| `%aceeco_balance%` | `1234.56` |
-| `%aceeco_balance_formatted%` | `$1,234.56` |
-| `%aceeco_balance_commas%` | `1,234` |
-| `%aceeco_balance_int%` | `1234` |
+1. Ensure the server is closed or empty (recommended).
+2. Verify existance of `.yml` files in `plugins/Essentials/userdata` or `plugins/CMI/playerdata`.
+3. Run `/aceeco import essentials` or `/aceeco import cmi`.
+4. The system will process asynchronously and report success/failure counts upon completion.
 
----
+## Developer API
 
-## 💵 Banknote System
+AceEconomy provides a straightforward API for developers.
 
-Use `/withdraw` to convert virtual currency into physical banknote items:
-
-- Banknotes use **PDC (PersistentDataContainer)** to store values, preventing forgery
-- **Right-click** a banknote to redeem it
-- Banknotes can be freely traded between players
-
----
-
-## ⚙️ Configuration
-
-```yaml
-# config.yml
-default-balance: 0.0  # Default balance for new players
-```
-
----
-
-## 🔧 Developer API
-
-### Getting EconomyProvider
+### Getting the EconomyProvider
 
 ```java
 EconomyProvider economy = Bukkit.getServicesManager()
     .getRegistration(EconomyProvider.class)
     .getProvider();
+```
 
-// Async operations
-economy.getBalance(uuid).thenAccept(balance -> {
-    System.out.println("Balance: " + balance);
+### Async Operations
+
+Due to Folia's nature, using asynchronous methods is highly recommended:
+
+```java
+// Check Balance
+economy.getBalance(playerItems).thenAccept(balance -> {
+    player.sendMessage("Your Balance: " + balance);
 });
 
-economy.deposit(uuid, 100.0).thenAccept(success -> {
+// Deposit
+economy.deposit(playerUuid, 100.0).thenAccept(success -> {
     if (success) {
-        System.out.println("Deposit successful");
+        // Handle success logic
     }
 });
 ```
 
-### Listening to Transaction Events
+### Listening to Transactions
+
+You can listen to `EconomyTransactionEvent` for custom logic:
 
 ```java
 @EventHandler
 public void onTransaction(EconomyTransactionEvent event) {
-    if (event.getAmount() > 10000) {
-        event.setCancelled(true); // Cancel large transactions
+    if (event.getAmount() > 100000) {
+        // Log huge transactions
+        getLogger().info("Huge Transaction: " + event.getSenderName() + " -> " + event.getReceiverName());
     }
 }
 ```
 
 ---
 
-## 🤝 Contributing
-
-We welcome contributions of all kinds!
-
-### How to Contribute
-
-1. **Fork** this repository
-2. Create a feature branch: `git checkout -b feature/amazing-feature`
-3. Commit your changes: `git commit -m 'Add amazing feature'`
-4. Push to the branch: `git push origin feature/amazing-feature`
-5. Open a **Pull Request**
-
-### Development Setup
-
-```bash
-# Clone the project
-git clone https://github.com/your-username/AceEconomy.git
-cd AceEconomy
-
-# Build the project
-./gradlew build
-
-# Output JAR is in build/libs/
-```
-
-### Code Standards
-
-- Use **Java 21** syntax
-- Follow Folia threading model (no `Bukkit.getScheduler()`)
-- Code comments in **Traditional Chinese**
-- Commit messages in **English**
-
----
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
----
-
 <div align="center">
-
-**Made with ❤️ by Smile**
-
+    <strong>Made with ❤️ by Smile</strong>
 </div>
