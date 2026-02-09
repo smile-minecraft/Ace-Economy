@@ -32,11 +32,9 @@ public class CurrencyManager {
 
     private final StorageHandler storageHandler;
     private final Logger logger;
-
-    /**
-     * 預設初始餘額
-     */
     private final double defaultBalance;
+
+    private LogManager logManager;
 
     /**
      * 建立貨幣管理器。
@@ -49,6 +47,10 @@ public class CurrencyManager {
         this.storageHandler = storageHandler;
         this.logger = logger;
         this.defaultBalance = defaultBalance;
+    }
+
+    public void setLogManager(LogManager logManager) {
+        this.logManager = logManager;
     }
 
     /**
@@ -163,6 +165,13 @@ public class CurrencyManager {
         try {
             double newBalance = account.getBalance() + amount;
             account.setBalance(newBalance);
+
+            // 記錄交易
+            if (logManager != null) {
+                logManager.logTransaction(null, uuid, amount, "USD",
+                        com.smile.aceeconomy.data.TransactionType.DEPOSIT, "System Deposit");
+            }
+
             return true;
         } finally {
             lock.writeLock().unlock();
@@ -179,7 +188,10 @@ public class CurrencyManager {
      * @param amount 提款金額（必須為正數）
      * @return 操作是否成功（餘額足夠時回傳 true）
      */
-    public boolean withdraw(UUID uuid, double amount) {
+    /**
+     * 從玩家帳戶提款 (包含支票 UUID)。
+     */
+    public boolean withdraw(UUID uuid, double amount, UUID banknoteUuid) {
         if (amount <= 0) {
             return false;
         }
@@ -198,10 +210,31 @@ public class CurrencyManager {
                 return false;
             }
             account.setBalance(currentBalance - amount);
+
+            // 記錄交易
+            if (logManager != null) {
+                logManager.logTransaction(uuid, null, amount, "USD",
+                        com.smile.aceeconomy.data.TransactionType.WITHDRAW, banknoteUuid, "System Withdraw");
+            }
+
             return true;
         } finally {
             lock.writeLock().unlock();
         }
+    }
+
+    /**
+     * 從玩家帳戶提款。
+     * <p>
+     * 執行緒安全的餘額減少操作，會檢查餘額是否足夠。
+     * </p>
+     *
+     * @param uuid   玩家 UUID
+     * @param amount 提款金額（必須為正數）
+     * @return 操作是否成功（餘額足夠時回傳 true）
+     */
+    public boolean withdraw(UUID uuid, double amount) {
+        return withdraw(uuid, amount, null);
     }
 
     /**
@@ -225,10 +258,26 @@ public class CurrencyManager {
         lock.writeLock().lock();
         try {
             account.setBalance(amount);
+
+            // 記錄交易
+            if (logManager != null) {
+                logManager.logTransaction(null, uuid, amount, "USD",
+                        com.smile.aceeconomy.data.TransactionType.SET, "Set Balance");
+            }
+
             return true;
         } finally {
             lock.writeLock().unlock();
         }
+    }
+
+    /**
+     * 取得日誌管理器。
+     *
+     * @return 日誌管理器
+     */
+    public LogManager getLogManager() {
+        return logManager;
     }
 
     /**

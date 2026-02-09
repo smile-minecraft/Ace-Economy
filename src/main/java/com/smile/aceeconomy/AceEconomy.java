@@ -73,6 +73,11 @@ public final class AceEconomy extends JavaPlugin implements Listener {
         double startBalance = configManager.getStartBalance();
         currencyManager = new CurrencyManager(storageHandler, getLogger(), startBalance);
 
+        // 初始化日誌管理器
+        com.smile.aceeconomy.manager.LogManager logManager = new com.smile.aceeconomy.manager.LogManager(this,
+                databaseConnection, currencyManager);
+        currencyManager.setLogManager(logManager);
+
         // 初始化經濟服務提供者
         economyProvider = new EconomyProvider(this);
 
@@ -94,7 +99,7 @@ public final class AceEconomy extends JavaPlugin implements Listener {
         setupPlaceholderAPI();
 
         // 註冊指令
-        registerCommands();
+        registerCommands(logManager);
 
         // 註冊事件監聽器
         Bukkit.getPluginManager().registerEvents(this, this);
@@ -136,7 +141,7 @@ public final class AceEconomy extends JavaPlugin implements Listener {
     /**
      * 註冊插件指令。
      */
-    private void registerCommands() {
+    private void registerCommands(com.smile.aceeconomy.manager.LogManager logManager) {
         // /money, /balance, /bal
         BalanceCommand balanceCommand = new BalanceCommand(this);
         PluginCommand moneyCmd = getCommand("money");
@@ -160,6 +165,11 @@ public final class AceEconomy extends JavaPlugin implements Listener {
             aceEcoCmd.setExecutor(adminCommand);
             aceEcoCmd.setTabCompleter(adminCommand);
         }
+
+        // 注入 LogManager 和子指令
+        adminCommand.setLogManager(logManager);
+        adminCommand.setHistoryCommand(new com.smile.aceeconomy.commands.HistoryCommand(this, logManager));
+        adminCommand.setRollbackCommand(new com.smile.aceeconomy.commands.RollbackCommand(this, logManager));
 
         // 註冊自定義主指令別名
         String customAlias = configManager.getMainCommandAlias();

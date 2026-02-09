@@ -26,26 +26,6 @@ public class SQLStorageHandler implements StorageHandler {
 
     private static final String TABLE_NAME = "ace_economy";
 
-    // MySQL 語法
-    private static final String CREATE_TABLE_MYSQL = """
-            CREATE TABLE IF NOT EXISTS %s (
-                uuid VARCHAR(36) PRIMARY KEY,
-                username VARCHAR(16) NOT NULL,
-                balance DOUBLE NOT NULL DEFAULT 0,
-                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-            """;
-
-    // SQLite 語法
-    private static final String CREATE_TABLE_SQLITE = """
-            CREATE TABLE IF NOT EXISTS %s (
-                uuid TEXT PRIMARY KEY,
-                username TEXT NOT NULL,
-                balance REAL NOT NULL DEFAULT 0,
-                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-            """;
-
     private static final String SELECT_ACCOUNT = "SELECT * FROM %s WHERE uuid = ?";
 
     // MySQL 使用 ON DUPLICATE KEY UPDATE
@@ -81,26 +61,8 @@ public class SQLStorageHandler implements StorageHandler {
 
     @Override
     public void initialize() {
-        // 建立資料表
-        CompletableFuture.runAsync(() -> {
-            try (Connection conn = databaseConnection.getConnection();
-                    Statement stmt = conn.createStatement()) {
-
-                String createTableSQL = databaseConnection.isMySQL()
-                        ? CREATE_TABLE_MYSQL.formatted(TABLE_NAME)
-                        : CREATE_TABLE_SQLITE.formatted(TABLE_NAME);
-
-                stmt.execute(createTableSQL);
-                logger.info("已建立/確認資料表: " + TABLE_NAME);
-
-            } catch (SQLException e) {
-                logger.severe("建立資料表時發生錯誤: " + e.getMessage());
-                e.printStackTrace();
-            }
-        }).exceptionally(throwable -> {
-            logger.severe("初始化資料表時發生錯誤: " + throwable.getMessage());
-            return null;
-        });
+        // 資料表建立已移至 SchemaManager 處理
+        logger.info("SQL 儲存處理器已初始化 (資料表由 SchemaManager 管理)");
     }
 
     @Override

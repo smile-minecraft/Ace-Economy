@@ -42,6 +42,11 @@ public class BanknoteListener implements Listener {
     private static NamespacedKey ISSUER_KEY;
 
     /**
+     * PDC Key: 支票 ID
+     */
+    private static NamespacedKey ID_KEY;
+
+    /**
      * 建立支票監聽器。
      *
      * @param plugin 插件實例
@@ -53,6 +58,7 @@ public class BanknoteListener implements Listener {
         // 初始化 NamespacedKey
         VALUE_KEY = new NamespacedKey(plugin, "banknote_value");
         ISSUER_KEY = new NamespacedKey(plugin, "banknote_issuer");
+        ID_KEY = new NamespacedKey(plugin, "banknote_id");
     }
 
     /**
@@ -79,6 +85,19 @@ public class BanknoteListener implements Listener {
             ISSUER_KEY = new NamespacedKey(plugin, "banknote_issuer");
         }
         return ISSUER_KEY;
+    }
+
+    /**
+     * 取得 ID Key。
+     *
+     * @param plugin 插件實例
+     * @return NamespacedKey
+     */
+    public static NamespacedKey getIdKey(AceEconomy plugin) {
+        if (ID_KEY == null) {
+            ID_KEY = new NamespacedKey(plugin, "banknote_id");
+        }
+        return ID_KEY;
     }
 
     /**
@@ -123,6 +142,7 @@ public class BanknoteListener implements Listener {
         // 讀取支票資料
         Double value = pdc.get(VALUE_KEY, PersistentDataType.DOUBLE);
         String issuer = pdc.get(ISSUER_KEY, PersistentDataType.STRING);
+        String idStr = pdc.get(getIdKey(plugin), PersistentDataType.STRING); // 新增 ID 讀取
 
         if (value == null || value <= 0) {
             MessageUtils.sendError(player, "這張支票已損壞！");
@@ -135,6 +155,39 @@ public class BanknoteListener implements Listener {
             return;
         }
 
+        // 驗證支票有效性 (非同步)
+        if (idStr != null) {
+            final double finalValue = value;
+            final String finalIssuer = issuer != null ? issuer : "未知";
+            final java.util.UUID banknoteUuid = java.util.UUID.fromString(idStr);
+
+            plugin.getCurrencyManager().getLogManager().getTransactionByBanknote(banknoteUuid)
+                    .thenAccept(log -> {
+                        // 回到主執行緒或 Region 執行緒處理後續 (需注意 Folia)
+                        // 這裡 thenAccept 會在某個執行緒執行。我們需要調度回玩家執行緒進行操作 (如移除物品)。
+
+                        player.getScheduler().run(plugin, task -> {
+                            if (log != null && log.reverted()) {
+                                // 支票已作廢
+                                item.setAmount(0); // 直接移除
+                                MessageUtils.sendError(player, "此支票已被銀行註銷 (Voided Check)！");
+                                player.playSound(player.getLocation(), Sound.ENTITY_ITEM_BREAK, 1.0f, 1.0f);
+                                return;
+                            }
+
+                            // 驗證通過，繼續兌換
+                            proccessRedeem(player, item, finalValue, finalIssuer);
+                        }, null);
+                    });
+
+            return; // 結束同步流程，等待非同步回調
+        }
+
+        // 舊版支票 (無 ID) -> 直接兌換
+        proccessRedeem(player, item, value, issuer != null ? issuer : "未知");
+    }
+
+    private void proccessRedeem(Player player, ItemStack item, double value, String issuer) {
         // 移除支票物品
         if (item.getAmount() > 1) {
             item.setAmount(item.getAmount() - 1);
@@ -143,10 +196,7 @@ public class BanknoteListener implements Listener {
         }
 
         // 存入金錢
-        final double finalValue = value;
-        final String finalIssuer = issuer != null ? issuer : "未知";
-
-        economyProvider.deposit(player.getUniqueId(), finalValue).thenAccept(success -> {
+        economyProvider.deposit(player.getUniqueId(), value).thenAccept(success -> {
             // 使用玩家排程器確保 Folia 安全
             player.getScheduler().run(plugin, task -> {
                 if (success) {
@@ -154,8 +204,8 @@ public class BanknoteListener implements Listener {
                     player.playSound(player.getLocation(), Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 1.0f, 1.0f);
 
                     MessageUtils.sendSuccess(player,
-                            "已兌換支票：" + MessageUtils.formatMoney(finalValue) +
-                                    " <gray>(簽發人：" + finalIssuer + ")</gray>");
+                            "已兌換支票：" + MessageUtils.formatMoney(value) +
+                                    " <gray>(簽發人：" + issuer + ")</gray>");
                 } else {
                     // 兌換失敗，退還支票
                     MessageUtils.sendError(player, "兌換失敗，交易被取消！");

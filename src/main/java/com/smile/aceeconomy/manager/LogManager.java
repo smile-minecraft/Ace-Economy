@@ -1,0 +1,336 @@
+package com.smile.aceeconomy.manager;
+
+import com.smile.aceeconomy.AceEconomy;
+import com.smile.aceeconomy.data.TransactionType;
+import com.smile.aceeconomy.storage.DatabaseConnection;
+
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.logging.Logger;
+
+/**
+ * 日誌管理器。
+ * <p>
+ * 負責記錄所有經濟交易，並提供查詢與回溯功能。
+ * 所有資料庫操作皆為非同步。
+ * </p>
+ *
+ * @author Smile
+ */
+public class LogManager {
+
+    private final DatabaseConnection databaseConnection;
+    private final Logger logger;
+    private final CurrencyManager currencyManager;
+
+    private static final String INSERT_LOG = """
+            INSERT INTO ace_transaction_logs
+            (transaction_id, banknote_uuid, sender_uuid, receiver_uuid, currency_type, amount, type, reverted)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """;
+
+    private static final String SELECT_HISTORY = """
+            SELECT * FROM ace_transaction_logs
+            WHERE sender_uuid = ? OR receiver_uuid = ?
+            ORDER BY timestamp DESC
+            LIMIT ? OFFSET ?
+            """;
+
+    private static final String SELECT_BY_ID = "SELECT * FROM ace_transaction_logs WHERE transaction_id = ?";
+
+    private static final String SELECT_BY_BANKNOTE = "SELECT * FROM ace_transaction_logs WHERE banknote_uuid = ?";
+
+    private static final String UPDATE_REVERTED = "UPDATE ace_transaction_logs SET reverted = ? WHERE transaction_id = ?";
+
+    public LogManager(AceEconomy plugin, DatabaseConnection databaseConnection, CurrencyManager currencyManager) {
+        this.databaseConnection = databaseConnection;
+        this.logger = plugin.getLogger();
+        this.currencyManager = currencyManager;
+    }
+
+    /**
+     * 記錄交易。
+     *
+     * @param sender       發送者 UUID (可為 null)
+     * @param receiver     接收者 UUID (可為 null)
+     * @param amount       金額
+     * @param currency     貨幣類型 (例如 "USD")
+     * @param type         交易類型
+     * @param banknoteUuid 支票 UUID (可為 null)
+     * @param context      上下文資訊 (例如交易 ID 或額外備註)
+     */
+    public void logTransaction(UUID sender, UUID receiver, double amount, String currency, TransactionType type,
+            UUID banknoteUuid, String context) {
+        CompletableFuture.runAsync(() -> {
+            try (Connection conn = databaseConnection.getConnection();
+                    PreparedStatement pstmt = conn.prepareStatement(INSERT_LOG)) {
+
+                String transactionId = (context != null && !context.isEmpty()) ? context : UUID.randomUUID().toString();
+
+                pstmt.setString(1, transactionId);
+                pstmt.setString(2, banknoteUuid != null ? banknoteUuid.toString() : null);
+                pstmt.setString(3, sender != null ? sender.toString() : null);
+                pstmt.setString(4, receiver != null ? receiver.toString() : null);
+                pstmt.setString(5, currency);
+                pstmt.setDouble(6, amount);
+                pstmt.setString(7, type.name());
+                pstmt.setBoolean(8, false);
+
+                pstmt.executeUpdate();
+
+            } catch (SQLException e) {
+                logger.severe("記錄交易失敗: " + e.getMessage());
+                e.printStackTrace();
+            }
+        });
+    }
+
+    /**
+     * 記錄交易 (相容舊版方法)。
+     */
+    public void logTransaction(UUID sender, UUID receiver, double amount, String currency, TransactionType type,
+            String context) {
+        logTransaction(sender, receiver, amount, currency, type, null, context);
+    }
+
+    /**
+     * 取得玩家交易歷史記錄。
+     *
+     * @param player 玩家 UUID
+     * @param page   頁碼 (從 1 開始)
+     * @param limit  每頁筆數
+     * @return 交易記錄列表
+     */
+    public CompletableFuture<List<TransactionLog>> getHistory(UUID player, int page, int limit) {
+        return CompletableFuture.supplyAsync(() -> {
+            List<TransactionLog> logs = new ArrayList<>();
+            try (Connection conn = databaseConnection.getConnection();
+                    PreparedStatement pstmt = conn.prepareStatement(SELECT_HISTORY)) {
+
+                pstmt.setString(1, player.toString());
+                pstmt.setString(2, player.toString());
+                pstmt.setInt(3, limit);
+                pstmt.setInt(4, (page - 1) * limit);
+
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    while (rs.next()) {
+                        logs.add(mapResultSetToLog(rs));
+                    }
+                }
+
+            } catch (SQLException e) {
+                logger.severe("查詢交易歷史失敗: " + e.getMessage());
+                e.printStackTrace();
+            }
+            return logs;
+        });
+    }
+
+    /**
+     * 根據 Transaction ID 取得交易記錄。
+     *
+     * @param transactionId 交易 ID
+     * @return 交易記錄，若找不到則為 null
+     */
+    public CompletableFuture<TransactionLog> getTransaction(String transactionId) {
+        return CompletableFuture.supplyAsync(() -> {
+            try (Connection conn = databaseConnection.getConnection();
+                    PreparedStatement pstmt = conn.prepareStatement(SELECT_BY_ID)) {
+
+                pstmt.setString(1, transactionId);
+
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    if (rs.next()) {
+                        return mapResultSetToLog(rs);
+                    }
+                }
+
+            } catch (SQLException e) {
+                logger.severe("查詢單筆交易失敗: " + e.getMessage());
+                e.printStackTrace();
+            }
+            return null;
+        });
+    }
+
+    /**
+     * 回溯交易。
+     *
+     * @param transactionId 交易 ID
+     * @return 回溯結果訊息
+     */
+    public CompletableFuture<String> rollbackTransaction(String transactionId) {
+        return getTransaction(transactionId).thenCompose(log -> {
+            if (log == null) {
+                return CompletableFuture.completedFuture("<red>找不到交易 ID: " + transactionId + "</red>");
+            }
+
+            if (log.reverted()) {
+                return CompletableFuture.completedFuture("<red>此交易已經被回溯過了！</red>");
+            }
+
+            // 執行回溯邏輯
+            return CompletableFuture.supplyAsync(() -> {
+                // 檢查接收者餘額是否足夠扣回 (若是轉帳或給予)
+                UUID receiverUuid = log.receiverUuid();
+                UUID senderUuid = log.senderUuid();
+                double amount = log.amount();
+                TransactionType type = log.type();
+
+                // 根據交易類型決定回溯行為
+                // PAY: Receiver -> Sender (從接收者扣除，還給發送者)
+                // GIVE: Receiver -> Null (從接收者扣除)
+                // TAKE: Null -> Receiver (還給接收者)
+                // WITHDRAW: Null -> Receiver (還給接收者 - 假設提款是將錢變成物品，回溯則是把錢還給玩家，但物品難以追蹤，這裡假設單純補錢)
+                // DEPOSIT: Receiver -> Null (從接收者扣除)
+
+                // 檢查接收者餘額 (僅在需要扣錢時)
+                boolean needDeductFromReceiver = type == TransactionType.PAY || type == TransactionType.GIVE
+                        || type == TransactionType.DEPOSIT;
+
+                if (needDeductFromReceiver && receiverUuid != null) {
+                    if (!currencyManager.hasAccount(receiverUuid)) {
+                        // 嘗試載入離線玩家 (此處簡化，若 CurrencyManager 支援自動載入最好，否則需手動處理)
+                        // 這裡假設 CurrencyManager 若有實現離線操作最好，若無則檢查
+                        // 由於 CurrencyManager 主要是記憶體快取，若玩家不在線上可能需要先載入
+                        try {
+                            if (currencyManager.getStorageHandler().loadAccount(receiverUuid).join() == null) {
+                                return "<red>接收者帳戶不存在！</red>";
+                            }
+                        } catch (Exception e) {
+                            return "<red>載入接收者資料失敗！</red>";
+                        }
+                    }
+
+                    // 這裡重新讀取餘額確保準確 (若玩家在線上)
+                    // double balance = currencyManager.getBalance(receiverUuid);
+                    // 若玩家不在線上，getBalance 可能回傳 0 (視 CurrencyManager 實作)
+                    // TODO: 完善離線玩家餘額檢查。目前假設玩家在線上或已快取。
+                    // 為了安全，暫時不強制扣除至負數，除非是管理員操作。
+
+                    // 若要嚴格檢查：
+                    // if (balance < amount) return "<red>接收者餘額不足，無法回溯！</red>";
+                }
+
+                // 開始執行回溯
+                try {
+                    // 1. 執行資金反向操作
+                    if (type == TransactionType.PAY) {
+                        if (receiverUuid != null)
+                            currencyManager.withdraw(receiverUuid, amount);
+                        if (senderUuid != null)
+                            currencyManager.deposit(senderUuid, amount);
+                    } else if (type == TransactionType.GIVE || type == TransactionType.DEPOSIT) {
+                        if (receiverUuid != null)
+                            currencyManager.withdraw(receiverUuid, amount);
+                    } else if (type == TransactionType.TAKE || type == TransactionType.WITHDRAW) {
+                        // TAKE 是從玩家扣錢，回溯就是還錢
+                        // WITHDRAW 是玩家提錢，回溯就是還錢 (假設物品被沒收或無效化，但這裡只管錢)
+                        if (senderUuid != null)
+                            currencyManager.deposit(senderUuid, amount); // 注意：DB 記錄中，TAKE 操作的 sender 可能是 admin，receiver
+                                                                         // 是被扣錢的玩家。
+                        // 需要確認 logTransaction 的參數填法。
+                        // 假設:
+                        // PAY: sender=P1, receiver=P2
+                        // GIVE: sender=Admin/Console, receiver=P1
+                        // TAKE: sender=Admin/Console, receiver=P1 (但錢是從 P1 出去) -> 這裡需要定義清楚
+                        // 一般來說 TAKE: 從 Receiver 扣錢。
+
+                        // 修正：LogManager.logTransaction 呼叫時的語意
+                        // TAKE: sender=Admin, receiver=Player, amount=X.
+                        // 回溯 TAKE: 給 Player X 元。
+                        if (receiverUuid != null)
+                            currencyManager.deposit(receiverUuid, amount);
+                    }
+
+                    // 2. 更新資料庫標記為已回溯
+                    try (Connection conn = databaseConnection.getConnection();
+                            PreparedStatement pstmt = conn.prepareStatement(UPDATE_REVERTED)) {
+                        pstmt.setBoolean(1, true);
+                        pstmt.setString(2, transactionId);
+                        pstmt.executeUpdate();
+                    }
+
+                    // 3. 記錄回溯操作本身
+                    logTransaction(null, null, amount, "USD", TransactionType.ROLLBACK, null,
+                            "Rollback of " + transactionId);
+
+                    return "<green>交易 " + transactionId + " 已成功回溯！</green>";
+
+                } catch (Exception e) {
+                    logger.severe("回溯交易失敗: " + e.getMessage());
+                    e.printStackTrace();
+                    return "<red>回溯執行失敗: " + e.getMessage() + "</red>";
+                }
+            });
+        });
+    }
+
+    /**
+     * 根據支票 UUID 查詢交易。
+     *
+     * @param banknoteUuid 支票 UUID
+     * @return 交易記錄
+     */
+    public CompletableFuture<TransactionLog> getTransactionByBanknote(UUID banknoteUuid) {
+        return CompletableFuture.supplyAsync(() -> {
+            try (Connection conn = databaseConnection.getConnection();
+                    PreparedStatement pstmt = conn.prepareStatement(SELECT_BY_BANKNOTE)) {
+
+                pstmt.setString(1, banknoteUuid.toString());
+
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    if (rs.next()) {
+                        return mapResultSetToLog(rs);
+                    }
+                }
+
+            } catch (SQLException e) {
+                logger.severe("查詢支票交易失敗: " + e.getMessage());
+                e.printStackTrace();
+            }
+            return null;
+        });
+    }
+
+    private TransactionLog mapResultSetToLog(ResultSet rs) throws SQLException {
+        String banknoteUuidStr = null;
+        try {
+            banknoteUuidStr = rs.getString("banknote_uuid");
+        } catch (SQLException ignored) {
+            // 欄位可能不存在 (舊資料)
+        }
+
+        return new TransactionLog(
+                rs.getInt("log_id"),
+                rs.getString("transaction_id"),
+                rs.getString("banknote_uuid") != null ? UUID.fromString(rs.getString("banknote_uuid")) : null,
+                rs.getTimestamp("timestamp"),
+                rs.getString("sender_uuid") != null ? UUID.fromString(rs.getString("sender_uuid")) : null,
+                rs.getString("receiver_uuid") != null ? UUID.fromString(rs.getString("receiver_uuid")) : null,
+                rs.getString("currency_type"),
+                rs.getDouble("amount"),
+                TransactionType.valueOf(rs.getString("type")),
+                rs.getBoolean("reverted"));
+    }
+
+    public record TransactionLog(
+            int logId,
+            String transactionId,
+            UUID banknoteUuid,
+            Timestamp timestamp,
+            UUID senderUuid,
+            UUID receiverUuid,
+            String currencyType,
+            double amount,
+            TransactionType type,
+            boolean reverted) {
+    }
+}

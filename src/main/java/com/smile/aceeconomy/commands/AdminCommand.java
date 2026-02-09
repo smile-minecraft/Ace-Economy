@@ -33,6 +33,10 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
     private final AceEconomy plugin;
     private final EconomyProvider economyProvider;
 
+    private com.smile.aceeconomy.manager.LogManager logManager;
+    private CommandExecutor historyCommand;
+    private CommandExecutor rollbackCommand;
+
     /**
      * 追蹤是否有遷移任務正在進行
      */
@@ -46,6 +50,18 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
     public AdminCommand(AceEconomy plugin) {
         this.plugin = plugin;
         this.economyProvider = plugin.getEconomyProvider();
+    }
+
+    public void setLogManager(com.smile.aceeconomy.manager.LogManager logManager) {
+        this.logManager = logManager;
+    }
+
+    public void setHistoryCommand(CommandExecutor historyCommand) {
+        this.historyCommand = historyCommand;
+    }
+
+    public void setRollbackCommand(CommandExecutor rollbackCommand) {
+        this.rollbackCommand = rollbackCommand;
     }
 
     @Override
@@ -65,6 +81,27 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
         }
 
         String action = args[0].toLowerCase();
+
+        // 處理 history 指令
+        if (action.equals("history")) {
+            if (historyCommand != null) {
+                // 將參數向左移動 1 位，傳遞給子指令
+                String[] subArgs = new String[args.length - 1];
+                System.arraycopy(args, 1, subArgs, 0, subArgs.length);
+                return historyCommand.onCommand(sender, command, label, subArgs);
+            }
+            return true;
+        }
+
+        // 處理 rollback 指令
+        if (action.equals("rollback")) {
+            if (rollbackCommand != null) {
+                String[] subArgs = new String[args.length - 1];
+                System.arraycopy(args, 1, subArgs, 0, subArgs.length);
+                return rollbackCommand.onCommand(sender, command, label, subArgs);
+            }
+            return true;
+        }
 
         // 處理 import 指令
         if (action.equals("import")) {
@@ -281,6 +318,8 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
             MessageUtils.send(sender, "<white>/aceeco give <玩家> <金額></white> <gray>- 給予玩家金錢</gray>");
             MessageUtils.send(sender, "<white>/aceeco take <玩家> <金額></white> <gray>- 扣除玩家金錢</gray>");
             MessageUtils.send(sender, "<white>/aceeco set <玩家> <金額></white> <gray>- 設定玩家餘額</gray>");
+            MessageUtils.send(sender, "<white>/aceeco history <玩家> [頁碼]</white> <gray>- 查看交易記錄</gray>");
+            MessageUtils.send(sender, "<white>/aceeco rollback <交易ID></white> <gray>- 回溯交易</gray>");
             MessageUtils.send(sender, "<white>/aceeco import <essentials|cmi></white> <gray>- 匯入資料</gray>");
         }
 
@@ -296,7 +335,7 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
 
         if (args.length == 1) {
             // 補全操作類型
-            List<String> actions = List.of("give", "take", "set", "import");
+            List<String> actions = List.of("give", "take", "set", "import", "history", "rollback");
             String prefix = args[0].toLowerCase();
             return actions.stream()
                     .filter(a -> a.startsWith(prefix))
