@@ -24,3 +24,12 @@ currency:
 
 # 玩家新建帳戶時的預設餘額
 start-balance: 1000.0
+
+# Discord Webhook 設定
+discord:
+  # 是否啟用 Discord 通知
+  enabled: false
+  # Webhook URL
+  webhook-url: ""
+  # 僅記錄超過此金額的交易
+  min-amount: 10000.0

@@ -48,6 +48,11 @@ public class ConfigManager {
     private double startBalance;
     private String prefix;
 
+    // Discord 設定
+    private boolean discordEnabled;
+    private String discordWebhookUrl;
+    private double discordMinAmount;
+
     /**
      * 建立設定檔管理器。
      *
@@ -141,6 +146,11 @@ public class ConfigManager {
 
         // 訊息前綴
         prefix = messages.getString("prefix", "<gold>[AceEconomy]</gold> <gray>");
+
+        // Discord 設定
+        discordEnabled = config.getBoolean("discord.enabled", false);
+        discordWebhookUrl = config.getString("discord.webhook-url", "");
+        discordMinAmount = config.getDouble("discord.min-amount", 10000.0);
     }
 
     // ==================== 資料庫設定 ====================
@@ -245,6 +255,35 @@ public class ConfigManager {
      */
     public double getStartBalance() {
         return startBalance;
+    }
+
+    // ==================== Discord 設定 ====================
+
+    /**
+     * 檢查 Discord Webhook 是否啟用。
+     *
+     * @return 是否啟用
+     */
+    public boolean isDiscordEnabled() {
+        return discordEnabled;
+    }
+
+    /**
+     * 取得 Discord Webhook URL。
+     *
+     * @return Webhook URL
+     */
+    public String getDiscordWebhookUrl() {
+        return discordWebhookUrl;
+    }
+
+    /**
+     * 取得 Discord 記錄最低金額門檻。
+     *
+     * @return 最低金額
+     */
+    public double getDiscordMinAmount() {
+        return discordMinAmount;
     }
 
     // ==================== 訊息系統 ====================

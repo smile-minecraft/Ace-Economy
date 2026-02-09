@@ -9,8 +9,10 @@ import com.smile.aceeconomy.data.Account;
 import com.smile.aceeconomy.hook.AceEcoExpansion;
 import com.smile.aceeconomy.hook.VaultImpl;
 import com.smile.aceeconomy.listeners.BanknoteListener;
+import com.smile.aceeconomy.listeners.EconomyLogListener;
 import com.smile.aceeconomy.manager.ConfigManager;
 import com.smile.aceeconomy.manager.CurrencyManager;
+import com.smile.aceeconomy.service.DiscordWebhook;
 import com.smile.aceeconomy.storage.DatabaseConnection;
 import com.smile.aceeconomy.storage.JsonStorageHandler;
 import com.smile.aceeconomy.storage.StorageHandler;
@@ -45,6 +47,7 @@ public final class AceEconomy extends JavaPlugin implements Listener {
     private StorageHandler storageHandler;
     private CurrencyManager currencyManager;
     private EconomyProvider economyProvider;
+    private DiscordWebhook discordWebhook;
 
     /**
      * 取得插件實例。
@@ -73,6 +76,9 @@ public final class AceEconomy extends JavaPlugin implements Listener {
         // 初始化經濟服務提供者
         economyProvider = new EconomyProvider(this);
 
+        // 初始化 Discord Webhook
+        discordWebhook = new DiscordWebhook(this);
+
         // 註冊 Native API 至 ServiceManager
         Bukkit.getServicesManager().register(
                 EconomyProvider.class,
@@ -93,6 +99,7 @@ public final class AceEconomy extends JavaPlugin implements Listener {
         // 註冊事件監聽器
         Bukkit.getPluginManager().registerEvents(this, this);
         Bukkit.getPluginManager().registerEvents(new BanknoteListener(this), this);
+        Bukkit.getPluginManager().registerEvents(new EconomyLogListener(this, discordWebhook), this);
 
         getLogger().info("AceEconomy 已啟用！");
     }

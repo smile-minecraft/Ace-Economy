@@ -2,6 +2,7 @@ package com.smile.aceeconomy.commands;
 
 import com.smile.aceeconomy.AceEconomy;
 import com.smile.aceeconomy.api.EconomyProvider;
+import com.smile.aceeconomy.event.EconomyTransactionEvent;
 import com.smile.aceeconomy.migration.CMIMigrator;
 import com.smile.aceeconomy.migration.EssentialsMigrator;
 import com.smile.aceeconomy.migration.Migrator;
@@ -124,6 +125,10 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
                                 "player", targetPlayer.getName());
                         MessageUtils.sendSuccess(targetPlayer,
                                 "管理員給予你 " + MessageUtils.formatMoney(finalAmount));
+
+                        // 觸發交易事件
+                        fireTransactionEvent(sender, targetPlayer, finalAmount,
+                                EconomyTransactionEvent.TransactionType.GIVE);
                     } else {
                         MessageUtils.sendError(sender, "操作失敗！");
                     }
@@ -142,6 +147,10 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
                                 "player", targetPlayer.getName());
                         MessageUtils.sendSuccess(targetPlayer,
                                 "管理員扣除了你 " + MessageUtils.formatMoney(finalAmount));
+
+                        // 觸發交易事件
+                        fireTransactionEvent(sender, targetPlayer, finalAmount,
+                                EconomyTransactionEvent.TransactionType.TAKE);
                     } else {
                         MessageUtils.sendError(sender, "操作失敗！可能餘額不足。");
                     }
@@ -160,6 +169,10 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
                                 "player", targetPlayer.getName());
                         MessageUtils.sendSuccess(targetPlayer,
                                 "管理員將你的餘額設為 " + MessageUtils.formatMoney(finalAmount));
+
+                        // 觸發交易事件
+                        fireTransactionEvent(sender, targetPlayer, finalAmount,
+                                EconomyTransactionEvent.TransactionType.SET);
                     } else {
                         MessageUtils.sendError(sender, "操作失敗！");
                     }
@@ -309,5 +322,27 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
         }
 
         return List.of();
+    }
+
+    /**
+     * 觸發經濟交易事件。
+     *
+     * @param sender 交易發起者
+     * @param target 交易目標
+     * @param amount 交易金額
+     * @param type   交易類型
+     */
+    private void fireTransactionEvent(CommandSender sender, Player target, double amount,
+            EconomyTransactionEvent.TransactionType type) {
+        java.util.UUID senderUuid = null;
+        if (sender instanceof Player player) {
+            senderUuid = player.getUniqueId();
+        }
+
+        EconomyTransactionEvent event = new EconomyTransactionEvent(
+                senderUuid, sender.getName(),
+                target.getUniqueId(), target.getName(),
+                amount, type);
+        Bukkit.getPluginManager().callEvent(event);
     }
 }

@@ -2,6 +2,7 @@ package com.smile.aceeconomy.commands;
 
 import com.smile.aceeconomy.AceEconomy;
 import com.smile.aceeconomy.api.EconomyProvider;
+import com.smile.aceeconomy.event.EconomyTransactionEvent;
 import com.smile.aceeconomy.utils.MessageUtils;
 import org.bukkit.Bukkit;
 import org.bukkit.command.Command;
@@ -108,6 +109,13 @@ public class PayCommand implements CommandExecutor, TabCompleter {
                         MessageUtils.sendSuccess(targetPlayer,
                                 "收到來自 <aqua><player></aqua> 的轉帳：" + MessageUtils.formatMoney(finalAmount),
                                 "player", player.getName());
+
+                        // 觸發交易事件（非同步事件）
+                        EconomyTransactionEvent event = new EconomyTransactionEvent(
+                                player.getUniqueId(), player.getName(),
+                                targetPlayer.getUniqueId(), targetPlayer.getName(),
+                                finalAmount, EconomyTransactionEvent.TransactionType.PAY);
+                        Bukkit.getPluginManager().callEvent(event);
                     } else {
                         MessageUtils.sendError(player, "轉帳失敗！可能餘額不足或交易被取消。");
                     }
