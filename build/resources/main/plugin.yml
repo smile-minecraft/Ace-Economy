@@ -21,6 +21,9 @@ commands:
   aceeco:
     description: AceEconomy 管理指令
     usage: /<command> <give|take|set> <玩家> <金額>
+  withdraw:
+    description: 提領銀行支票
+    usage: /<command> <金額>
 
 permissions:
   aceeconomy.use:
@@ -28,6 +31,9 @@ permissions:
     default: true
   aceeconomy.pay:
     description: 允許使用轉帳指令
+    default: true
+  aceeconomy.withdraw:
+    description: 允許使用提領支票指令
     default: true
   aceeconomy.admin:
     description: 允許使用管理指令

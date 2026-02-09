@@ -1,2 +1,2 @@
 Command: /Users/smile/Library/Java/JavaVirtualMachines/corretto-21.0.7/Contents/Home/bin/java -Xmx1G -classpath /Users/smile/.gradle/caches/modules-2/files-2.1/net.fabricmc/tiny-remapper/0.10.4/d78e8e115ba5ac99421ce2d5e84e88b91a5f08b7/tiny-remapper-0.10.4-fat.jar net.fabricmc.tinyremapper.Main /Volumes/Smile-Data/MainData/Project-Nest/Ace-Economy/build/libs/AceEconomy-1.0.0.jar /Volumes/Smile-Data/MainData/Project-Nest/Ace-Economy/build/libs/AceEconomy-1.0.0-reobf.jar /Volumes/Smile-Data/MainData/Project-Nest/Ace-Economy/.gradle/caches/paperweight/taskCache/reobfMappings.tiny mojang spigot /Volumes/Smile-Data/MainData/Project-Nest/Ace-Economy/.gradle/caches/paperweight/taskCache/mappedServerJar.jar --threads=1
-Finished after 859.22 ms.
+Finished after 850.44 ms.

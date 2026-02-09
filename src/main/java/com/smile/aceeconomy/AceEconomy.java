@@ -4,8 +4,11 @@ import com.smile.aceeconomy.api.EconomyProvider;
 import com.smile.aceeconomy.commands.AdminCommand;
 import com.smile.aceeconomy.commands.BalanceCommand;
 import com.smile.aceeconomy.commands.PayCommand;
+import com.smile.aceeconomy.commands.WithdrawCommand;
 import com.smile.aceeconomy.data.Account;
+import com.smile.aceeconomy.hook.AceEcoExpansion;
 import com.smile.aceeconomy.hook.VaultImpl;
+import com.smile.aceeconomy.listeners.BanknoteListener;
 import com.smile.aceeconomy.manager.CurrencyManager;
 import com.smile.aceeconomy.storage.JsonStorageHandler;
 import com.smile.aceeconomy.storage.StorageHandler;
@@ -76,11 +79,15 @@ public final class AceEconomy extends JavaPlugin implements Listener {
         // 嘗試掛鉤 Vault
         setupVault();
 
+        // 嘗試掛鉤 PlaceholderAPI
+        setupPlaceholderAPI();
+
         // 註冊指令
         registerCommands();
 
         // 註冊事件監聽器
         Bukkit.getPluginManager().registerEvents(this, this);
+        Bukkit.getPluginManager().registerEvents(new BanknoteListener(this), this);
 
         getLogger().info("AceEconomy 已啟用！");
     }
@@ -113,6 +120,14 @@ public final class AceEconomy extends JavaPlugin implements Listener {
             aceEcoCmd.setTabCompleter(adminCommand);
         }
 
+        // /withdraw
+        WithdrawCommand withdrawCommand = new WithdrawCommand(this);
+        PluginCommand withdrawCmd = getCommand("withdraw");
+        if (withdrawCmd != null) {
+            withdrawCmd.setExecutor(withdrawCommand);
+            withdrawCmd.setTabCompleter(withdrawCommand);
+        }
+
         getLogger().info("已註冊所有指令");
     }
 
@@ -138,6 +153,23 @@ public final class AceEconomy extends JavaPlugin implements Listener {
 
         // 使用 ANSI 綠色輸出成功訊息
         getLogger().info("\u001B[32m[AceEconomy] Vault 掛鉤成功！\u001B[0m");
+    }
+
+    /**
+     * 設定 PlaceholderAPI 整合。
+     * <p>
+     * 若 PlaceholderAPI 插件已載入，註冊佔位符擴展。
+     * </p>
+     */
+    private void setupPlaceholderAPI() {
+        if (Bukkit.getPluginManager().getPlugin("PlaceholderAPI") == null) {
+            getLogger().info("未偵測到 PlaceholderAPI，跳過佔位符整合");
+            return;
+        }
+
+        // 註冊擴展
+        new AceEcoExpansion(this).register();
+        getLogger().info("\u001B[32m[AceEconomy] PlaceholderAPI 掛鉤成功！\u001B[0m");
     }
 
     @Override
