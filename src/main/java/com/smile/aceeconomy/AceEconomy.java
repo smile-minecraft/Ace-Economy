@@ -78,6 +78,7 @@ public final class AceEconomy extends JavaPlugin implements Listener {
         com.smile.aceeconomy.manager.LogManager logManager = new com.smile.aceeconomy.manager.LogManager(this,
                 databaseConnection, currencyManager);
         currencyManager.setLogManager(logManager);
+        currencyManager.setConfigManager(configManager); // 關鍵：連結貨幣設定
 
         // 初始化排行榜管理器 (僅當使用 SQL 時)
         if (databaseConnection != null && databaseConnection.isHealthy()) {
