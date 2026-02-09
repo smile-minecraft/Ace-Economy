@@ -55,6 +55,11 @@ tasks {
         options.release.set(21)
     }
 
+    javadoc {
+        options.encoding = "UTF-8"
+        (options as StandardJavadocDocletOptions).addStringOption("Xdoclint:none", "-quiet")
+    }
+
     processResources {
         val props = mapOf(
             "name" to project.name,
