@@ -1,6 +1,7 @@
 plugins {
     java
     id("io.papermc.paperweight.userdev") version "2.0.0-beta.14"
+    id("com.gradleup.shadow") version "8.3.5"
     id("maven-publish")
 }
 
@@ -30,6 +31,12 @@ dependencies {
 
     // PlaceholderAPI (佔位符支援)
     compileOnly("me.clip:placeholderapi:2.11.6")
+
+    // HikariCP (資料庫連線池)
+    implementation("com.zaxxer:HikariCP:5.1.0")
+
+    // SLF4J (HikariCP 日誌)
+    implementation("org.slf4j:slf4j-simple:2.0.9")
 }
 
 tasks {
@@ -49,6 +56,29 @@ tasks {
         filesMatching("plugin.yml") {
             expand(props)
         }
+    }
+
+    // jar 任務加上 classifier 避免與 shadowJar 衝突
+    jar {
+        archiveClassifier.set("slim")
+    }
+
+    shadowJar {
+        archiveClassifier.set("")
+
+        // Relocate HikariCP 和 SLF4J 避免衝突
+        relocate("com.zaxxer.hikari", "com.smile.aceeconomy.libs.hikari")
+        relocate("org.slf4j", "com.smile.aceeconomy.libs.slf4j")
+
+        // 排除不需要的 metadata
+        exclude("META-INF/*.SF")
+        exclude("META-INF/*.DSA")
+        exclude("META-INF/*.RSA")
+    }
+
+    // 先執行 shadowJar，再進行 reobf
+    reobfJar {
+        inputJar.set(shadowJar.flatMap { it.archiveFile })
     }
 
     assemble {

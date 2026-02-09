@@ -11,8 +11,10 @@ import com.smile.aceeconomy.hook.VaultImpl;
 import com.smile.aceeconomy.listeners.BanknoteListener;
 import com.smile.aceeconomy.manager.ConfigManager;
 import com.smile.aceeconomy.manager.CurrencyManager;
+import com.smile.aceeconomy.storage.DatabaseConnection;
 import com.smile.aceeconomy.storage.JsonStorageHandler;
 import com.smile.aceeconomy.storage.StorageHandler;
+import com.smile.aceeconomy.storage.implementation.SQLStorageHandler;
 import net.milkbowl.vault.economy.Economy;
 import org.bukkit.Bukkit;
 import org.bukkit.command.PluginCommand;
@@ -39,6 +41,7 @@ public final class AceEconomy extends JavaPlugin implements Listener {
     private static AceEconomy instance;
 
     private ConfigManager configManager;
+    private DatabaseConnection databaseConnection;
     private StorageHandler storageHandler;
     private CurrencyManager currencyManager;
     private EconomyProvider economyProvider;
@@ -60,9 +63,8 @@ public final class AceEconomy extends JavaPlugin implements Listener {
         configManager = new ConfigManager(this);
         configManager.load();
 
-        // 初始化儲存處理器
-        storageHandler = new JsonStorageHandler(getDataFolder().toPath(), getLogger());
-        storageHandler.initialize();
+        // 初始化儲存處理器（根據設定選擇）
+        initializeStorage();
 
         // 初始化貨幣管理器（預設餘額從設定檔讀取）
         double startBalance = configManager.getStartBalance();
@@ -88,11 +90,40 @@ public final class AceEconomy extends JavaPlugin implements Listener {
         // 註冊指令
         registerCommands();
 
-        // 註冊事件監聯器
+        // 註冊事件監聽器
         Bukkit.getPluginManager().registerEvents(this, this);
         Bukkit.getPluginManager().registerEvents(new BanknoteListener(this), this);
 
         getLogger().info("AceEconomy 已啟用！");
+    }
+
+    /**
+     * 初始化儲存處理器。
+     * <p>
+     * 根據設定檔選擇 JSON 或 SQL 儲存。
+     * </p>
+     */
+    private void initializeStorage() {
+        String storageType = configManager.getDatabaseType();
+
+        if ("mysql".equalsIgnoreCase(storageType) || "sqlite".equalsIgnoreCase(storageType)) {
+            // SQL 儲存
+            databaseConnection = new DatabaseConnection(this);
+            if (databaseConnection.initialize()) {
+                storageHandler = new SQLStorageHandler(this, databaseConnection);
+                storageHandler.initialize();
+                getLogger().info("使用 " + storageType.toUpperCase() + " 儲存");
+            } else {
+                getLogger().severe("SQL 連線失敗，回退至 JSON 儲存");
+                storageHandler = new JsonStorageHandler(getDataFolder().toPath(), getLogger());
+                storageHandler.initialize();
+            }
+        } else {
+            // JSON 儲存（預設）
+            storageHandler = new JsonStorageHandler(getDataFolder().toPath(), getLogger());
+            storageHandler.initialize();
+            getLogger().info("使用 JSON 儲存");
+        }
     }
 
     /**
@@ -183,6 +214,11 @@ public final class AceEconomy extends JavaPlugin implements Listener {
         // 關閉儲存處理器
         if (storageHandler != null) {
             storageHandler.shutdown();
+        }
+
+        // 關閉資料庫連線池
+        if (databaseConnection != null) {
+            databaseConnection.shutdown();
         }
 
         getLogger().info("AceEconomy 已停用！");
