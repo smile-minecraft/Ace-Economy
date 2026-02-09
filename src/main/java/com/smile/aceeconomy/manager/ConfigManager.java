@@ -284,9 +284,11 @@ public class ConfigManager {
 
     /**
      * 載入貨幣設定。
+     * 自動偵測舊版設定並遷移至新格式。
      */
     private void loadCurrencies() {
         currencies.clear();
+        defaultCurrency = null;
 
         // 檢查是否有新的 currencies 區塊
         if (config.isConfigurationSection("currencies")) {
@@ -306,21 +308,50 @@ public class ConfigManager {
             }
         }
 
-        // 若沒有設定或未找到預設貨幣，建立預設值 (相容舊版 config)
-        if (defaultCurrency == null) {
-            String symbol = config.getString("currency.symbol", "$");
-            String format = config.getString("currency.format", "#,##0.00");
+        // === 自動遷移邏輯 ===
+        // 若 currencies 為空（舊版 config 或損壞的設定），進行遷移
+        if (currencies.isEmpty()) {
+            plugin.getLogger().info("[AceEconomy] Detecting legacy config. Migrating to Multi-Currency format...");
 
-            // 嘗試保留舊版設定
-            defaultCurrency = new Currency("dollar", "金幣", symbol, format, true);
+            // 讀取舊版設定
+            String oldSymbol = config.getString("currency.symbol", "$");
+            String oldFormat = config.getString("currency.format", "#,##0.00");
+
+            // 設定新值
+            config.set("currencies.dollar.name", "金幣");
+            config.set("currencies.dollar.symbol", oldSymbol);
+            config.set("currencies.dollar.format", oldFormat);
+            config.set("currencies.dollar.default", true);
+
+            // 移除舊設定
+            config.set("currency", null);
+
+            // 更新版本號
+            config.set("config-version", "1.2");
+
+            // 儲存至磁碟 (關鍵步驟)
+            plugin.saveConfig();
+            plugin.getLogger().info("[AceEconomy] Config migration complete! Saved new format to config.yml.");
+
+            // 建立貨幣物件
+            defaultCurrency = new Currency("dollar", "金幣", oldSymbol, oldFormat, true);
             currencies.put("dollar", defaultCurrency);
-
-            plugin.getLogger().warning("未找到預設貨幣設定，已使用 fallback 配置 (dollar)。");
         }
 
-        // 初始化舊版 formatter (用於相容)
-        // moneyFormatter = new DecimalFormat(defaultCurrency.symbol() +
-        // defaultCurrency.format());
+        // === 安全檢查 ===
+        // 若沒有設定預設貨幣，強制使用第一個可用的貨幣或建立 fallback
+        if (defaultCurrency == null) {
+            if (!currencies.isEmpty()) {
+                // 使用第一個貨幣作為預設
+                defaultCurrency = currencies.values().iterator().next();
+                plugin.getLogger().warning("未找到標記為 default 的貨幣，使用 '" + defaultCurrency.id() + "' 作為預設貨幣。");
+            } else {
+                // 完全沒有貨幣設定，建立 hardcoded fallback
+                plugin.getLogger().severe("無法載入任何貨幣設定！使用 hardcoded fallback (dollar)。");
+                defaultCurrency = new Currency("dollar", "金幣", "$", "#,##0.00", true);
+                currencies.put("dollar", defaultCurrency);
+            }
+        }
     }
 
     /**
