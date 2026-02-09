@@ -72,12 +72,14 @@ tasks {
         archiveClassifier.set("slim")
     }
 
+    // Customize shadowJar
     shadowJar {
-        archiveClassifier.set("")
-
-        // Relocate HikariCP 和 SLF4J 避免衝突
+        // 1. Relocate packages to avoid conflicts
         relocate("com.zaxxer.hikari", "com.smile.aceeconomy.libs.hikari")
         relocate("org.slf4j", "com.smile.aceeconomy.libs.slf4j")
+
+        // 2. IMPORTANT: Remove the "-all" classifier so this JAR replaces the default one
+        archiveClassifier.set("")
 
         // 排除不需要的 metadata
         exclude("META-INF/*.SF")
@@ -85,13 +87,9 @@ tasks {
         exclude("META-INF/*.RSA")
     }
 
-    // 先執行 shadowJar，再進行 reobf
-    reobfJar {
-        inputJar.set(shadowJar.flatMap { it.archiveFile })
-    }
-
+    // Disable Default Jar or make it depend on shadowJar
     assemble {
-        dependsOn(reobfJar)
+        dependsOn(shadowJar)
     }
 }
 
