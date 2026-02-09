@@ -271,11 +271,20 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
      * @param sender 接收者
      */
     private void sendHelp(CommandSender sender) {
-        MessageUtils.send(sender, "<yellow>--- AceEconomy 管理指令 ---</yellow>");
-        MessageUtils.send(sender, "<white>/aceeco give <玩家> <金額></white> - 給予玩家金錢");
-        MessageUtils.send(sender, "<white>/aceeco take <玩家> <金額></white> - 扣除玩家金錢");
-        MessageUtils.send(sender, "<white>/aceeco set <玩家> <金額></white> - 設定玩家餘額");
-        MessageUtils.send(sender, "<white>/aceeco import <essentials|cmi></white> - 匯入資料");
+        MessageUtils.send(sender, "<yellow>--- AceEconomy 指令幫助 ---</yellow>");
+        MessageUtils.send(sender, "<white>/money [玩家]</white> <gray>- 查看帳戶餘額</gray>");
+        MessageUtils.send(sender, "<white>/withdraw <金額></white> <gray>- 將餘額提款為支票</gray>");
+        MessageUtils.send(sender, "<white>/pay <玩家> <金額></white> <gray>- 轉帳給其他玩家</gray>");
+
+        if (sender.hasPermission("aceeconomy.admin")) {
+            MessageUtils.send(sender, "<yellow>--- 管理員指令 ---</yellow>");
+            MessageUtils.send(sender, "<white>/aceeco give <玩家> <金額></white> <gray>- 給予玩家金錢</gray>");
+            MessageUtils.send(sender, "<white>/aceeco take <玩家> <金額></white> <gray>- 扣除玩家金錢</gray>");
+            MessageUtils.send(sender, "<white>/aceeco set <玩家> <金額></white> <gray>- 設定玩家餘額</gray>");
+            MessageUtils.send(sender, "<white>/aceeco import <essentials|cmi></white> <gray>- 匯入資料</gray>");
+        }
+
+        MessageUtils.send(sender, "<white>/aceeco help</white> <gray>- 顯示此幫助訊息</gray>");
     }
 
     @Override

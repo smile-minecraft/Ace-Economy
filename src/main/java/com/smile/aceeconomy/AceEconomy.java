@@ -161,6 +161,13 @@ public final class AceEconomy extends JavaPlugin implements Listener {
             aceEcoCmd.setTabCompleter(adminCommand);
         }
 
+        // 註冊自定義主指令別名
+        String customAlias = configManager.getMainCommandAlias();
+        if (!"aceeco".equalsIgnoreCase(customAlias)) {
+            new com.smile.aceeconomy.utils.CommandRegistrar(this)
+                    .registerCustomAlias(customAlias, adminCommand, adminCommand);
+        }
+
         // /withdraw
         WithdrawCommand withdrawCommand = new WithdrawCommand(this);
         PluginCommand withdrawCmd = getCommand("withdraw");

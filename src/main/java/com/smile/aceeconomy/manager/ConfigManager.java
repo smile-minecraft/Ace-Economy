@@ -47,6 +47,7 @@ public class ConfigManager {
 
     private double startBalance;
     private String prefix;
+    private String mainCommandAlias;
 
     // Discord 設定
     private boolean discordEnabled;
@@ -146,6 +147,9 @@ public class ConfigManager {
 
         // 訊息前綴
         prefix = messages.getString("prefix", "<gold>[AceEconomy]</gold> <gray>");
+
+        // 主指令別名
+        mainCommandAlias = config.getString("settings.main-command-alias", "aceeco");
 
         // Discord 設定
         discordEnabled = config.getBoolean("discord.enabled", false);
@@ -284,6 +288,17 @@ public class ConfigManager {
      */
     public double getDiscordMinAmount() {
         return discordMinAmount;
+    }
+
+    // ==================== 一般設定 ====================
+
+    /**
+     * 取得主指令別名。
+     *
+     * @return 主指令別名
+     */
+    public String getMainCommandAlias() {
+        return mainCommandAlias;
     }
 
     // ==================== 訊息系統 ====================

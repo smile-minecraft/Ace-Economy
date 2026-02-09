@@ -15,6 +15,12 @@ storage:
     username: root
     password: password
 
+# 一般設定
+settings:
+  # 主指令別名 (預設: aceeco)
+  # 若設定為 "bank"，則可以使用 /bank 來執行 /aceeco 指令
+  main-command-alias: "aceeco"
+
 # 貨幣設定
 currency:
   # 貨幣符號
