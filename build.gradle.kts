@@ -37,6 +37,15 @@ dependencies {
 
     // SLF4J (HikariCP 日誌)
     implementation("org.slf4j:slf4j-simple:2.0.9")
+
+    // Testing
+    testImplementation("org.junit.jupiter:junit-jupiter:5.10.0")
+    testImplementation("org.mockito:mockito-core:5.11.0")
+    testImplementation("org.mockito:mockito-junit-jupiter:5.11.0")
+}
+
+tasks.test {
+    useJUnitPlatform()
 }
 
 tasks {
