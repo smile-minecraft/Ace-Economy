@@ -9,6 +9,7 @@ import com.smile.aceeconomy.data.Account;
 import com.smile.aceeconomy.hook.AceEcoExpansion;
 import com.smile.aceeconomy.hook.VaultImpl;
 import com.smile.aceeconomy.listeners.BanknoteListener;
+import com.smile.aceeconomy.manager.ConfigManager;
 import com.smile.aceeconomy.manager.CurrencyManager;
 import com.smile.aceeconomy.storage.JsonStorageHandler;
 import com.smile.aceeconomy.storage.StorageHandler;
@@ -37,6 +38,7 @@ public final class AceEconomy extends JavaPlugin implements Listener {
 
     private static AceEconomy instance;
 
+    private ConfigManager configManager;
     private StorageHandler storageHandler;
     private CurrencyManager currencyManager;
     private EconomyProvider economyProvider;
@@ -54,16 +56,17 @@ public final class AceEconomy extends JavaPlugin implements Listener {
     public void onEnable() {
         instance = this;
 
-        // 儲存預設設定檔
-        saveDefaultConfig();
+        // 初始化設定檔管理器
+        configManager = new ConfigManager(this);
+        configManager.load();
 
         // 初始化儲存處理器
         storageHandler = new JsonStorageHandler(getDataFolder().toPath(), getLogger());
         storageHandler.initialize();
 
-        // 初始化貨幣管理器（預設餘額從設定檔讀取，預設為 0）
-        double defaultBalance = getConfig().getDouble("default-balance", 0.0);
-        currencyManager = new CurrencyManager(storageHandler, getLogger(), defaultBalance);
+        // 初始化貨幣管理器（預設餘額從設定檔讀取）
+        double startBalance = configManager.getStartBalance();
+        currencyManager = new CurrencyManager(storageHandler, getLogger(), startBalance);
 
         // 初始化經濟服務提供者
         economyProvider = new EconomyProvider(this);
@@ -85,7 +88,7 @@ public final class AceEconomy extends JavaPlugin implements Listener {
         // 註冊指令
         registerCommands();
 
-        // 註冊事件監聽器
+        // 註冊事件監聯器
         Bukkit.getPluginManager().registerEvents(this, this);
         Bukkit.getPluginManager().registerEvents(new BanknoteListener(this), this);
 
@@ -284,5 +287,14 @@ public final class AceEconomy extends JavaPlugin implements Listener {
      */
     public EconomyProvider getEconomyProvider() {
         return economyProvider;
+    }
+
+    /**
+     * 取得設定檔管理器。
+     *
+     * @return 設定檔管理器實例
+     */
+    public ConfigManager getConfigManager() {
+        return configManager;
     }
 }

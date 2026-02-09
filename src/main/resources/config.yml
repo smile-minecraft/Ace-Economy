@@ -1,4 +1,26 @@
-# AceEconomy 預設設定檔
+# ============================================
+# AceEconomy 設定檔
+# ============================================
+
+# 資料儲存設定
+storage:
+  # 儲存類型: sqlite 或 mysql
+  type: sqlite
+
+  # MySQL 連線設定（僅當 type 為 mysql 時使用）
+  mysql:
+    host: localhost
+    port: 3306
+    database: aceeconomy
+    username: root
+    password: password
+
+# 貨幣設定
+currency:
+  # 貨幣符號
+  symbol: "$"
+  # 數字格式（Java DecimalFormat）
+  format: "#,##0.00"
 
 # 玩家新建帳戶時的預設餘額
-default-balance: 0.0
+start-balance: 1000.0
