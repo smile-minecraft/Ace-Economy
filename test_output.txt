@@ -1,0 +1,45 @@
+Downloading https://services.gradle.org/distributions/gradle-8.12-bin.zip
+.............10%.............20%.............30%.............40%.............50%.............60%.............70%.............80%.............90%.............100%
+
+Welcome to Gradle 8.12!
+
+Here are the highlights of this release:
+ - Enhanced error and warning reporting with the Problems API
+ - File-system watching support on Alpine Linux
+ - Build and test Swift 6 libraries and apps
+
+For more details see https://docs.gradle.org/8.12/release-notes.html
+
+Starting a Gradle Daemon (subsequent builds will be faster)
+
+> Task :paperweightUserdevSetup
+Executing vanillaServerDownloads...
+Finished vanillaServerDownloads in 2.922s
+Executing extractFromBundler...
+Finished extractFromBundler in 726ms
+Executing remapMinecraft...
+Finished remapMinecraft in 24.567s
+Executing setupMacheSources...
+Finished setupMacheSources in 1m 8s
+Executing applyPaperclipPatch...
+Finished applyPaperclipPatch in 4.898s
+Executing applyDevBundlePatches...
+Finished applyDevBundlePatches in 7.490s
+Completed setup in 1m 49s
+Copied artifacts to project cache in 170ms
+
+> Task :compileJava
+Note: /app/src/main/java/com/smile/aceeconomy/hook/VaultImpl.java uses or overrides a deprecated API.
+Note: Recompile with -Xlint:deprecation for details.
+
+> Task :processResources
+> Task :classes
+> Task :compileTestJava
+> Task :processTestResources NO-SOURCE
+> Task :testClasses
+> Task :test
+
+[Incubating] Problems report is available at: file:///app/build/reports/problems/problems-report.html
+
+BUILD SUCCESSFUL in 3m 25s
+5 actionable tasks: 5 executed

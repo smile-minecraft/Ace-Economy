@@ -27,9 +27,16 @@ dependencies {
 
     // PlaceholderAPI (佔位符支援)
     compileOnly("me.clip:placeholderapi:2.11.6")
+
+    testImplementation("org.junit.jupiter:junit-jupiter:5.10.0")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
 tasks {
+    test {
+        useJUnitPlatform()
+    }
+
     compileJava {
         options.encoding = "UTF-8"
         options.release.set(21)
