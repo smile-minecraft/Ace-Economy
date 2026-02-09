@@ -3,6 +3,9 @@
 # 使用 MiniMessage 格式
 # ============================================
 
+# 設定檔版本（請勿修改）
+config-version: 1.0
+
 # 前綴
 prefix: "<gold>[AceEconomy]</gold> <gray>"
 

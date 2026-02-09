@@ -73,14 +73,76 @@ public class ConfigManager {
         plugin.reloadConfig();
         this.config = plugin.getConfig();
 
+        // 檢查並更新 config.yml
+        checkAndUpdate("config.yml");
+        // 重新載入以確保取得最新值
+        plugin.reloadConfig();
+        this.config = plugin.getConfig();
+
         // 儲存並載入 messages.yml
         saveDefaultMessages();
+        loadMessages();
+
+        // 檢查並更新 messages.yml
+        checkAndUpdate("messages.yml");
+        // 重新載入以確保取得最新值
         loadMessages();
 
         // 快取設定值
         cacheConfigValues();
 
         plugin.getLogger().info("已載入設定檔");
+    }
+
+    /**
+     * 檢查並更新設定檔版本。
+     *
+     * @param filename 檔案名稱 (config.yml 或 messages.yml)
+     */
+    private void checkAndUpdate(String filename) {
+        try {
+            File file = new File(plugin.getDataFolder(), filename);
+            if (!file.exists()) {
+                return;
+            }
+
+            YamlConfiguration diskConfig = YamlConfiguration.loadConfiguration(file);
+
+            InputStream resourceStream = plugin.getResource(filename);
+            if (resourceStream == null) {
+                return;
+            }
+
+            YamlConfiguration resourceConfig = YamlConfiguration.loadConfiguration(
+                    new InputStreamReader(resourceStream, StandardCharsets.UTF_8));
+
+            double diskVersion = diskConfig.getDouble("config-version", 0.0);
+            double resourceVersion = resourceConfig.getDouble("config-version", 1.0);
+
+            if (diskVersion < resourceVersion) {
+                int addedKeys = 0;
+
+                // 遞迴檢查並加入缺少的鍵值
+                for (String key : resourceConfig.getKeys(true)) {
+                    if (!diskConfig.contains(key)) {
+                        diskConfig.set(key, resourceConfig.get(key));
+                        addedKeys++;
+                    }
+                }
+
+                // 更新版本號
+                diskConfig.set("config-version", resourceVersion);
+
+                if (addedKeys > 0 || diskVersion != resourceVersion) {
+                    diskConfig.save(file);
+                    plugin.getLogger()
+                            .info("已更新 " + filename + " 至版本 " + resourceVersion + " (新增 " + addedKeys + " 個設定)");
+                }
+            }
+        } catch (Exception e) {
+            plugin.getLogger().warning("更新設定檔 " + filename + " 時發生錯誤: " + e.getMessage());
+            e.printStackTrace();
+        }
     }
 
     /**
