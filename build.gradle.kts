@@ -1,6 +1,7 @@
 plugins {
     java
     id("io.papermc.paperweight.userdev") version "2.0.0-beta.14"
+    id("maven-publish")
 }
 
 group = "com.smile.aceeconomy"
@@ -9,6 +10,8 @@ description = "A Folia-compatible economy plugin"
 
 java {
     toolchain.languageVersion.set(JavaLanguageVersion.of(21))
+    withSourcesJar()
+    withJavadocJar()
 }
 
 repositories {
@@ -50,5 +53,17 @@ tasks {
 
     assemble {
         dependsOn(reobfJar)
+    }
+}
+
+publishing {
+    publications {
+        create<MavenPublication>("maven") {
+            groupId = "com.smile.aceeconomy"
+            artifactId = "AceEconomy"
+            version = project.version.toString()
+
+            from(components["java"])
+        }
     }
 }
