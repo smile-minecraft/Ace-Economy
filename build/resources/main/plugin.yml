@@ -1,0 +1,11 @@
+name: AceEconomy
+version: 1.0.0
+description: A Folia-compatible economy plugin
+main: com.smile.aceeconomy.AceEconomy
+author: Smile
+api-version: 1.21
+folia-supported: true
+depend:
+  - Vault
+softdepend:
+  - PlaceholderAPI

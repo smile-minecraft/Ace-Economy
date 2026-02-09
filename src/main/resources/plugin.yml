@@ -1,0 +1,11 @@
+name: ${name}
+version: ${version}
+description: ${description}
+main: com.smile.aceeconomy.AceEconomy
+author: Smile
+api-version: ${apiVersion}
+folia-supported: true
+depend:
+  - Vault
+softdepend:
+  - PlaceholderAPI
