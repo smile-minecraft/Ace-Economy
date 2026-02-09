@@ -109,6 +109,22 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
             return handleImport(sender, args);
         }
 
+        // 處理 reload 指令
+        if (action.equals("reload")) {
+            if (!sender.hasPermission("aceeconomy.command.reload")) {
+                MessageUtils.sendError(sender, "你沒有權限使用此指令！");
+                return true;
+            }
+
+            plugin.getConfigManager().reload();
+            MessageUtils.sendSuccess(sender, "設定檔已重新載入！");
+
+            // Console Log
+            String senderName = sender instanceof Player ? ((Player) sender).getName() : "Console";
+            plugin.getLogger().info("[AceEconomy] Configuration reloaded by " + senderName + ".");
+            return true;
+        }
+
         // 其他指令需要 3 個參數
         if (args.length < 3) {
             sendHelp(sender);
@@ -354,7 +370,10 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
 
         if (args.length == 1) {
             // 補全操作類型
-            List<String> actions = List.of("give", "take", "set", "import", "history", "rollback");
+            List<String> actions = new ArrayList<>(List.of("give", "take", "set", "import", "history", "rollback"));
+            if (sender.hasPermission("aceeconomy.command.reload")) {
+                actions.add("reload");
+            }
             String prefix = args[0].toLowerCase();
             return actions.stream()
                     .filter(a -> a.startsWith(prefix))

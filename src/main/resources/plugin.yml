@@ -45,3 +45,6 @@ permissions:
   aceeconomy.admin:
     description: 允許使用管理指令
     default: op
+  aceeconomy.command.reload:
+    description: 允許重載插件設定
+    default: op

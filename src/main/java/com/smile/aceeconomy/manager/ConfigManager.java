@@ -28,7 +28,6 @@ public class ConfigManager {
 
     private final AceEconomy plugin;
     private final MiniMessage miniMessage;
-
     private FileConfiguration config;
     private FileConfiguration messages;
     private File messagesFile;
@@ -352,6 +351,16 @@ public class ConfigManager {
                 currencies.put("dollar", defaultCurrency);
             }
         }
+
+        // === Debug Logging ===
+        plugin.getLogger().info("=== Multi-Currency System Loaded ===");
+        plugin.getLogger().info("Default Currency: " + (defaultCurrency != null ? defaultCurrency.id() : "NULL"));
+        for (Currency c : currencies.values()) {
+            String status = c.isDefault() ? " [DEFAULT]" : "";
+            plugin.getLogger().info(String.format(" - [%s] %s (%s)%s",
+                    c.id(), c.name(), c.symbol(), status));
+        }
+        plugin.getLogger().info("====================================");
     }
 
     /**
