@@ -1,2 +1,17 @@
-/.agent
+# --- Gradle (最重要，務必添加) ---
+.gradle/
+build/
+
+# --- IDE 設定 (IntelliJ / VS Code) ---
+.idea/
+*.iml
+.vscode/
+*.ipr
+*.iws
+
+# --- System (Mac/Windows) ---
 .DS_Store
+Thumbs.db
+
+# --- Antigravity Agent ---
+/.agent
