@@ -49,7 +49,19 @@ public class SchemaManager {
 
             // 2. 取得當前版本
             int currentVersion = getCurrentVersion(conn);
-            logger.info("當前資料庫版本: " + currentVersion);
+
+            // CRITICAL FIX: 檢查是否為舊版資料庫 (有表但無歷史記錄)
+            if (currentVersion == 0) {
+                if (tableExists(conn, "ace_economy")) {
+                    logger.info("檢測到舊版資料庫 (v1.0)，標記版本為 1...");
+                    recordMigration(conn, 1, "Legacy v1.0 detected");
+                    currentVersion = 1;
+                } else {
+                    logger.info("全新安裝，起始版本: 0");
+                }
+            }
+
+            logger.info("[AceEconomy] Current DB Version: " + currentVersion);
 
             // 3. 執行遷移
             if (currentVersion < 1) {
@@ -61,6 +73,8 @@ public class SchemaManager {
             if (currentVersion < 3) {
                 migrateV3(conn);
             }
+
+            logger.info("[AceEconomy] Database migration complete.");
 
         } catch (SQLException e) {
             logger.severe("資料庫遷移失敗: " + e.getMessage());
@@ -97,6 +111,12 @@ public class SchemaManager {
             }
         }
         return 0;
+    }
+
+    private boolean tableExists(Connection conn, String tableName) throws SQLException {
+        try (ResultSet rs = conn.getMetaData().getTables(null, null, tableName, null)) {
+            return rs.next();
+        }
     }
 
     private void recordMigration(Connection conn, int version, String description) throws SQLException {
@@ -222,49 +242,69 @@ public class SchemaManager {
     /**
      * V3: 新增 banknote_uuid 欄位 (支票防偽簽名)。
      */
+    /**
+     * V3: 新增 banknote_uuid 欄位 (支票防偽簽名)。
+     */
     private void migrateV3(Connection conn) throws SQLException {
-        logger.info("正在執行遷移 V3: 新增 banknote_uuid 欄位...");
+        logger.info("[AceEconomy] Applying Migration V3: Add banknote_uuid column...");
 
         String tableName = "ace_transaction_logs";
-        String sql = "ALTER TABLE " + tableName + " ADD COLUMN banknote_uuid VARCHAR(36) AFTER transaction_id";
-        // SQLite 和 MySQL 的 ALTER TABLE ADD COLUMN 語法基本兼容
 
-        boolean autoCommit = conn.getAutoCommit();
-        try {
-            if (isMySQL)
-                conn.setAutoCommit(false);
+        // 檢查欄位是否存在
+        boolean columnExists = false;
+        try (ResultSet rs = conn.getMetaData().getColumns(null, null, tableName, "banknote_uuid")) {
+            if (rs.next()) {
+                columnExists = true;
+            }
+        }
 
-            try (Statement stmt = conn.createStatement()) {
-                stmt.executeUpdate(sql);
+        if (columnExists) {
+            logger.info("欄位 banknote_uuid 已存在，跳過 ALTER TABLE。");
+        } else {
+            String sql = "ALTER TABLE " + tableName + " ADD COLUMN banknote_uuid VARCHAR(36)";
+            // MySQL 支援 AFTER，SQLite 不支援。為了相容，不指定位置 (預設最後)
+            // 如果是 MySQL，我們可以優化位置
+            if (isMySQL) {
+                sql += " AFTER transaction_id";
             }
 
-            // 建立索引
-            String indexSql = "CREATE INDEX idx_banknote_uuid ON " + tableName + " (banknote_uuid)";
-            // MySQL 語法略有不同，但 CREATE INDEX 兼容
-            // 若 MySQL: ALTER TABLE table ADD INDEX (col)
-            if (isMySQL) {
+            boolean autoCommit = conn.getAutoCommit();
+            try {
+                if (isMySQL)
+                    conn.setAutoCommit(false);
+
                 try (Statement stmt = conn.createStatement()) {
+                    stmt.executeUpdate(sql);
+                }
+
+                if (isMySQL)
+                    conn.commit();
+
+            } catch (SQLException e) {
+                if (isMySQL)
+                    conn.rollback();
+                throw e;
+            } finally {
+                conn.setAutoCommit(autoCommit);
+            }
+        }
+
+        // 建立索引 (個別處理，即使欄位已存在，索引可能丟失)
+        // 這裡簡單起見，嘗試建立索引。如果已存在，catch 異常或用 IF NOT EXISTS
+        try (Statement stmt = conn.createStatement()) {
+            if (isMySQL) {
+                // MySQL 比較麻煩，這裡假設沒有索引，如果報錯則忽略 (或查詢 meta)
+                try {
                     stmt.executeUpdate("ALTER TABLE " + tableName + " ADD INDEX idx_banknote_uuid (banknote_uuid)");
+                } catch (SQLException e) {
+                    // 忽略 Duplicate key name
                 }
             } else {
-                try (Statement stmt = conn.createStatement()) {
-                    stmt.executeUpdate(
-                            "CREATE INDEX IF NOT EXISTS idx_banknote_uuid ON " + tableName + " (banknote_uuid)");
-                }
+                stmt.executeUpdate("CREATE INDEX IF NOT EXISTS idx_banknote_uuid ON " + tableName + " (banknote_uuid)");
             }
-
-            recordMigration(conn, 3, "Add banknote_uuid column");
-
-            if (isMySQL)
-                conn.commit();
-            logger.info("遷移 V3 成功！");
-
-        } catch (SQLException e) {
-            if (isMySQL)
-                conn.rollback();
-            throw e;
-        } finally {
-            conn.setAutoCommit(autoCommit);
         }
+
+        recordMigration(conn, 3, "Add banknote_uuid column");
+        logger.info("遷移 V3 成功！");
     }
 }

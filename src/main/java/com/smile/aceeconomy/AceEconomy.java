@@ -130,6 +130,11 @@ public final class AceEconomy extends JavaPlugin implements Listener {
             // SQL 儲存
             databaseConnection = new DatabaseConnection(this);
             if (databaseConnection.initialize()) {
+                // 執行資料庫遷移
+                com.smile.aceeconomy.storage.SchemaManager schemaManager = new com.smile.aceeconomy.storage.SchemaManager(
+                        this, databaseConnection);
+                schemaManager.migrate();
+
                 storageHandler = new SQLStorageHandler(this, databaseConnection);
                 storageHandler.initialize();
                 getLogger().info("使用 " + storageType.toUpperCase() + " 儲存");
