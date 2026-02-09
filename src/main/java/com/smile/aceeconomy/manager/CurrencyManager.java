@@ -71,17 +71,49 @@ public class CurrencyManager {
     }
 
     /**
-     * 檢查貨幣 ID 是否存在。
+     * 檢查貨幣 ID 是否存在 (Case-Insensitive, Whitespace-Safe)。
      *
      * @param currencyId 貨幣 ID
      * @return 是否存在
      */
     public boolean currencyExists(String currencyId) {
-        if (configManager != null) {
-            // 使用 containsKey 而非 getCurrency，因為 getCurrency 會返回預設貨幣
-            return configManager.getCurrencies().containsKey(currencyId);
+        if (currencyId == null)
+            return false;
+        if (configManager == null)
+            return "dollar".equalsIgnoreCase(currencyId);
+
+        String target = currencyId.trim();
+        boolean exists = configManager.getCurrencies().keySet().stream()
+                .anyMatch(k -> k.equalsIgnoreCase(target));
+
+        // Panic Debugging (臨時)
+        if (!exists && target.equalsIgnoreCase("token")) {
+            logger.warning("[Debug] Checking for 'token' failed.");
+            logger.warning("[Debug] Available Keys: " + configManager.getCurrencies().keySet());
         }
-        return "dollar".equals(currencyId);
+
+        return exists;
+    }
+
+    /**
+     * 取得貨幣物件 (Case-Insensitive, Whitespace-Safe)。
+     *
+     * @param currencyId 貨幣 ID
+     * @return 貨幣物件，若找不到回傳預設貨幣
+     */
+    public com.smile.aceeconomy.data.Currency getCurrency(String currencyId) {
+        if (currencyId == null || configManager == null) {
+            return configManager != null ? configManager.getDefaultCurrency() : null;
+        }
+
+        String target = currencyId.trim();
+        // 尋找匹配的 key (忽略大小寫)
+        for (var entry : configManager.getCurrencies().entrySet()) {
+            if (entry.getKey().equalsIgnoreCase(target)) {
+                return entry.getValue();
+            }
+        }
+        return configManager.getDefaultCurrency();
     }
 
     /**
@@ -103,7 +135,7 @@ public class CurrencyManager {
      * @throws IllegalArgumentException 如果貨幣 ID 無效
      */
     private void validateCurrency(String currencyId) {
-        if (configManager != null && configManager.getCurrency(currencyId) == null) {
+        if (!currencyExists(currencyId)) {
             throw new IllegalArgumentException("無效的貨幣 ID: " + currencyId);
         }
     }
