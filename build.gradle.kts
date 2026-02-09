@@ -36,6 +36,7 @@ dependencies {
     implementation("com.zaxxer:HikariCP:5.1.0")
 
     // SLF4J (HikariCP 日誌 - 使用 NOP 禁止輸出)
+    implementation("org.slf4j:slf4j-api:2.0.9")
     implementation("org.slf4j:slf4j-nop:2.0.9")
 
     // Testing
@@ -78,8 +79,17 @@ tasks {
         relocate("com.zaxxer.hikari", "com.smile.aceeconomy.libs.hikari")
         relocate("org.slf4j", "com.smile.aceeconomy.libs.slf4j")
 
+        // 🔥 關鍵修正：必須合併 Service Files，否則 Relocate 後 SLF4J 2.x 會找不到 Provider
+        mergeServiceFiles()
+
         // 2. IMPORTANT: Remove the "-all" classifier so this JAR replaces the default one
         archiveClassifier.set("")
+
+        // 3. Minimize jar but exclude NOP from being removed
+        minimize {
+            exclude(dependency("org.slf4j:slf4j-nop"))
+            exclude(dependency("org.slf4j:slf4j-api"))
+        }
 
         // 排除不需要的 metadata
         exclude("META-INF/*.SF")
