@@ -1,6 +1,9 @@
 package com.smile.aceeconomy;
 
 import com.smile.aceeconomy.api.EconomyProvider;
+import com.smile.aceeconomy.commands.AdminCommand;
+import com.smile.aceeconomy.commands.BalanceCommand;
+import com.smile.aceeconomy.commands.PayCommand;
 import com.smile.aceeconomy.data.Account;
 import com.smile.aceeconomy.hook.VaultImpl;
 import com.smile.aceeconomy.manager.CurrencyManager;
@@ -8,6 +11,7 @@ import com.smile.aceeconomy.storage.JsonStorageHandler;
 import com.smile.aceeconomy.storage.StorageHandler;
 import net.milkbowl.vault.economy.Economy;
 import org.bukkit.Bukkit;
+import org.bukkit.command.PluginCommand;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
@@ -72,10 +76,44 @@ public final class AceEconomy extends JavaPlugin implements Listener {
         // 嘗試掛鉤 Vault
         setupVault();
 
+        // 註冊指令
+        registerCommands();
+
         // 註冊事件監聽器
         Bukkit.getPluginManager().registerEvents(this, this);
 
         getLogger().info("AceEconomy 已啟用！");
+    }
+
+    /**
+     * 註冊插件指令。
+     */
+    private void registerCommands() {
+        // /money, /balance, /bal
+        BalanceCommand balanceCommand = new BalanceCommand(this);
+        PluginCommand moneyCmd = getCommand("money");
+        if (moneyCmd != null) {
+            moneyCmd.setExecutor(balanceCommand);
+            moneyCmd.setTabCompleter(balanceCommand);
+        }
+
+        // /pay
+        PayCommand payCommand = new PayCommand(this);
+        PluginCommand payCmd = getCommand("pay");
+        if (payCmd != null) {
+            payCmd.setExecutor(payCommand);
+            payCmd.setTabCompleter(payCommand);
+        }
+
+        // /aceeco
+        AdminCommand adminCommand = new AdminCommand(this);
+        PluginCommand aceEcoCmd = getCommand("aceeco");
+        if (aceEcoCmd != null) {
+            aceEcoCmd.setExecutor(adminCommand);
+            aceEcoCmd.setTabCompleter(adminCommand);
+        }
+
+        getLogger().info("已註冊所有指令");
     }
 
     /**

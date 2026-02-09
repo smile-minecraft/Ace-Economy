@@ -9,3 +9,26 @@ depend:
   - Vault
 softdepend:
   - PlaceholderAPI
+
+commands:
+  money:
+    description: 查看自己的餘額
+    usage: /<command>
+    aliases: [balance, bal]
+  pay:
+    description: 轉帳給其他玩家
+    usage: /<command> <玩家> <金額>
+  aceeco:
+    description: AceEconomy 管理指令
+    usage: /<command> <give|take|set> <玩家> <金額>
+
+permissions:
+  aceeconomy.use:
+    description: 允許使用基本經濟指令
+    default: true
+  aceeconomy.pay:
+    description: 允許使用轉帳指令
+    default: true
+  aceeconomy.admin:
+    description: 允許使用管理指令
+    default: op
