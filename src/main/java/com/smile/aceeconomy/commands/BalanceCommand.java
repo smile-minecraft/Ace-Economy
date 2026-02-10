@@ -44,7 +44,7 @@ public class BalanceCommand implements CommandExecutor, TabCompleter {
             @NotNull String label, @NotNull String[] args) {
 
         // 權限檢查
-        if (!sender.hasPermission("aceeconomy.use")) {
+        if (!sender.hasPermission("aceeconomy.command.money")) {
             plugin.getMessageManager().send(sender, "general.no-permission");
             return true;
         }
@@ -64,6 +64,16 @@ public class BalanceCommand implements CommandExecutor, TabCompleter {
             plugin.getMessageManager().send(sender, "economy.balance-check-currency",
                     Placeholder.parsed("currency_name", currencyName),
                     Placeholder.parsed("balance", formattedBalance));
+
+            if (plugin.getConfigManager().isAllowNegativeBalance()
+                    && defaultCurrency.equals(currencyManager.getDefaultCurrencyId())) {
+                double debtLimit = currencyManager.getDebtLimit(player.getUniqueId());
+                if (debtLimit > 0) {
+                    String formattedLimit = plugin.getConfigManager().formatMoney(debtLimit, defaultCurrency);
+                    plugin.getMessageManager().send(sender, "economy.debt-status",
+                            Placeholder.parsed("limit", formattedLimit));
+                }
+            }
             return true;
         }
 
@@ -96,6 +106,16 @@ public class BalanceCommand implements CommandExecutor, TabCompleter {
                     Placeholder.parsed("player", targetPlayer.getName()),
                     Placeholder.parsed("currency_name", currencyName),
                     Placeholder.parsed("balance", formattedBalance));
+
+            if (plugin.getConfigManager().isAllowNegativeBalance()
+                    && finalCurrencyId.equals(currencyManager.getDefaultCurrencyId())) {
+                double debtLimit = currencyManager.getDebtLimit(targetPlayer.getUniqueId());
+                if (debtLimit > 0) {
+                    String formattedLimit = plugin.getConfigManager().formatMoney(debtLimit, finalCurrencyId);
+                    plugin.getMessageManager().send(sender, "economy.debt-status",
+                            Placeholder.parsed("limit", formattedLimit));
+                }
+            }
         } else {
             // 離線玩家 - 非同步查詢
             plugin.getUserCacheManager().getUUID(targetName).thenAccept(uuid -> {
@@ -116,6 +136,17 @@ public class BalanceCommand implements CommandExecutor, TabCompleter {
                                 Placeholder.parsed("player", targetName),
                                 Placeholder.parsed("currency_name", currencyName),
                                 Placeholder.parsed("balance", formattedBalance));
+
+                        if (plugin.getConfigManager().isAllowNegativeBalance()
+                                && finalCurrencyId.equals(currencyManager.getDefaultCurrencyId())) {
+                            double debtLimit = currencyManager.getDebtLimit(uuid);
+                            if (debtLimit > 0) {
+                                String formattedLimit = plugin.getConfigManager().formatMoney(debtLimit,
+                                        finalCurrencyId);
+                                plugin.getMessageManager().send(sender, "economy.debt-status",
+                                        Placeholder.parsed("limit", formattedLimit));
+                            }
+                        }
                     }
                 });
             });

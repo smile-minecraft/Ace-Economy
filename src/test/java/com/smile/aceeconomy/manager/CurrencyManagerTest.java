@@ -1,5 +1,6 @@
 package com.smile.aceeconomy.manager;
 
+import com.smile.aceeconomy.AceEconomy;
 import com.smile.aceeconomy.data.Currency;
 import com.smile.aceeconomy.storage.StorageHandler;
 import org.junit.jupiter.api.BeforeEach;
@@ -41,6 +42,12 @@ class CurrencyManagerTest {
     @Mock
     private ConfigManager configManager;
 
+    @Mock
+    private AceEconomy plugin;
+
+    @Mock
+    private com.smile.aceeconomy.manager.PermissionManager permissionManager;
+
     private CurrencyManager currencyManager;
     private UUID playerUuid;
 
@@ -50,7 +57,7 @@ class CurrencyManagerTest {
 
     @BeforeEach
     void setUp() {
-        currencyManager = new CurrencyManager(storageHandler, configManager);
+        currencyManager = new CurrencyManager(plugin, permissionManager, storageHandler, configManager);
         playerUuid = UUID.randomUUID();
 
         // 預設的 ConfigManager 行為
@@ -59,6 +66,10 @@ class CurrencyManagerTest {
                 "token", TOKEN));
         lenient().when(configManager.getDefaultCurrency()).thenReturn(DOLLAR);
         lenient().when(configManager.getStartBalance()).thenReturn(100.0);
+        lenient().when(configManager.isAllowNegativeBalance()).thenReturn(false); // 預設禁止負債
+
+        // Mock PermissionManager
+        lenient().when(permissionManager.getDebtLimit(any(org.bukkit.OfflinePlayer.class))).thenReturn(0.0);
 
         // Mock getCurrency behavior for specific keys (lowercase)
         lenient().when(configManager.getCurrency("dollar")).thenReturn(DOLLAR);
@@ -99,9 +110,10 @@ class CurrencyManagerTest {
         void testWithdrawFail() {
             currencyManager.createAccount(playerUuid, "TestPlayer");
 
-            boolean result = currencyManager.withdraw(playerUuid, 200.0);
+            assertThrows(com.smile.aceeconomy.exception.InsufficientFundsException.class, () -> {
+                currencyManager.withdraw(playerUuid, 200.0);
+            }, "餘額不足應該拋出例外");
 
-            assertFalse(result, "餘額不足應該提款失敗");
             assertEquals(100.0, currencyManager.getBalance(playerUuid), 0.001, "餘額應保持不變");
         }
 

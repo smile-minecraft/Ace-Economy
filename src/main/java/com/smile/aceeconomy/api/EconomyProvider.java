@@ -121,7 +121,19 @@ public class EconomyProvider {
      * @return 操作是否成功的 CompletableFuture
      */
     public CompletableFuture<Boolean> withdraw(UUID uuid, double amount) {
-        return withdraw(uuid, getDefaultCurrencyId(), amount);
+        return withdraw(uuid, getDefaultCurrencyId(), amount, null);
+    }
+
+    /**
+     * 從玩家帳戶提款 (預設貨幣，指定支票 UUID)。
+     *
+     * @param uuid         玩家 UUID
+     * @param amount       提款金額
+     * @param banknoteUuid 支票 UUID
+     * @return 操作是否成功的 CompletableFuture
+     */
+    public CompletableFuture<Boolean> withdraw(UUID uuid, double amount, UUID banknoteUuid) {
+        return withdraw(uuid, getDefaultCurrencyId(), amount, banknoteUuid);
     }
 
     /**
@@ -133,6 +145,19 @@ public class EconomyProvider {
      * @return 操作是否成功的 CompletableFuture
      */
     public CompletableFuture<Boolean> withdraw(UUID uuid, String currencyId, double amount) {
+        return withdraw(uuid, currencyId, amount, null);
+    }
+
+    /**
+     * 從玩家帳戶提款 (指定貨幣，指定支票 UUID)。
+     *
+     * @param uuid         玩家 UUID
+     * @param currencyId   貨幣 ID
+     * @param amount       提款金額
+     * @param banknoteUuid 支票 UUID (可為 null)
+     * @return 操作是否成功的 CompletableFuture
+     */
+    public CompletableFuture<Boolean> withdraw(UUID uuid, String currencyId, double amount, UUID banknoteUuid) {
         return CompletableFuture.supplyAsync(() -> {
             if (amount <= 0) {
                 return false;
@@ -142,9 +167,8 @@ public class EconomyProvider {
             }
 
             double currentBalance = currencyManager.getBalance(uuid, currencyId);
-            if (currentBalance < amount) {
-                return false;
-            }
+            // 移除手動檢查，交由 CurrencyManager 處理 (含債務系統)
+            // if (currentBalance < amount) { return false; }
 
             EconomyTransactionEvent event = new EconomyTransactionEvent(
                     uuid, amount, EconomyTransactionEvent.TransactionType.WITHDRAW, currentBalance);
@@ -154,7 +178,7 @@ public class EconomyProvider {
                 return false;
             }
 
-            return currencyManager.withdraw(uuid, currencyId, amount, null);
+            return currencyManager.withdraw(uuid, currencyId, amount, banknoteUuid);
         });
     }
 
@@ -232,9 +256,8 @@ public class EconomyProvider {
             double fromBalance = currencyManager.getBalance(from, currencyId);
             double toBalance = currencyManager.getBalance(to, currencyId);
 
-            if (fromBalance < amount) {
-                return false;
-            }
+            // 移除手動檢查，交由 CurrencyManager 處理
+            // if (fromBalance < amount) { return false; }
 
             EconomyTransactionEvent fromEvent = new EconomyTransactionEvent(
                     from, amount, EconomyTransactionEvent.TransactionType.TRANSFER_OUT, fromBalance);

@@ -1,7 +1,11 @@
 package com.smile.aceeconomy.manager;
 
+import com.smile.aceeconomy.AceEconomy;
 import com.smile.aceeconomy.data.Account;
 import com.smile.aceeconomy.storage.StorageHandler;
+import org.bukkit.Bukkit;
+import org.bukkit.OfflinePlayer;
+import org.bukkit.entity.Player;
 
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -31,15 +35,30 @@ public class CurrencyManager {
 
     private final StorageHandler storageHandler;
     private final ConfigManager configManager;
+    private final AceEconomy plugin;
     private LogManager logManager;
 
     /**
      * 建立貨幣管理器。
      *
+     * @param plugin         插件實例
      * @param storageHandler 儲存處理器
      * @param configManager  設定檔管理器
      */
-    public CurrencyManager(StorageHandler storageHandler, ConfigManager configManager) {
+    private final PermissionManager permissionManager;
+
+    /**
+     * 建立貨幣管理器。
+     *
+     * @param plugin            插件實例
+     * @param permissionManager 權限管理器
+     * @param storageHandler    儲存處理器
+     * @param configManager     設定檔管理器
+     */
+    public CurrencyManager(AceEconomy plugin, PermissionManager permissionManager, StorageHandler storageHandler,
+            ConfigManager configManager) {
+        this.plugin = plugin;
+        this.permissionManager = permissionManager;
         this.storageHandler = storageHandler;
         this.configManager = configManager;
     }
@@ -202,6 +221,29 @@ public class CurrencyManager {
     }
 
     /**
+     * 檢查餘額是否足夠 (考慮債務上限)。
+     *
+     * @param uuid       玩家 UUID
+     * @param currencyId 貨幣 ID
+     * @param amount     所需金額
+     * @return 是否足夠
+     */
+    public boolean hasEnough(UUID uuid, String currencyId, double amount) {
+        if (amount <= 0)
+            return true;
+
+        double balance = getBalance(uuid, currencyId);
+
+        // 若為預設貨幣且啟用負資產
+        if (configManager.isAllowNegativeBalance() && currencyId.equals(getDefaultCurrencyId())) {
+            double debtLimit = getDebtLimit(uuid);
+            return balance - amount >= -debtLimit;
+        }
+
+        return balance >= amount;
+    }
+
+    /**
      * 存款至玩家帳戶 (預設貨幣)。
      *
      * @param uuid   玩家 UUID
@@ -254,7 +296,7 @@ public class CurrencyManager {
      * 從玩家帳戶提款 (預設貨幣)。
      */
     public boolean withdraw(UUID uuid, double amount) {
-        return withdraw(uuid, getDefaultCurrencyId(), amount, null);
+        return withdraw(uuid, getDefaultCurrencyId(), amount, null, false);
     }
 
     /**
@@ -266,7 +308,19 @@ public class CurrencyManager {
      * @return 操作是否成功
      */
     public boolean withdraw(UUID uuid, double amount, UUID banknoteUuid) {
-        return withdraw(uuid, getDefaultCurrencyId(), amount, banknoteUuid);
+        return withdraw(uuid, getDefaultCurrencyId(), amount, banknoteUuid, false);
+    }
+
+    /**
+     * 從玩家帳戶提款 (預設貨幣，強制模式)。
+     *
+     * @param uuid   玩家 UUID
+     * @param amount 提款金額
+     * @param force  是否強制（忽略餘額檢查）
+     * @return 操作是否成功
+     */
+    public boolean withdraw(UUID uuid, double amount, boolean force) {
+        return withdraw(uuid, getDefaultCurrencyId(), amount, null, force);
     }
 
     /**
@@ -280,6 +334,32 @@ public class CurrencyManager {
      * @throws IllegalArgumentException 如果貨幣 ID 無效
      */
     public boolean withdraw(UUID uuid, String currencyId, double amount, UUID banknoteUuid) {
+        return withdraw(uuid, currencyId, amount, banknoteUuid, false);
+    }
+
+    /**
+     * 從玩家帳戶提款 (指定貨幣，完整參數)。
+     *
+     * @param uuid         玩家 UUID
+     * @param currencyId   貨幣 ID
+     * @param amount       提款金額
+     * @param banknoteUuid 支票 UUID (可為 null)
+     * @param force        是否強制（忽略餘額檢查）
+     * @return 操作是否成功
+     */
+    /**
+     * 從玩家帳戶提款 (指定貨幣，完整參數)。
+     *
+     * @param uuid         玩家 UUID
+     * @param currencyId   貨幣 ID
+     * @param amount       提款金額
+     * @param banknoteUuid 支票 UUID (可為 null)
+     * @param force        是否強制（忽略餘額檢查）
+     * @return 操作是否成功
+     * @throws IllegalArgumentException                                  如果貨幣 ID 無效
+     * @throws com.smile.aceeconomy.exception.InsufficientFundsException 如果餘額不足且非強制
+     */
+    public boolean withdraw(UUID uuid, String currencyId, double amount, UUID banknoteUuid, boolean force) {
         if (amount <= 0) {
             return false;
         }
@@ -294,9 +374,24 @@ public class CurrencyManager {
         lock.writeLock().lock();
         try {
             double currentBalance = account.getBalance(currencyId);
-            if (currentBalance < amount) {
-                return false;
+
+            // 檢查餘額 (若非強制)
+            if (!force) {
+                // 若為預設貨幣且啟用負資產，檢查債務上限
+                if (configManager.isAllowNegativeBalance() && currencyId.equals(getDefaultCurrencyId())) {
+                    double debtLimit = getDebtLimit(uuid);
+                    if (currentBalance - amount < -debtLimit) {
+                        throw new com.smile.aceeconomy.exception.InsufficientFundsException(
+                                "餘額不足！您的債務上限為: " + debtLimit);
+                    }
+                } else {
+                    // 一般檢查
+                    if (currentBalance < amount) {
+                        throw new com.smile.aceeconomy.exception.InsufficientFundsException("餘額不足！");
+                    }
+                }
             }
+
             account.setBalance(currencyId, currentBalance - amount);
 
             if (logManager != null) {
@@ -308,6 +403,26 @@ public class CurrencyManager {
         } finally {
             lock.writeLock().unlock();
         }
+    }
+
+    /**
+     * 取得玩家的債務上限。
+     *
+     * @param uuid 玩家 UUID
+     * @return 債務上限 (正數)
+     */
+    /**
+     * 取得玩家的債務上限。
+     *
+     * @param uuid 玩家 UUID
+     * @return 債務上限 (正數)
+     */
+    public double getDebtLimit(UUID uuid) {
+        if (!configManager.isAllowNegativeBalance()) {
+            return 0.0;
+        }
+        OfflinePlayer player = Bukkit.getOfflinePlayer(uuid);
+        return permissionManager.getDebtLimit(player);
     }
 
     /**

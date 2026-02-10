@@ -40,6 +40,7 @@ public class ConfigManager {
     private String mysqlPassword;
     private int poolSize;
     private long maxLifetime;
+    private boolean mysqlSsl;
 
     private final Map<String, Currency> currencies = new java.util.HashMap<>();
     private Currency defaultCurrency;
@@ -55,6 +56,10 @@ public class ConfigManager {
     private boolean discordLogTransaction;
     private boolean discordLogAdmin;
     private boolean discordLogServer;
+
+    // 經濟系統設定
+    private boolean allowNegativeBalance;
+    private double defaultDebtLimit;
 
     /**
      * 建立設定檔管理器。
@@ -248,6 +253,10 @@ public class ConfigManager {
         discordLogTransaction = config.getBoolean("discord.log-events.transaction", true);
         discordLogAdmin = config.getBoolean("discord.log-events.admin", true);
         discordLogServer = config.getBoolean("discord.log-events.server", true);
+
+        // 經濟系統設定
+        allowNegativeBalance = config.getBoolean("economy.allow-negative-balance", true);
+        defaultDebtLimit = config.getDouble("economy.default-debt-limit", 0.0);
     }
 
     // ==================== 資料庫設定 ====================
@@ -321,6 +330,10 @@ public class ConfigManager {
 
     public long getMaxLifetime() {
         return maxLifetime;
+    }
+
+    public boolean isSsl() {
+        return mysqlSsl;
     }
 
     /**
@@ -549,6 +562,26 @@ public class ConfigManager {
      */
     public boolean isDiscordLogServer() {
         return discordLogServer;
+    }
+
+    // ==================== 經濟系統設定 ====================
+
+    /**
+     * 是否允許負資產 (債務系統)。
+     *
+     * @return 是否允許負資產
+     */
+    public boolean isAllowNegativeBalance() {
+        return allowNegativeBalance;
+    }
+
+    /**
+     * 取得預設債務上限。
+     *
+     * @return 預設債務上限
+     */
+    public double getDefaultDebtLimit() {
+        return defaultDebtLimit;
     }
 
     // ==================== 一般設定 ====================

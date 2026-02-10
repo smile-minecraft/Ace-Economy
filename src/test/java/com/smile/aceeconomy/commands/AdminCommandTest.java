@@ -54,7 +54,10 @@ class AdminCommandTest extends TestBase {
         });
 
         // Real CurrencyManager
-        currencyManager = new CurrencyManager(storageHandler, configManager);
+        com.smile.aceeconomy.manager.PermissionManager permissionManager = mock(
+                com.smile.aceeconomy.manager.PermissionManager.class);
+        lenient().when(permissionManager.getDebtLimit(any(org.bukkit.OfflinePlayer.class))).thenReturn(0.0);
+        currencyManager = new CurrencyManager(plugin, permissionManager, storageHandler, configManager);
         lenient().when(plugin.getCurrencyManager()).thenReturn(currencyManager);
 
         // Mock Logger

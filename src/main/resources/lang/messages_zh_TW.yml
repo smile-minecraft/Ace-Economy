@@ -36,6 +36,8 @@ economy:
   cannot-pay-self: "<red>你不能轉帳給自己！</red>"
   insufficient-funds: "<red>餘額不足！</red>"
   insufficient-funds-currency: "<red>你的 <currency_name> 餘額不足 (需要: <amount>)！</red>"
+  insufficient-funds-debt: "<red>餘額不足！您的帳戶最多只能透支 <gold><limit></gold> (目前: <yellow><balance></yellow>)。<reset>"
+  debt-status: "<gray>(信用額度: <gold><limit></gold>)</gray>"
 
   withdraw-success: "<green>已提領支票：<yellow><amount></yellow></green>"
   withdraw-redeem: "<green>已兌換支票：<yellow><amount></yellow> <gray>(簽發人：<issuer>)</gray></green>"

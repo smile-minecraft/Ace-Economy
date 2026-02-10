@@ -56,10 +56,7 @@ public interface StorageProvider {
      * @param currency 貨幣 ID
      * @param limit    取前幾名
      * @return 玩家名稱 -> 餘額 的 Map (注意：這裡回傳名稱而非 UUID，方便顯示)
-     *         或是 UUID -> Double?
-     *         Prompt says: Map<String, Double> getTopAccounts(String currency, int
-     *         limit)
-     *         Usually we want Player Name for leaderboard.
+     *         return Map of PlayerName to Balance.
      */
     CompletableFuture<Map<String, Double>> getTopAccounts(String currency, int limit);
 
@@ -87,4 +84,19 @@ public interface StorageProvider {
      * @return 完成時的 Future
      */
     CompletableFuture<Void> updatePlayerName(UUID uuid, String name);
+
+    /**
+     * 導出所有資料庫資料 (用於遷移)。
+     *
+     * @return 完整資料 (包含所有 users 與 balances)
+     */
+    CompletableFuture<com.smile.aceeconomy.data.DataDump> dumpAllData();
+
+    /**
+     * 匯入資料 (用於遷移)。
+     *
+     * @param dump 資料轉儲物件
+     * @return 完成時的 Future
+     */
+    CompletableFuture<Void> importData(com.smile.aceeconomy.data.DataDump dump);
 }

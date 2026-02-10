@@ -151,13 +151,26 @@ public class VaultImpl implements Economy {
         }
 
         // 使用 EconomyProvider 進行操作（同步等待結果）
-        boolean success = economyProvider.withdraw(player.getUniqueId(), amount).join();
+        boolean success;
+        String errorMessage = "餘額不足或交易被取消";
+        try {
+            success = economyProvider.withdraw(player.getUniqueId(), amount).join();
+        } catch (Exception e) {
+            success = false;
+            // Unpack CompletionException
+            Throwable cause = e.getCause();
+            if (cause != null) {
+                errorMessage = cause.getMessage();
+            } else {
+                errorMessage = e.getMessage();
+            }
+        }
 
         double balance = currencyManager.getBalance(player.getUniqueId());
         if (success) {
             return new EconomyResponse(amount, balance, EconomyResponse.ResponseType.SUCCESS, null);
         } else {
-            return new EconomyResponse(0, balance, EconomyResponse.ResponseType.FAILURE, "餘額不足或交易被取消");
+            return new EconomyResponse(0, balance, EconomyResponse.ResponseType.FAILURE, errorMessage);
         }
     }
 

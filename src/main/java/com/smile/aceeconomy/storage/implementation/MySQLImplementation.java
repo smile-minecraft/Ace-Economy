@@ -312,4 +312,90 @@ public class MySQLImplementation implements StorageProvider {
             }
         });
     }
+
+    @Override
+    public CompletableFuture<com.smile.aceeconomy.data.DataDump> dumpAllData() {
+        return CompletableFuture.supplyAsync(() -> {
+            java.util.List<com.smile.aceeconomy.data.UserRecord> users = new java.util.ArrayList<>();
+            java.util.List<com.smile.aceeconomy.data.BalanceRecord> balances = new java.util.ArrayList<>();
+
+            try (Connection conn = dataSource.getConnection()) {
+                // Dump Users
+                try (java.sql.Statement stmt = conn.createStatement();
+                        ResultSet rs = stmt.executeQuery("SELECT uuid, username FROM " + TABLE_USERS)) {
+                    while (rs.next()) {
+                        users.add(new com.smile.aceeconomy.data.UserRecord(
+                                UUID.fromString(rs.getString("uuid")),
+                                rs.getString("username")));
+                    }
+                }
+
+                // Dump Balances
+                try (java.sql.Statement stmt = conn.createStatement();
+                        ResultSet rs = stmt.executeQuery("SELECT uuid, currency_id, balance FROM " + TABLE_BALANCES)) {
+                    while (rs.next()) {
+                        balances.add(new com.smile.aceeconomy.data.BalanceRecord(
+                                UUID.fromString(rs.getString("uuid")),
+                                rs.getString("currency_id"),
+                                rs.getDouble("balance")));
+                    }
+                }
+            } catch (SQLException e) {
+                logger.severe("資料導出失敗: " + e.getMessage());
+                throw new RuntimeException(e);
+            }
+            return new com.smile.aceeconomy.data.DataDump(users, balances);
+        });
+    }
+
+    @Override
+    public CompletableFuture<Void> importData(com.smile.aceeconomy.data.DataDump dump) {
+        return CompletableFuture.runAsync(() -> {
+            // MySQL uses REPLACE INTO for upset-like behavior (Delete then Insert)
+            // Or INSERT ... ON DUPLICATE KEY UPDATE.
+            // Using REPLACE INTO is simpler for migration.
+            String insertUser = "REPLACE INTO " + TABLE_USERS + " (uuid, username, last_seen) VALUES (?, ?, ?)";
+            String insertBalance = "REPLACE INTO " + TABLE_BALANCES
+                    + " (uuid, currency_id, balance, last_updated) VALUES (?, ?, ?, ?)";
+
+            try (Connection conn = dataSource.getConnection()) {
+                conn.setAutoCommit(false);
+
+                try (PreparedStatement pstmt = conn.prepareStatement(insertUser)) {
+                    for (com.smile.aceeconomy.data.UserRecord user : dump.users()) {
+                        pstmt.setString(1, user.uuid().toString());
+                        pstmt.setString(2, user.name());
+                        pstmt.setLong(3, System.currentTimeMillis());
+                        pstmt.addBatch();
+                    }
+                    pstmt.executeBatch();
+                }
+
+                try (PreparedStatement pstmt = conn.prepareStatement(insertBalance)) {
+                    for (com.smile.aceeconomy.data.BalanceRecord balance : dump.balances()) {
+                        pstmt.setString(1, balance.uuid().toString());
+                        pstmt.setString(2, balance.currency());
+                        pstmt.setDouble(3, balance.amount());
+                        pstmt.setLong(4, System.currentTimeMillis());
+                        pstmt.addBatch();
+                    }
+                    pstmt.executeBatch();
+                }
+
+                conn.commit();
+                conn.setAutoCommit(true);
+                logger.info("資料匯入成功: (" + dump.users().size() + " users, " + dump.balances().size() + " balances)");
+
+            } catch (SQLException e) {
+                logger.severe("資料匯入失敗: " + e.getMessage());
+                try (Connection conn = dataSource.getConnection()) {
+                    if (!conn.getAutoCommit())
+                        conn.rollback();
+                } catch (SQLException ex) {
+                    ex.printStackTrace();
+                }
+                throw new RuntimeException("Import failed", e);
+            }
+        });
+    }
 }

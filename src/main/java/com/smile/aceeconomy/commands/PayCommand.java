@@ -96,16 +96,8 @@ public class PayCommand implements CommandExecutor, TabCompleter {
             currencyId = inputCurrency;
         }
 
-        // 檢查餘額是否足夠 (Check Sender Balance)
-        // 這裡在主線程檢查一次，稍後在 transfer 裡會再檢查原子性
-        double currentBalance = plugin.getCurrencyManager().getBalance(player.getUniqueId(), currencyId);
-        if (currentBalance < amount) {
-            String currencyName = plugin.getConfigManager().getCurrency(currencyId).name();
-            plugin.getMessageManager().send(sender, "economy.insufficient-funds-currency",
-                    Placeholder.parsed("currency_name", currencyName),
-                    Placeholder.parsed("amount", String.valueOf(amount)));
-            return true;
-        }
+        // 檢查餘額 - 移除手動檢查，交由 CurrencyManager 拋出異常
+        // 這樣可以避免重複邏輯，並確保使用最新的權限和債務設定
 
         // 查找目標玩家 (優先使用在線玩家)
         Player onlineTarget = Bukkit.getPlayer(targetName);
@@ -150,17 +142,6 @@ public class PayCommand implements CommandExecutor, TabCompleter {
                 return;
             }
 
-            // 再次檢查餘額 (防止並發變動，雖然有點多餘但安全)
-            // 注意: 若 sender 在此期間下線，getBalance 依然可以從 cache 取到
-            double currentBalance = plugin.getCurrencyManager().getBalance(sender.getUniqueId(), currencyId);
-            if (currentBalance < amount) {
-                String currencyName = plugin.getConfigManager().getCurrency(currencyId).name();
-                plugin.getMessageManager().send(sender, "economy.insufficient-funds-currency",
-                        Placeholder.parsed("currency_name", currencyName),
-                        Placeholder.parsed("amount", String.valueOf(amount)));
-                return;
-            }
-
             // 執行轉帳
             String currencyName = plugin.getConfigManager().getCurrency(currencyId).name();
             plugin.getEconomyProvider().transfer(sender.getUniqueId(), targetUuid, currencyId, amount)
@@ -194,6 +175,20 @@ public class PayCommand implements CommandExecutor, TabCompleter {
                         } else {
                             plugin.getMessageManager().send(sender, "general.transaction-failed");
                         }
+                    }).exceptionally(ex -> {
+                        Throwable cause = ex.getCause();
+                        if (cause instanceof com.smile.aceeconomy.exception.InsufficientFundsException) {
+                            // 顯示具體錯誤訊息
+                            // 顯示具體錯誤訊息
+                            sender.sendMessage(net.kyori.adventure.text.Component.text("交易失敗: ",
+                                    net.kyori.adventure.text.format.NamedTextColor.RED).append(
+                                            net.kyori.adventure.text.Component.text(cause.getMessage(),
+                                                    net.kyori.adventure.text.format.NamedTextColor.RED)));
+                        } else {
+                            plugin.getMessageManager().send(sender, "general.transaction-failed");
+                            plugin.getLogger().severe("Transfer failed: " + ex.getMessage());
+                        }
+                        return null;
                     });
         });
     }

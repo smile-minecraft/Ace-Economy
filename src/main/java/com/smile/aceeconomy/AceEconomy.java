@@ -3,6 +3,7 @@ package com.smile.aceeconomy;
 import com.smile.aceeconomy.api.EconomyProvider;
 import com.smile.aceeconomy.commands.AdminCommand;
 import com.smile.aceeconomy.commands.BalanceCommand;
+import com.smile.aceeconomy.commands.BankCommand;
 import com.smile.aceeconomy.commands.PayCommand;
 import com.smile.aceeconomy.commands.WithdrawCommand;
 import com.smile.aceeconomy.data.Account;
@@ -52,6 +53,8 @@ public final class AceEconomy extends JavaPlugin implements Listener {
     private DiscordWebhook discordWebhook;
     private com.smile.aceeconomy.manager.LeaderboardManager leaderboardManager;
     private com.smile.aceeconomy.manager.UserCacheManager userCacheManager;
+    private com.smile.aceeconomy.manager.PermissionManager permissionManager;
+    private com.smile.aceeconomy.manager.MigrationManager migrationManager;
 
     /**
      * 取得插件實例。
@@ -77,8 +80,14 @@ public final class AceEconomy extends JavaPlugin implements Listener {
         // 初始化儲存處理器（根據設定選擇）
         initializeStorage();
 
-        // 初始化貨幣管理器 (使用 ConfigManager 取代 defaultBalance 和 logger)
-        currencyManager = new CurrencyManager(storageHandler, configManager);
+        // 嘗試掛鉤 Vault (Move Up for PermissionManager)
+        setupVault();
+
+        // 初始化權限管理器 (Dependency for CurrencyManager)
+        permissionManager = new com.smile.aceeconomy.manager.PermissionManager(this);
+
+        // 初始化貨幣管理器 (使用 ConfigManager 和 PermissionManager)
+        currencyManager = new CurrencyManager(this, permissionManager, storageHandler, configManager);
 
         // 初始化日誌管理器 (暫時保留 DatabaseConnection 依賴)
         com.smile.aceeconomy.manager.LogManager logManager = null;
@@ -91,6 +100,11 @@ public final class AceEconomy extends JavaPlugin implements Listener {
 
         if (logManager != null) {
             currencyManager.setLogManager(logManager);
+        }
+
+        // 初始化遷移管理器
+        if (storageProvider != null) {
+            migrationManager = new com.smile.aceeconomy.manager.MigrationManager(this, storageProvider);
         }
 
         // 初始化排行榜管理器 (使用 StorageProvider)
@@ -122,6 +136,9 @@ public final class AceEconomy extends JavaPlugin implements Listener {
         // 嘗試掛鉤 Vault
         setupVault();
 
+        // 初始化權限管理器 (需在 setupVault/setupChat 後)
+        permissionManager = new com.smile.aceeconomy.manager.PermissionManager(this);
+
         // 嘗試掛鉤 PlaceholderAPI
         setupPlaceholderAPI();
 
@@ -132,6 +149,7 @@ public final class AceEconomy extends JavaPlugin implements Listener {
         Bukkit.getPluginManager().registerEvents(this, this);
         Bukkit.getPluginManager().registerEvents(new BanknoteListener(this), this);
         Bukkit.getPluginManager().registerEvents(new EconomyLogListener(this, discordWebhook), this);
+        Bukkit.getPluginManager().registerEvents(new com.smile.aceeconomy.gui.GUIListener(this), this);
 
         getLogger().info("AceEconomy 已啟用！");
     }
@@ -233,6 +251,14 @@ public final class AceEconomy extends JavaPlugin implements Listener {
                 baltopCmd.setExecutor(baltopCommand);
                 baltopCmd.setTabCompleter(baltopCommand);
             }
+
+            // /bank (GUI)
+            BankCommand bankCommand = new BankCommand(this);
+            PluginCommand bankCmd = getCommand("bank");
+            if (bankCmd != null) {
+                bankCmd.setExecutor(bankCommand);
+                // No tab completer needed for now as it takes no args
+            }
         }
 
         getLogger().info("已註冊所有指令");
@@ -260,6 +286,26 @@ public final class AceEconomy extends JavaPlugin implements Listener {
 
         // 使用 ANSI 綠色輸出成功訊息
         getLogger().info("\u001B[32m[AceEconomy] Vault 掛鉤成功！\u001B[0m");
+
+        // 設定 Chat (用於權限 Meta 資料讀取)
+        setupChat();
+    }
+
+    private net.milkbowl.vault.chat.Chat chat;
+
+    private void setupChat() {
+        org.bukkit.plugin.RegisteredServiceProvider<net.milkbowl.vault.chat.Chat> rsp = getServer().getServicesManager()
+                .getRegistration(net.milkbowl.vault.chat.Chat.class);
+        if (rsp != null) {
+            chat = rsp.getProvider();
+            getLogger().info("已連結 Vault Chat Provider: " + chat.getName());
+        } else {
+            getLogger().info("未找到 Vault Chat Provider，將使用預設設定");
+        }
+    }
+
+    public net.milkbowl.vault.chat.Chat getChat() {
+        return chat;
     }
 
     /**
@@ -432,5 +478,18 @@ public final class AceEconomy extends JavaPlugin implements Listener {
      */
     public com.smile.aceeconomy.manager.UserCacheManager getUserCacheManager() {
         return userCacheManager;
+    }
+
+    /**
+     * 取得權限管理器。
+     *
+     * @return 權限管理器實例
+     */
+    public com.smile.aceeconomy.manager.PermissionManager getPermissionManager() {
+        return permissionManager;
+    }
+
+    public com.smile.aceeconomy.manager.MigrationManager getMigrationManager() {
+        return migrationManager;
     }
 }

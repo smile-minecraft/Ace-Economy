@@ -315,28 +315,41 @@ public class LogManager {
                     // 1. 執行資金反向操作
                     if (type == TransactionType.PAY) {
                         if (receiverUuid != null)
-                            currencyManager.withdraw(receiverUuid, amount);
+                            // 強制扣款 (忽略債務上限，因為這是回溯)
+                            currencyManager.withdraw(receiverUuid, amount, true);
                         if (senderUuid != null)
                             currencyManager.deposit(senderUuid, amount);
                     } else if (type == TransactionType.GIVE || type == TransactionType.DEPOSIT) {
                         if (receiverUuid != null)
-                            currencyManager.withdraw(receiverUuid, amount);
+                            currencyManager.withdraw(receiverUuid, amount, true);
                     } else if (type == TransactionType.TAKE || type == TransactionType.WITHDRAW) {
-                        // TAKE 是從玩家扣錢，回溯就是還錢
-                        // WITHDRAW 是玩家提錢，回溯就是還錢 (假設物品被沒收或無效化，但這裡只管錢)
-                        if (senderUuid != null)
-                            currencyManager.deposit(senderUuid, amount); // 注意：DB 記錄中，TAKE 操作的 sender 可能是 admin，receiver
-                                                                         // 是被扣錢的玩家。
-                        // 需要確認 logTransaction 的參數填法。
-                        // 假設:
-                        // PAY: sender=P1, receiver=P2
-                        // GIVE: sender=Admin/Console, receiver=P1
-                        // TAKE: sender=Admin/Console, receiver=P1 (但錢是從 P1 出去) -> 這裡需要定義清楚
-                        // 一般來說 TAKE: 從 Receiver 扣錢。
+                        // TAKE/WITHDRAW 回溯 -> 還錢
+                        // 注意: WITHDRAW 的 receiver 通常是 null?
+                        // 檢查 logTransaction: WITHDRAW -> sender=uuid, receiver=null.
+                        // 所以這裡如果是 WITHDRAW, senderUuid 應該是玩家.
 
-                        // 修正：LogManager.logTransaction 呼叫時的語意
-                        // TAKE: sender=Admin, receiver=Player, amount=X.
-                        // 回溯 TAKE: 給 Player X 元。
+                        // 針對 WITHDRAW: sender=Player, receiver=null
+                        // 針對 TAKE: sender=Admin, receiver=Player?
+                        // LogManager.logTransaction 呼叫:
+                        // TAKE: sender=null, receiver=uuid (see CurrencyManager.setBalance/withdraw
+                        // logs? No, take is manual command)
+                        // AdminCommand calls take ->
+                        // currencyManager.withdraw(..., true) -> logs "System Withdraw"? No.
+                        // AdminCommand usually does its own log? Or relies on CurrencyManager?
+
+                        // CurrencyManager logs "System Withdraw" for withdrawals.
+                        // AdminCommand "take" calls withdraw(..., true).
+                        // So it logs "System Withdraw".
+
+                        // If we are rolling back a "System Withdraw" (type WITHDRAW):
+                        // We give money back to senderUuid.
+
+                        if (senderUuid != null)
+                            currencyManager.deposit(senderUuid, amount);
+
+                        // TAKE (if explicit type TAKE exists):
+                        // Usually implies Admin took money.
+                        // If logged as TAKE, receiver=Player.
                         if (receiverUuid != null)
                             currencyManager.deposit(receiverUuid, amount);
                     }

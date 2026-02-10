@@ -31,6 +31,13 @@ settings:
   # 若設定為 "bank"，則可以使用 /bank 來執行 /aceeco 指令
   main-command-alias: "aceeco"
 
+# 經濟系統設定
+economy:
+  # 是否允許負資產 (債務系統)
+  allow-negative-balance: true
+  # 預設債務上限 (當玩家沒有權限設定時使用)
+  default-debt-limit: 0.0
+
 # 貨幣設定 (Multi-Currency System)
 currencies:
   dollar: # 內部 ID

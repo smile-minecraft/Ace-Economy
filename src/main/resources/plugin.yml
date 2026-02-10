@@ -28,23 +28,61 @@ commands:
     description: 查看富豪排行榜
     usage: /<command> [頁碼]
     aliases: [balancetop, top]
+  bank:
+    description: Open the AceEconomy Dashboard.
+    aliases: [eco, menu, bankmenu]
+    usage: /bank
 
 permissions:
-  aceeconomy.use:
-    description: 允許使用基本經濟指令
+  aceeconomy.admin:
+    description: AceEconomy Admin (Wildcard)
+    default: op
+    children:
+      aceeconomy.command.pay: true
+      aceeconomy.command.money: true
+      aceeconomy.command.baltop: true
+      aceeconomy.command.withdraw: true
+      aceeconomy.admin.give: true
+      aceeconomy.admin.take: true
+      aceeconomy.admin.set: true
+      aceeconomy.admin.reload: true
+      aceeconomy.admin.history: true
+      aceeconomy.admin.rollback: true
+      aceeconomy.bypass.debt: true
+      aceeconomy.command.bank: true
+  aceeconomy.command.pay:
+    description: Allow use of /pay
     default: true
-  aceeconomy.pay:
-    description: 允許使用轉帳指令
-    default: true
-  aceeconomy.withdraw:
-    description: 允許使用提領支票指令
+  aceeconomy.command.money:
+    description: Allow use of /money
     default: true
   aceeconomy.command.baltop:
-    description: 允許使用排行榜指令
+    description: Allow use of /baltop
     default: true
-  aceeconomy.admin:
-    description: 允許使用管理指令
+  aceeconomy.command.withdraw:
+    description: Allow use of /withdraw
+    default: true
+  aceeconomy.admin.give:
+    description: Allow use of /aceeco give
     default: op
-  aceeconomy.command.reload:
-    description: 允許重載插件設定
+  aceeconomy.admin.take:
+    description: Allow use of /aceeco take
     default: op
+  aceeconomy.admin.set:
+    description: Allow use of /aceeco set
+    default: op
+  aceeconomy.admin.reload:
+    description: Allow use of /aceeco reload
+    default: op
+  aceeconomy.admin.history:
+    description: Allow use of /aceeco history
+    default: op
+  aceeconomy.admin.rollback:
+    description: Allow use of /aceeco rollback
+    default: op
+  aceeconomy.bypass.debt:
+    description: Allow player to bypass debt limits
+    default: op
+  aceeconomy.command.bank:
+    description: Allows opening the bank menu.
+    default: true

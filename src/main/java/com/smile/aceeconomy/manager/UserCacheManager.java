@@ -1,11 +1,5 @@
 package com.smile.aceeconomy.manager;
 
-import com.smile.aceeconomy.storage.DatabaseConnection;
-
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.logging.Logger;
@@ -23,29 +17,6 @@ public class UserCacheManager {
 
     private final com.smile.aceeconomy.storage.StorageProvider storageProvider;
     private final Logger logger;
-
-    private static final String TABLE_NAME = "ace_users";
-
-    private static final String UPSERT_MYSQL = """
-            INSERT INTO %s (uuid, username, last_seen)
-            VALUES (?, ?, ?)
-            ON DUPLICATE KEY UPDATE
-                username = VALUES(username),
-                last_seen = VALUES(last_seen)
-            """.formatted(TABLE_NAME);
-
-    private static final String UPSERT_SQLITE = """
-            INSERT INTO %s (uuid, username, last_seen)
-            VALUES (?, ?, ?)
-            ON CONFLICT(uuid) DO UPDATE SET
-                username = excluded.username,
-                last_seen = excluded.last_seen)
-            """.formatted(TABLE_NAME);
-
-    private static final String SELECT_UUID = "SELECT uuid FROM %s WHERE LOWER(username) = LOWER(?)"
-            .formatted(TABLE_NAME);
-
-    private static final String SELECT_NAME = "SELECT username FROM %s WHERE uuid = ?".formatted(TABLE_NAME);
 
     /**
      * 建立玩家名稱快取管理器。
