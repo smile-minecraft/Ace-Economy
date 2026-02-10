@@ -149,45 +149,30 @@ class PayCommandTest extends TestBase {
     void testPayInsufficientFunds_Fail() {
         // Sender has 50, trying to pay 100
         Account senderAccount = new Account(senderUuid, "Sender", 50.0);
+        Account receiverAccount = new Account(receiverUuid, "Receiver", 500.0);
         currencyManager.cacheAccount(senderAccount);
+        currencyManager.cacheAccount(receiverAccount);
+
+        // Mock loadAccount to return a valid receiver account (required by
+        // executeTransfer)
+        lenient().when(storageHandler.loadAccount(eq(receiverUuid)))
+                .thenReturn(CompletableFuture.completedFuture(receiverAccount));
 
         // Mock economyProvider to fail with InsufficientFundsException
-        // PayCommand checks message from exception
         when(economyProvider.transfer(any(UUID.class), any(UUID.class), anyString(), anyDouble()))
                 .thenReturn(CompletableFuture.failedFuture(
                         new com.smile.aceeconomy.exception.InsufficientFundsException("餘額不足")));
 
-        // Mock exception message sender logic in PayCommand uses sendMessage(Component)
-        // verify(messageManager).send(...) might not be called?
-        // PayCommand uses sender.sendMessage(TextComponent...) for
-        // InsufficientFundsException
-        // So verify(messageManager) might fail if I expect it.
-        // Wait, PayCommand code (Step 462) uses sender.sendMessage(...) for this
-        // specific exception.
-        // And uses messageManager for generic failure.
-        // So I should NOT verify messageManager.send(...) for
-        // "economy.insufficient-funds-currency"
-        // unless I change PayCommand to use MessageManager for exception.
-        // But PayCommand construct error message from exception message.
-        // So I should verify sender.sendMessage(...) ?
-
-        // Actually, the original test expected "economy.insufficient-funds-currency".
-        // Now it gets a raw message "餘額不足".
-        // This is a behavior change in PayCommand that I made (Step 448/462).
-        // I used cause.getMessage() directly. I did not use MessageManager keys.
-        // This is acceptable, but means I must update the test expectation.
-
         payCommand.onCommand(sender, command, "pay", new String[] { "Receiver", "100" });
 
-        // Wait for async
+        // Wait for async chain (loadAccount → transfer → exceptionally)
         try {
-            Thread.sleep(100);
+            Thread.sleep(200);
         } catch (InterruptedException e) {
         }
 
-        // Verify sender.sendMessage called (since it uses Component)
-        // Hard to verify specific Component with Mockito on Player without argument
-        // captor.
+        // Verify sender.sendMessage called with Component (InsufficientFundsException
+        // handler uses raw Component)
         verify(sender, atLeastOnce()).sendMessage(any(net.kyori.adventure.text.Component.class));
     }
 

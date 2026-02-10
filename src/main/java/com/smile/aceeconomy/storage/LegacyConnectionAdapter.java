@@ -23,8 +23,8 @@ public class LegacyConnectionAdapter extends DatabaseConnection {
 
     private final StorageProvider provider;
 
-    public LegacyConnectionAdapter(StorageProvider provider) {
-        super(null); // 不使用父類建構子
+    public LegacyConnectionAdapter(com.smile.aceeconomy.AceEconomy plugin, StorageProvider provider) {
+        super(plugin);
         this.provider = provider;
     }
 

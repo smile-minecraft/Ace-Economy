@@ -94,7 +94,7 @@ public final class AceEconomy extends JavaPlugin implements Listener {
         if (storageProvider != null) {
             // 使用適配器將 StorageProvider 轉為 DatabaseConnection 介面
             com.smile.aceeconomy.storage.DatabaseConnection legacyConnection = new com.smile.aceeconomy.storage.LegacyConnectionAdapter(
-                    storageProvider);
+                    this, storageProvider);
             logManager = new com.smile.aceeconomy.manager.LogManager(this, legacyConnection, currencyManager);
         }
 
