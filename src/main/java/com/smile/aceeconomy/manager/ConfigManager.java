@@ -63,21 +63,24 @@ public class ConfigManager {
     /**
      * 載入所有設定檔。
      */
+    /**
+     * 載入所有設定檔。
+     */
     public void load() {
         // 儲存並載入預設 config.yml
         plugin.saveDefaultConfig();
         plugin.reloadConfig();
         this.config = plugin.getConfig();
 
-        // 檢查並更新 config.yml
-        checkAndUpdate("config.yml");
-        // 重新載入以確保取得最新值
-        plugin.reloadConfig();
-        this.config = plugin.getConfig();
+        // 檢查並更新 config.yml (Migration to 1.3)
+        checkAndMigrateConfig();
 
         // 重新載入以確保取得最新值
         plugin.reloadConfig();
         this.config = plugin.getConfig();
+
+        // 確保所有語言檔案都存在
+        saveDefaultLanguageFiles();
 
         // 載入語言設定
         this.locale = config.getString("locale", "zh_TW");
@@ -86,6 +89,45 @@ public class ConfigManager {
         cacheConfigValues();
 
         plugin.getLogger().info("已載入設定檔");
+    }
+
+    /**
+     * 確保所有預設語言檔案都已儲存至磁碟。
+     */
+    private void saveDefaultLanguageFiles() {
+        String[] locales = { "en_US", "zh_TW", "zh_CN" };
+        for (String loc : locales) {
+            String fileName = "lang/messages_" + loc + ".yml";
+            File file = new File(plugin.getDataFolder(), fileName);
+            if (!file.exists()) {
+                try {
+                    plugin.saveResource(fileName, false);
+                } catch (IllegalArgumentException e) {
+                    plugin.getLogger().warning("無法儲存預設語言檔案: " + fileName);
+                }
+            }
+        }
+    }
+
+    /**
+     * 檢查並遷移 config.yml 至最新版本。
+     */
+    private void checkAndMigrateConfig() {
+        // 檢查是否為舊版設定 (缺 locale)
+        if (!config.contains("locale")) {
+            plugin.getLogger().info("Detecting legacy config (missing 'locale'). Migrating to version 1.3...");
+
+            config.set("locale", "zh_TW"); // Default to zh_TW for upgrading users
+
+            // Update version
+            config.set("config-version", 1.3);
+
+            plugin.saveConfig();
+            plugin.getLogger().info("Config migrated to version 1.3.");
+        }
+
+        // 使用原有的 checkAndUpdate 進行標準更新檢查
+        checkAndUpdate("config.yml");
     }
 
     /**

@@ -20,6 +20,9 @@ storage:
 
 # 一般設定
 settings:
+  # 語言設定 (en_US, zh_TW, zh_CN)
+  locale: zh_TW
+  
   # 主指令別名 (預設: aceeco)
   # 若設定為 "bank"，則可以使用 /bank 來執行 /aceeco 指令
   main-command-alias: "aceeco"

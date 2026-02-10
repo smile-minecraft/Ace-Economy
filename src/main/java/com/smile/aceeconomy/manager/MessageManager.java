@@ -99,6 +99,43 @@ public class MessageManager {
 
         try {
             YamlConfiguration config = YamlConfiguration.loadConfiguration(file);
+
+            // Auto-repair: Check for missing keys against internal resource
+            // We use the same locale resource if available, or fallback to en_US for
+            // structure validation
+            String resourceName = "lang/messages_" + locale + ".yml";
+            InputStream resourceStream = plugin.getResource(resourceName);
+            if (resourceStream == null) {
+                // If specific locale resource not found, use en_US as template for repair
+                resourceStream = plugin.getResource("lang/messages_en_US.yml");
+            }
+
+            if (resourceStream != null) {
+                YamlConfiguration internalConfig = YamlConfiguration.loadConfiguration(
+                        new InputStreamReader(resourceStream, StandardCharsets.UTF_8));
+
+                boolean modified = false;
+                int repairedKeys = 0;
+
+                for (String key : internalConfig.getKeys(true)) {
+                    if (!config.contains(key)) {
+                        config.set(key, internalConfig.get(key));
+                        modified = true;
+                        repairedKeys++;
+                    }
+                }
+
+                if (modified) {
+                    try {
+                        config.save(file);
+                        plugin.getLogger().info("Auto-repaired language file: " + fileName + " (Restored "
+                                + repairedKeys + " missing keys)");
+                    } catch (Exception e) {
+                        plugin.getLogger().log(Level.SEVERE, "Failed to save repaired language file: " + fileName, e);
+                    }
+                }
+            }
+
             flatten(config, primaryMap);
         } catch (Exception e) {
             plugin.getLogger().log(Level.SEVERE, "Failed to load language file: " + fileName, e);
