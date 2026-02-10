@@ -50,8 +50,7 @@ class CurrencyManagerTest {
 
     @BeforeEach
     void setUp() {
-        currencyManager = new CurrencyManager(storageHandler, logger, 100.0);
-        currencyManager.setConfigManager(configManager);
+        currencyManager = new CurrencyManager(storageHandler, configManager);
         playerUuid = UUID.randomUUID();
 
         // 預設的 ConfigManager 行為
@@ -59,6 +58,12 @@ class CurrencyManagerTest {
                 "dollar", DOLLAR,
                 "token", TOKEN));
         lenient().when(configManager.getDefaultCurrency()).thenReturn(DOLLAR);
+        lenient().when(configManager.getStartBalance()).thenReturn(100.0);
+
+        // Mock getCurrency behavior for specific keys (lowercase)
+        lenient().when(configManager.getCurrency("dollar")).thenReturn(DOLLAR);
+        lenient().when(configManager.getCurrency("token")).thenReturn(TOKEN);
+        lenient().when(configManager.getCurrency("nonexistent")).thenReturn(null);
     }
 
     // ==================== 核心業務邏輯測試 ====================
@@ -264,36 +269,4 @@ class CurrencyManagerTest {
         }
     }
 
-    // ==================== Fallback 測試 ====================
-
-    @Nested
-    @DisplayName("Fallback 行為測試")
-    class FallbackTests {
-
-        @Test
-        @DisplayName("ConfigManager 為 null 時 currencyExists 應 fallback 到 dollar")
-        void testCurrencyExists_FallbackWhenConfigManagerNull() {
-            // Arrange - 建立沒有 ConfigManager 的 CurrencyManager
-            CurrencyManager bareManager = new CurrencyManager(storageHandler, logger, 100.0);
-            // 不呼叫 setConfigManager
-
-            // Act & Assert
-            assertTrue(bareManager.currencyExists("dollar"), "應 fallback 認可 dollar");
-            assertTrue(bareManager.currencyExists("DOLLAR"), "應 fallback 認可 DOLLAR (忽略大小寫)");
-            assertFalse(bareManager.currencyExists("token"), "沒有 ConfigManager 時 token 不應存在");
-        }
-
-        @Test
-        @DisplayName("ConfigManager 為 null 時 getDefaultCurrencyId 應 fallback 到 dollar")
-        void testGetDefaultCurrencyId_FallbackWhenConfigManagerNull() {
-            // Arrange
-            CurrencyManager bareManager = new CurrencyManager(storageHandler, logger, 100.0);
-
-            // Act
-            String result = bareManager.getDefaultCurrencyId();
-
-            // Assert
-            assertEquals("dollar", result, "沒有 ConfigManager 時應 fallback 到 dollar");
-        }
-    }
 }

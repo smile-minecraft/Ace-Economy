@@ -76,15 +76,13 @@ public final class AceEconomy extends JavaPlugin implements Listener {
         // 初始化儲存處理器（根據設定選擇）
         initializeStorage();
 
-        // 初始化貨幣管理器（預設餘額從設定檔讀取）
-        double startBalance = configManager.getStartBalance();
-        currencyManager = new CurrencyManager(storageHandler, getLogger(), startBalance);
+        // 初始化貨幣管理器 (使用 ConfigManager 取代 defaultBalance 和 logger)
+        currencyManager = new CurrencyManager(storageHandler, configManager);
 
         // 初始化日誌管理器
         com.smile.aceeconomy.manager.LogManager logManager = new com.smile.aceeconomy.manager.LogManager(this,
                 databaseConnection, currencyManager);
         currencyManager.setLogManager(logManager);
-        currencyManager.setConfigManager(configManager); // 關鍵：連結貨幣設定
 
         // 初始化排行榜管理器 (僅當使用 SQL 時)
         if (databaseConnection != null && databaseConnection.isHealthy()) {

@@ -8,12 +8,6 @@ import java.text.DecimalFormat;
  * 定義一種貨幣的屬性，包括 ID、名稱、符號、格式等。
  * </p>
  *
- * @param id        內部 ID (例如 "dollar", "token")
- * @param name      顯示名稱 (例如 "金幣", "代幣")
- * @param symbol    貨幣符號 (例如 "$", "ⓒ")
- * @param format    數字格式 (例如 "#,##0.00")
- * @param isDefault 是否為預設貨幣 (Vault 整合使用)
- * 
  * @author Smile
  */
 public class Currency {
@@ -24,6 +18,15 @@ public class Currency {
     private final boolean isDefault;
     private final DecimalFormat decimalFormat;
 
+    /**
+     * 建立貨幣資料物件。
+     *
+     * @param id        內部 ID (例如 "dollar", "token")
+     * @param name      顯示名稱 (例如 "金幣", "代幣")
+     * @param symbol    貨幣符號 (例如 "$", "ⓒ")
+     * @param format    數字格式 (例如 "#,##0.00")
+     * @param isDefault 是否為預設貨幣 (Vault 整合使用)
+     */
     public Currency(String id, String name, String symbol, String format, boolean isDefault) {
         this.id = id;
         this.name = name;

@@ -6,7 +6,6 @@ import com.smile.aceeconomy.storage.StorageHandler;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
-import java.util.logging.Logger;
 
 /**
  * 貨幣管理器。
@@ -31,31 +30,22 @@ public class CurrencyManager {
     private final ConcurrentHashMap<UUID, ReentrantReadWriteLock> accountLocks = new ConcurrentHashMap<>();
 
     private final StorageHandler storageHandler;
-    private final Logger logger;
-    private final double defaultBalance;
-    private ConfigManager configManager;
-
+    private final ConfigManager configManager;
     private LogManager logManager;
 
     /**
      * 建立貨幣管理器。
      *
      * @param storageHandler 儲存處理器
-     * @param logger         日誌記錄器
-     * @param defaultBalance 預設初始餘額
+     * @param configManager  設定檔管理器
      */
-    public CurrencyManager(StorageHandler storageHandler, Logger logger, double defaultBalance) {
+    public CurrencyManager(StorageHandler storageHandler, ConfigManager configManager) {
         this.storageHandler = storageHandler;
-        this.logger = logger;
-        this.defaultBalance = defaultBalance;
+        this.configManager = configManager;
     }
 
     public void setLogManager(LogManager logManager) {
         this.logManager = logManager;
-    }
-
-    public void setConfigManager(ConfigManager configManager) {
-        this.configManager = configManager;
     }
 
     /**
@@ -64,10 +54,7 @@ public class CurrencyManager {
      * @return 貨幣 ID 集合
      */
     public java.util.Set<String> getRegisteredCurrencies() {
-        if (configManager != null) {
-            return configManager.getCurrencies().keySet();
-        }
-        return java.util.Set.of("dollar");
+        return configManager.getCurrencies().keySet();
     }
 
     /**
@@ -80,11 +67,7 @@ public class CurrencyManager {
         if (currencyId == null) {
             return false;
         }
-        if (configManager == null) {
-            return "dollar".equalsIgnoreCase(currencyId);
-        }
-        // Strict delegation to ConfigManager
-        return configManager.getCurrencies().containsKey(currencyId.toLowerCase());
+        return configManager.getCurrencies().containsKey(currencyId.trim().toLowerCase());
     }
 
     /**
@@ -94,11 +77,11 @@ public class CurrencyManager {
      * @return 貨幣物件，若找不到回傳預設貨幣
      */
     public com.smile.aceeconomy.data.Currency getCurrency(String currencyId) {
-        if (currencyId == null || configManager == null) {
-            return configManager != null ? configManager.getDefaultCurrency() : null;
+        if (currencyId == null) {
+            return configManager.getDefaultCurrency();
         }
-        // Strict delegation
-        return configManager.getCurrency(currencyId.toLowerCase());
+        com.smile.aceeconomy.data.Currency currency = configManager.getCurrency(currencyId.trim().toLowerCase());
+        return currency != null ? currency : configManager.getDefaultCurrency();
     }
 
     /**
@@ -107,10 +90,7 @@ public class CurrencyManager {
      * @return 預設貨幣 ID
      */
     public String getDefaultCurrencyId() {
-        if (configManager != null && configManager.getDefaultCurrency() != null) {
-            return configManager.getDefaultCurrency().id();
-        }
-        return "dollar"; // fallback
+        return configManager.getDefaultCurrency().id();
     }
 
     /**
@@ -143,9 +123,8 @@ public class CurrencyManager {
      * @return 建立的帳戶
      */
     public Account createAccount(UUID uuid, String ownerName) {
-        Account account = new Account(uuid, ownerName, defaultBalance);
+        Account account = new Account(uuid, ownerName, configManager.getStartBalance());
         accountCache.put(uuid, account);
-        logger.info("已建立新帳戶: " + ownerName + " (" + uuid + ")");
         return account;
     }
 
@@ -204,8 +183,10 @@ public class CurrencyManager {
      * @param uuid       玩家 UUID
      * @param currencyId 貨幣 ID
      * @return 玩家餘額，若帳戶不存在或該貨幣無記錄則回傳 0
+     * @throws IllegalArgumentException 如果貨幣 ID 無效
      */
     public double getBalance(UUID uuid, String currencyId) {
+        validateCurrency(currencyId);
         Account account = accountCache.get(uuid);
         if (account == null) {
             return 0.0;
@@ -238,6 +219,7 @@ public class CurrencyManager {
      * @param currencyId 貨幣 ID
      * @param amount     存款金額
      * @return 操作是否成功
+     * @throws IllegalArgumentException 如果貨幣 ID 無效
      */
     public boolean deposit(UUID uuid, String currencyId, double amount) {
         if (amount <= 0) {
@@ -275,6 +257,14 @@ public class CurrencyManager {
         return withdraw(uuid, getDefaultCurrencyId(), amount, null);
     }
 
+    /**
+     * 從玩家帳戶提款 (預設貨幣，指定支票 UUID)。
+     *
+     * @param uuid         玩家 UUID
+     * @param amount       提款金額
+     * @param banknoteUuid 支票 UUID
+     * @return 操作是否成功
+     */
     public boolean withdraw(UUID uuid, double amount, UUID banknoteUuid) {
         return withdraw(uuid, getDefaultCurrencyId(), amount, banknoteUuid);
     }
@@ -287,6 +277,7 @@ public class CurrencyManager {
      * @param amount       提款金額
      * @param banknoteUuid 支票 UUID (可為 null)
      * @return 操作是否成功
+     * @throws IllegalArgumentException 如果貨幣 ID 無效
      */
     public boolean withdraw(UUID uuid, String currencyId, double amount, UUID banknoteUuid) {
         if (amount <= 0) {
@@ -333,6 +324,7 @@ public class CurrencyManager {
      * @param currencyId 貨幣 ID
      * @param amount     新餘額
      * @return 操作是否成功
+     * @throws IllegalArgumentException 如果貨幣 ID 無效
      */
     public boolean setBalance(UUID uuid, String currencyId, double amount) {
         if (amount < 0) {
