@@ -21,29 +21,33 @@ import java.util.logging.Logger;
 public class SchemaManager {
 
     private final AceEconomy plugin;
-    private final DatabaseConnection databaseConnection;
+    private final ConnectionProvider connectionProvider;
     private final Logger logger;
     private final boolean isMySQL;
 
     private static final String HISTORY_TABLE = "ace_schema_history";
 
-    public SchemaManager(AceEconomy plugin, DatabaseConnection databaseConnection) {
+    @FunctionalInterface
+    public interface ConnectionProvider {
+        Connection get() throws SQLException;
+    }
+
+    public SchemaManager(AceEconomy plugin, ConnectionProvider connectionProvider, boolean isMySQL) {
         this.plugin = plugin;
-        this.databaseConnection = databaseConnection;
+        this.connectionProvider = connectionProvider;
         this.logger = plugin.getLogger();
-        this.isMySQL = databaseConnection.isMySQL();
+        this.isMySQL = isMySQL;
     }
 
     /**
      * 執行資料庫遷移。
      */
     public void migrate() {
-        if (!databaseConnection.isHealthy()) {
-            logger.severe("資料庫連線異常，無法執行遷移！");
-            return;
-        }
-
-        try (Connection conn = databaseConnection.getConnection()) {
+        try (Connection conn = connectionProvider.get()) {
+            if (conn == null || conn.isClosed()) {
+                logger.severe("資料庫連線異常，無法執行遷移！");
+                return;
+            }
             // 1. 確保歷史記錄表存在
             ensureHistoryTable(conn);
 

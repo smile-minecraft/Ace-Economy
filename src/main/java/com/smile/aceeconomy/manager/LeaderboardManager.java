@@ -31,7 +31,7 @@ import java.util.logging.Logger;
 public class LeaderboardManager {
 
     private final AceEconomy plugin;
-    private final DatabaseConnection databaseConnection;
+    private final com.smile.aceeconomy.storage.StorageProvider storageProvider;
     private final Logger logger;
 
     // Multi-currency cache: currencyId -> CachedLeaderboard
@@ -42,9 +42,9 @@ public class LeaderboardManager {
 
     private final Map<String, AtomicBoolean> refreshingFlags = new ConcurrentHashMap<>();
 
-    public LeaderboardManager(AceEconomy plugin, DatabaseConnection databaseConnection) {
+    public LeaderboardManager(AceEconomy plugin, com.smile.aceeconomy.storage.StorageProvider storageProvider) {
         this.plugin = plugin;
-        this.databaseConnection = databaseConnection;
+        this.storageProvider = storageProvider;
         this.logger = plugin.getLogger();
         reloadConfig();
     }
@@ -111,48 +111,24 @@ public class LeaderboardManager {
 
         isRefreshing.set(true);
 
-        return CompletableFuture.supplyAsync(() -> {
+        return storageProvider.getTopAccounts(currencyId, 100).thenApply(topMap -> {
             List<TopEntry> newCache = new ArrayList<>();
-            // Query from ace_balances for specific currency
-            String sql = "SELECT uuid, username, balance FROM ace_balances WHERE currency_id = ? ORDER BY balance DESC LIMIT 100";
 
-            try (Connection conn = databaseConnection.getConnection();
-                    PreparedStatement pstmt = conn.prepareStatement(sql)) {
-
-                pstmt.setString(1, currencyId);
-
-                try (ResultSet rs = pstmt.executeQuery()) {
-                    int rank = 1;
-                    while (rs.next()) {
-                        String uuidStr = rs.getString("uuid");
-                        String username = rs.getString("username");
-                        double balance = rs.getDouble("balance");
-
-                        if (username == null || username.isEmpty()) {
-                            try {
-                                UUID uuid = UUID.fromString(uuidStr);
-                                OfflinePlayer offlinePlayer = Bukkit.getOfflinePlayer(uuid);
-                                username = offlinePlayer.getName() != null ? offlinePlayer.getName() : "Unknown Player";
-                            } catch (Exception e) {
-                                username = "Unknown";
-                            }
-                        }
-
-                        newCache.add(new TopEntry(rank++, username, balance));
-                    }
-                }
-
-                leaderboardCache.put(currencyId, new CachedLeaderboard(newCache, System.currentTimeMillis()));
-                return newCache;
-
-            } catch (SQLException e) {
-                logger.severe("排行榜查詢失敗 (" + currencyId + "): " + e.getMessage());
-                e.printStackTrace();
-                CachedLeaderboard cached = leaderboardCache.get(currencyId);
-                return cached != null ? new ArrayList<>(cached.entries) : Collections.emptyList();
-            } finally {
-                isRefreshing.set(false);
+            int rank = 1;
+            for (Map.Entry<String, Double> entry : topMap.entrySet()) {
+                newCache.add(new TopEntry(rank++, entry.getKey(), entry.getValue()));
             }
+
+            leaderboardCache.put(currencyId, new CachedLeaderboard(newCache, System.currentTimeMillis()));
+            isRefreshing.set(false);
+            return newCache;
+
+        }).exceptionally(error -> {
+            logger.severe("排行榜查詢失敗 (" + currencyId + "): " + error.getMessage());
+            error.printStackTrace();
+            isRefreshing.set(false);
+            CachedLeaderboard cached = leaderboardCache.get(currencyId);
+            return cached != null ? new ArrayList<>(cached.entries) : Collections.emptyList();
         });
     }
 

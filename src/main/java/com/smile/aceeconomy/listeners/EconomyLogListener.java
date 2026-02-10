@@ -49,6 +49,17 @@ public class EconomyLogListener implements Listener {
             return;
         }
 
+        // 檢查事件類型開關
+        if (event.getType() == EconomyTransactionEvent.TransactionType.PAY) {
+            if (!plugin.getConfigManager().isDiscordLogTransaction()) {
+                return;
+            }
+        } else if (event.isAdminAction()) {
+            if (!plugin.getConfigManager().isDiscordLogAdmin()) {
+                return;
+            }
+        }
+
         // 發送 Discord 通知（已經是非同步）
         discordWebhook.sendTransactionAlert(event);
     }

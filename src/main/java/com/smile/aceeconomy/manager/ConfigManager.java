@@ -38,6 +38,8 @@ public class ConfigManager {
     private String mysqlDatabase;
     private String mysqlUsername;
     private String mysqlPassword;
+    private int poolSize;
+    private long maxLifetime;
 
     private final Map<String, Currency> currencies = new java.util.HashMap<>();
     private Currency defaultCurrency;
@@ -50,6 +52,9 @@ public class ConfigManager {
     private boolean discordEnabled;
     private String discordWebhookUrl;
     private double discordMinAmount;
+    private boolean discordLogTransaction;
+    private boolean discordLogAdmin;
+    private boolean discordLogServer;
 
     /**
      * 建立設定檔管理器。
@@ -219,7 +224,10 @@ public class ConfigManager {
         mysqlPort = config.getInt("storage.mysql.port", 3306);
         mysqlDatabase = config.getString("storage.mysql.database", "aceeconomy");
         mysqlUsername = config.getString("storage.mysql.username", "root");
+        mysqlUsername = config.getString("storage.mysql.username", "root");
         mysqlPassword = config.getString("storage.mysql.password", "password");
+        poolSize = config.getInt("storage.pool-size", 10);
+        maxLifetime = config.getLong("storage.max-lifetime", 1800000L);
 
         // 貨幣設定
         loadCurrencies();
@@ -236,7 +244,10 @@ public class ConfigManager {
         // Discord 設定
         discordEnabled = config.getBoolean("discord.enabled", false);
         discordWebhookUrl = config.getString("discord.webhook-url", "");
-        discordMinAmount = config.getDouble("discord.min-amount", 10000.0);
+        discordMinAmount = config.getDouble("discord.min-amount", 0.0);
+        discordLogTransaction = config.getBoolean("discord.log-events.transaction", true);
+        discordLogAdmin = config.getBoolean("discord.log-events.admin", true);
+        discordLogServer = config.getBoolean("discord.log-events.server", true);
     }
 
     // ==================== 資料庫設定 ====================
@@ -302,6 +313,14 @@ public class ConfigManager {
      */
     public String getMySQLPassword() {
         return mysqlPassword;
+    }
+
+    public int getPoolSize() {
+        return poolSize;
+    }
+
+    public long getMaxLifetime() {
+        return maxLifetime;
     }
 
     /**
@@ -503,6 +522,33 @@ public class ConfigManager {
      */
     public double getDiscordMinAmount() {
         return discordMinAmount;
+    }
+
+    /**
+     * 檢查是否記錄玩家交易事件。
+     *
+     * @return 是否記錄
+     */
+    public boolean isDiscordLogTransaction() {
+        return discordLogTransaction;
+    }
+
+    /**
+     * 檢查是否記錄管理員操作事件。
+     *
+     * @return 是否記錄
+     */
+    public boolean isDiscordLogAdmin() {
+        return discordLogAdmin;
+    }
+
+    /**
+     * 檢查是否記錄伺服器事件。
+     *
+     * @return 是否記錄
+     */
+    public boolean isDiscordLogServer() {
+        return discordLogServer;
     }
 
     // ==================== 一般設定 ====================

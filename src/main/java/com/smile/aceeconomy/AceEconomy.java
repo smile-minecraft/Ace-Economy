@@ -45,7 +45,7 @@ public final class AceEconomy extends JavaPlugin implements Listener {
 
     private ConfigManager configManager;
     private MessageManager messageManager;
-    private DatabaseConnection databaseConnection;
+    private com.smile.aceeconomy.storage.StorageProvider storageProvider;
     private StorageHandler storageHandler;
     private CurrencyManager currencyManager;
     private EconomyProvider economyProvider;
@@ -80,17 +80,25 @@ public final class AceEconomy extends JavaPlugin implements Listener {
         // 初始化貨幣管理器 (使用 ConfigManager 取代 defaultBalance 和 logger)
         currencyManager = new CurrencyManager(storageHandler, configManager);
 
-        // 初始化日誌管理器
-        com.smile.aceeconomy.manager.LogManager logManager = new com.smile.aceeconomy.manager.LogManager(this,
-                databaseConnection, currencyManager);
-        currencyManager.setLogManager(logManager);
+        // 初始化日誌管理器 (暫時保留 DatabaseConnection 依賴)
+        com.smile.aceeconomy.manager.LogManager logManager = null;
+        if (storageProvider != null) {
+            // 使用適配器將 StorageProvider 轉為 DatabaseConnection 介面
+            com.smile.aceeconomy.storage.DatabaseConnection legacyConnection = new com.smile.aceeconomy.storage.LegacyConnectionAdapter(
+                    storageProvider);
+            logManager = new com.smile.aceeconomy.manager.LogManager(this, legacyConnection, currencyManager);
+        }
 
-        // 初始化排行榜管理器 (僅當使用 SQL 時)
-        if (databaseConnection != null && databaseConnection.isHealthy()) {
-            leaderboardManager = new com.smile.aceeconomy.manager.LeaderboardManager(this, databaseConnection);
+        if (logManager != null) {
+            currencyManager.setLogManager(logManager);
+        }
+
+        // 初始化排行榜管理器 (使用 StorageProvider)
+        if (storageProvider != null) {
+            leaderboardManager = new com.smile.aceeconomy.manager.LeaderboardManager(this, storageProvider);
 
             // 初始化玩家快取管理器
-            userCacheManager = new com.smile.aceeconomy.manager.UserCacheManager(databaseConnection, getLogger());
+            userCacheManager = new com.smile.aceeconomy.manager.UserCacheManager(storageProvider, getLogger());
             Bukkit.getPluginManager().registerEvents(
                     new com.smile.aceeconomy.listeners.PlayerConnectionListener(userCacheManager), this);
         } else {
@@ -135,30 +143,36 @@ public final class AceEconomy extends JavaPlugin implements Listener {
      * </p>
      */
     private void initializeStorage() {
-        String storageType = configManager.getDatabaseType();
+        try {
+            // 使用 Factory 創建 StorageProvider
+            // 若為 JSON 模式，StorageFactory 目前只支援 SQL，所以需檢查設定
+            String storageType = configManager.getDatabaseType();
 
-        if ("mysql".equalsIgnoreCase(storageType) || "sqlite".equalsIgnoreCase(storageType)) {
-            // SQL 儲存
-            databaseConnection = new DatabaseConnection(this);
-            if (databaseConnection.initialize()) {
-                // 執行資料庫遷移
-                com.smile.aceeconomy.storage.SchemaManager schemaManager = new com.smile.aceeconomy.storage.SchemaManager(
-                        this, databaseConnection);
-                schemaManager.migrate();
-
-                storageHandler = new SQLStorageHandler(this, databaseConnection);
-                storageHandler.initialize();
-                getLogger().info("使用 " + storageType.toUpperCase() + " 儲存");
-            } else {
-                getLogger().severe("SQL 連線失敗，回退至 JSON 儲存");
+            if ("json".equalsIgnoreCase(storageType) || "yaml".equalsIgnoreCase(storageType)) {
                 storageHandler = new JsonStorageHandler(getDataFolder().toPath(), getLogger());
                 storageHandler.initialize();
+                getLogger().info("使用 JSON 儲存");
+                return;
             }
-        } else {
-            // JSON 儲存（預設）
+
+            storageProvider = com.smile.aceeconomy.storage.StorageFactory.create(this, configManager);
+            storageProvider.init();
+
+            // 為了向下相容，仍使用 StorageHandler 處理 Account 持久化
+            // StorageProvider 負責細粒度查詢 (balance, leaderboard, user cache)
+            storageHandler = new com.smile.aceeconomy.storage.implementation.SQLiteStorageAdapter(storageProvider);
+            storageHandler.initialize();
+
+            getLogger().info("使用 SQL 儲存系統 (" + storageType + ")");
+        } catch (Exception e) {
+            getLogger().severe("儲存系統初始化失敗: " + e.getMessage());
+            e.printStackTrace();
+            getLogger().severe("回退至 JSON 儲存");
             storageHandler = new JsonStorageHandler(getDataFolder().toPath(), getLogger());
             storageHandler.initialize();
-            getLogger().info("使用 JSON 儲存");
+
+            // 確保 storageProvider 為 null
+            storageProvider = null;
         }
     }
 
@@ -275,9 +289,9 @@ public final class AceEconomy extends JavaPlugin implements Listener {
             storageHandler.shutdown();
         }
 
-        // 關閉資料庫連線池
-        if (databaseConnection != null) {
-            databaseConnection.shutdown();
+        // 關閉 StorageProvider (包含連線池)
+        if (storageProvider != null) {
+            storageProvider.shutdown();
         }
 
         getLogger().info("AceEconomy 已停用！");

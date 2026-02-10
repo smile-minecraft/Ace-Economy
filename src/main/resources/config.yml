@@ -17,6 +17,10 @@ storage:
     database: aceeconomy
     username: root
     password: password
+    
+  # Connection Pool Settings
+  pool-size: 10
+  max-lifetime: 1800000
 
 # 一般設定
 settings:
@@ -48,9 +52,14 @@ discord:
   # 是否啟用 Discord 通知
   enabled: false
   # Webhook URL
-  webhook-url: ""
+  webhook-url: "https://discord.com/api/webhooks/..."
   # 僅記錄超過此金額的交易
-  min-amount: 10000.0
+  min-amount: 0.0
+  # 記錄事件類型
+  log-events:
+    transaction: true  # /pay
+    admin: true        # /aceeco set/give/take
+    server: true       # Plugin enable/disable
 
 # 排行榜設定
 leaderboard:

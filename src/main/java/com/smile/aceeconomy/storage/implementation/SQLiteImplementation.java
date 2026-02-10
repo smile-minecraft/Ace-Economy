@@ -1,0 +1,335 @@
+package com.smile.aceeconomy.storage.implementation;
+
+import com.smile.aceeconomy.AceEconomy;
+import com.smile.aceeconomy.manager.ConfigManager;
+import com.smile.aceeconomy.storage.SchemaManager;
+import com.smile.aceeconomy.storage.StorageProvider;
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
+
+import java.io.File;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.logging.Logger;
+
+/**
+ * SQLite 儲存實作。
+ * <p>
+ * 實作 {@link StorageProvider} 介面，使用 HikariCP 管理 SQLite 連線。
+ * 提供完整的非同步資料庫操作，包含餘額管理與玩家快取。
+ * </p>
+ *
+ * @author Smile
+ */
+public class SQLiteImplementation implements StorageProvider {
+
+    private final AceEconomy plugin;
+    private final ConfigManager configManager;
+    private final Logger logger;
+
+    private HikariDataSource dataSource;
+
+    // Table names
+    private static final String TABLE_BALANCES = "ace_balances";
+    private static final String TABLE_USERS = "ace_users";
+
+    /**
+     * 建立 SQLite 儲存實作。
+     *
+     * @param plugin        插件實例
+     * @param configManager 設定管理器
+     */
+    public SQLiteImplementation(AceEconomy plugin, ConfigManager configManager) {
+        this.plugin = plugin;
+        this.configManager = configManager;
+        this.logger = plugin.getLogger();
+    }
+
+    @Override
+    public void init() {
+        try {
+            // 設定 HikariCP
+            HikariConfig config = new HikariConfig();
+
+            File dbFile = new File(plugin.getDataFolder(), "database.db");
+            config.setDriverClassName("org.sqlite.JDBC");
+            config.setJdbcUrl("jdbc:sqlite:" + dbFile.getAbsolutePath());
+
+            // SQLite 連線池設定 (單一連線)
+            config.setPoolName("AceEconomy-SQLite-Pool");
+            config.setMaximumPoolSize(1);
+            config.setMinimumIdle(1);
+            config.setIdleTimeout(300000);
+            config.setMaxLifetime(600000);
+            config.setConnectionTimeout(10000);
+            config.setLeakDetectionThreshold(10000);
+
+            // SQLite 特殊設定 (WAL mode for better concurrency)
+            config.addDataSourceProperty("journal_mode", "WAL");
+
+            dataSource = new HikariDataSource(config);
+
+            // 測試連線
+            try (Connection conn = dataSource.getConnection()) {
+                logger.info("[AceEconomy] SQLite 連線池初始化成功: " + dbFile.getAbsolutePath());
+            }
+
+            // 執行資料庫遷移
+            SchemaManager schemaManager = new SchemaManager(plugin, this::getConnection, false);
+            schemaManager.migrate();
+
+            logger.info("[AceEconomy] SQLite 儲存提供者初始化完成");
+
+        } catch (SQLException e) {
+            logger.severe("SQLite 初始化失敗: " + e.getMessage());
+            e.printStackTrace();
+            throw new RuntimeException("Failed to initialize SQLite storage", e);
+        }
+    }
+
+    @Override
+    public void shutdown() {
+        if (dataSource != null && !dataSource.isClosed()) {
+            dataSource.close();
+            logger.info("[AceEconomy] SQLite 連線池已關閉");
+        }
+    }
+
+    /**
+     * 取得資料庫連線 (供 SchemaManager 使用)。
+     *
+     * @return 資料庫連線
+     * @throws SQLException 若無法取得連線
+     */
+    public Connection getConnection() throws SQLException {
+        if (dataSource == null || dataSource.isClosed()) {
+            throw new SQLException("資料庫連線池未初始化或已關閉");
+        }
+        return dataSource.getConnection();
+    }
+
+    /**
+     * 檢查連線池是否健康。
+     *
+     * @return 連線池是否健康
+     */
+    public boolean isHealthy() {
+        if (dataSource == null || dataSource.isClosed()) {
+            return false;
+        }
+        try (Connection conn = dataSource.getConnection()) {
+            return conn.isValid(5);
+        } catch (SQLException e) {
+            return false;
+        }
+    }
+
+    @Override
+    public CompletableFuture<Double> getBalance(UUID uuid, String currency) {
+        return CompletableFuture.supplyAsync(() -> {
+            String sql = "SELECT balance FROM " + TABLE_BALANCES + " WHERE uuid = ? AND currency_id = ?";
+            try (Connection conn = dataSource.getConnection();
+                    PreparedStatement pstmt = conn.prepareStatement(sql)) {
+
+                pstmt.setString(1, uuid.toString());
+                pstmt.setString(2, currency);
+
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    if (rs.next()) {
+                        return rs.getDouble("balance");
+                    }
+                }
+
+            } catch (SQLException e) {
+                logger.severe("取得餘額時發生錯誤 (" + uuid + ", " + currency + "): " + e.getMessage());
+                e.printStackTrace();
+            }
+
+            return 0.0;
+        });
+    }
+
+    @Override
+    public CompletableFuture<Map<String, Double>> getBalances(UUID uuid) {
+        return CompletableFuture.supplyAsync(() -> {
+            Map<String, Double> balances = new HashMap<>();
+            String sql = "SELECT currency_id, balance FROM " + TABLE_BALANCES + " WHERE uuid = ?";
+            try (Connection conn = dataSource.getConnection();
+                    PreparedStatement pstmt = conn.prepareStatement(sql)) {
+
+                pstmt.setString(1, uuid.toString());
+
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    while (rs.next()) {
+                        balances.put(rs.getString("currency_id"), rs.getDouble("balance"));
+                    }
+                }
+
+            } catch (SQLException e) {
+                logger.severe("取得玩家所有餘額失敗 (" + uuid + "): " + e.getMessage());
+                e.printStackTrace();
+            }
+
+            return balances;
+        });
+    }
+
+    @Override
+    public CompletableFuture<Void> setBalance(UUID uuid, String currency, double amount) {
+        return CompletableFuture.runAsync(() -> {
+            String sql = """
+                    INSERT INTO %s (uuid, currency_id, balance, username, last_updated)
+                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(uuid, currency_id) DO UPDATE SET
+                        balance = excluded.balance,
+                        last_updated = CURRENT_TIMESTAMP
+                    """.formatted(TABLE_BALANCES);
+
+            try (Connection conn = dataSource.getConnection();
+                    PreparedStatement pstmt = conn.prepareStatement(sql)) {
+
+                pstmt.setString(1, uuid.toString());
+                pstmt.setString(2, currency);
+                pstmt.setDouble(3, amount);
+
+                // 嘗試從 ace_users 取得 username
+                String username = getNameByUuidSync(uuid);
+                pstmt.setString(4, username);
+
+                pstmt.executeUpdate();
+
+            } catch (SQLException e) {
+                logger.severe("設定餘額時發生錯誤 (" + uuid + ", " + currency + "): " + e.getMessage());
+                e.printStackTrace();
+            }
+        });
+    }
+
+    @Override
+    public CompletableFuture<Map<String, Double>> getTopAccounts(String currency, int limit) {
+        return CompletableFuture.supplyAsync(() -> {
+            Map<String, Double> leaderboard = new HashMap<>();
+
+            String sql = """
+                    SELECT username, balance FROM %s
+                    WHERE currency_id = ? AND username IS NOT NULL
+                    ORDER BY balance DESC
+                    LIMIT ?
+                    """.formatted(TABLE_BALANCES);
+
+            try (Connection conn = dataSource.getConnection();
+                    PreparedStatement pstmt = conn.prepareStatement(sql)) {
+
+                pstmt.setString(1, currency);
+                pstmt.setInt(2, limit);
+
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    while (rs.next()) {
+                        String username = rs.getString("username");
+                        double balance = rs.getDouble("balance");
+                        leaderboard.put(username, balance);
+                    }
+                }
+
+            } catch (SQLException e) {
+                logger.severe("查詢排行榜時發生錯誤 (" + currency + "): " + e.getMessage());
+                e.printStackTrace();
+            }
+
+            return leaderboard;
+        });
+    }
+
+    @Override
+    public CompletableFuture<UUID> getUuidByName(String name) {
+        if (name == null || name.isBlank()) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        return CompletableFuture.supplyAsync(() -> {
+            String sql = "SELECT uuid FROM " + TABLE_USERS + " WHERE LOWER(username) = LOWER(?)";
+            try (Connection conn = dataSource.getConnection();
+                    PreparedStatement pstmt = conn.prepareStatement(sql)) {
+
+                pstmt.setString(1, name.trim());
+
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    if (rs.next()) {
+                        return UUID.fromString(rs.getString("uuid"));
+                    }
+                }
+
+            } catch (SQLException e) {
+                logger.warning("查詢玩家 UUID 失敗 (" + name + "): " + e.getMessage());
+            }
+
+            return null;
+        });
+    }
+
+    @Override
+    public CompletableFuture<String> getNameByUuid(UUID uuid) {
+        if (uuid == null) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        return CompletableFuture.supplyAsync(() -> getNameByUuidSync(uuid));
+    }
+
+    /**
+     * 同步版本的 getNameByUuid (內部使用)。
+     *
+     * @param uuid 玩家 UUID
+     * @return 玩家名稱，若找不到則回傳 "Unknown"
+     */
+    private String getNameByUuidSync(UUID uuid) {
+        String sql = "SELECT username FROM " + TABLE_USERS + " WHERE uuid = ?";
+        try (Connection conn = dataSource.getConnection();
+                PreparedStatement pstmt = conn.prepareStatement(sql)) {
+
+            pstmt.setString(1, uuid.toString());
+
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getString("username");
+                }
+            }
+
+        } catch (SQLException e) {
+            logger.warning("查詢玩家名稱失敗 (" + uuid + "): " + e.getMessage());
+        }
+
+        return "Unknown";
+    }
+
+    @Override
+    public CompletableFuture<Void> updatePlayerName(UUID uuid, String name) {
+        return CompletableFuture.runAsync(() -> {
+            String sql = """
+                    INSERT INTO %s (uuid, username, last_seen)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(uuid) DO UPDATE SET
+                        username = excluded.username,
+                        last_seen = excluded.last_seen
+                    """.formatted(TABLE_USERS);
+
+            try (Connection conn = dataSource.getConnection();
+                    PreparedStatement pstmt = conn.prepareStatement(sql)) {
+
+                pstmt.setString(1, uuid.toString());
+                pstmt.setString(2, name);
+                pstmt.setLong(3, System.currentTimeMillis());
+                pstmt.executeUpdate();
+
+            } catch (SQLException e) {
+                logger.warning("更新玩家名稱快取失敗 (" + name + "): " + e.getMessage());
+            }
+        });
+    }
+}

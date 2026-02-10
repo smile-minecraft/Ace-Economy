@@ -21,7 +21,7 @@ import java.util.logging.Logger;
  */
 public class UserCacheManager {
 
-    private final DatabaseConnection databaseConnection;
+    private final com.smile.aceeconomy.storage.StorageProvider storageProvider;
     private final Logger logger;
 
     private static final String TABLE_NAME = "ace_users";
@@ -39,7 +39,7 @@ public class UserCacheManager {
             VALUES (?, ?, ?)
             ON CONFLICT(uuid) DO UPDATE SET
                 username = excluded.username,
-                last_seen = excluded.last_seen
+                last_seen = excluded.last_seen)
             """.formatted(TABLE_NAME);
 
     private static final String SELECT_UUID = "SELECT uuid FROM %s WHERE LOWER(username) = LOWER(?)"
@@ -50,11 +50,11 @@ public class UserCacheManager {
     /**
      * 建立玩家名稱快取管理器。
      *
-     * @param databaseConnection 資料庫連線管理器
-     * @param logger             日誌記錄器
+     * @param storageProvider 儲存提供者
+     * @param logger          日誌記錄器
      */
-    public UserCacheManager(DatabaseConnection databaseConnection, Logger logger) {
-        this.databaseConnection = databaseConnection;
+    public UserCacheManager(com.smile.aceeconomy.storage.StorageProvider storageProvider, Logger logger) {
+        this.storageProvider = storageProvider;
         this.logger = logger;
     }
 
@@ -68,20 +68,7 @@ public class UserCacheManager {
      * @param username 玩家名稱
      */
     public void updateCache(UUID uuid, String username) {
-        CompletableFuture.runAsync(() -> {
-            String sql = databaseConnection.isMySQL() ? UPSERT_MYSQL : UPSERT_SQLITE;
-            try (Connection conn = databaseConnection.getConnection();
-                    PreparedStatement pstmt = conn.prepareStatement(sql)) {
-
-                pstmt.setString(1, uuid.toString());
-                pstmt.setString(2, username);
-                pstmt.setLong(3, System.currentTimeMillis());
-                pstmt.executeUpdate();
-
-            } catch (SQLException e) {
-                logger.warning("更新玩家快取失敗 (" + username + "): " + e.getMessage());
-            }
-        });
+        storageProvider.updatePlayerName(uuid, username);
     }
 
     /**
@@ -94,27 +81,7 @@ public class UserCacheManager {
      * @return 包含 UUID 的 CompletableFuture，若找不到則為 null
      */
     public CompletableFuture<UUID> getUUID(String username) {
-        if (username == null || username.isBlank()) {
-            return CompletableFuture.completedFuture(null);
-        }
-
-        return CompletableFuture.supplyAsync(() -> {
-            try (Connection conn = databaseConnection.getConnection();
-                    PreparedStatement pstmt = conn.prepareStatement(SELECT_UUID)) {
-
-                pstmt.setString(1, username.trim());
-
-                try (ResultSet rs = pstmt.executeQuery()) {
-                    if (rs.next()) {
-                        return UUID.fromString(rs.getString("uuid"));
-                    }
-                }
-
-            } catch (SQLException e) {
-                logger.warning("查詢玩家 UUID 失敗 (" + username + "): " + e.getMessage());
-            }
-            return null;
-        });
+        return storageProvider.getUuidByName(username);
     }
 
     /**
@@ -127,26 +94,6 @@ public class UserCacheManager {
      * @return 包含玩家名稱的 CompletableFuture，若找不到則為 null
      */
     public CompletableFuture<String> getName(UUID uuid) {
-        if (uuid == null) {
-            return CompletableFuture.completedFuture(null);
-        }
-
-        return CompletableFuture.supplyAsync(() -> {
-            try (Connection conn = databaseConnection.getConnection();
-                    PreparedStatement pstmt = conn.prepareStatement(SELECT_NAME)) {
-
-                pstmt.setString(1, uuid.toString());
-
-                try (ResultSet rs = pstmt.executeQuery()) {
-                    if (rs.next()) {
-                        return rs.getString("username");
-                    }
-                }
-
-            } catch (SQLException e) {
-                logger.warning("查詢玩家名稱失敗 (" + uuid + "): " + e.getMessage());
-            }
-            return null;
-        });
+        return storageProvider.getNameByUuid(uuid);
     }
 }

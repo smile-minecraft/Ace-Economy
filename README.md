@@ -6,6 +6,18 @@ AceEconomy 是一個專為現代 Minecraft 伺服器設計的高效能、**相�
 
 ---
 
+## 📚 Documentation / 說明文件
+
+We have detailed documentation available in the `docs` folder:
+我們在 `docs` 資料夾中提供了詳細的文件：
+
+- **[Installation & Configuration / 安裝與設定](docs/config.md)**
+- **[Commands & Permissions / 指令與權限](docs/commands.md)**
+- **[Database & Rollback System / 資料庫與回溯系統](docs/database.md)**
+- **[Localization & Translation / 在地化與翻譯](docs/localization.md)**
+
+---
+
 ## Features / 功能特色
 
 - **Folia & Paper Supported**: optimized for regionized multithreading.
@@ -36,7 +48,8 @@ AceEconomy 是一個專為現代 Minecraft 伺服器設計的高效能、**相�
 - **Java**: 21 or higher / 21 或更高版本
 - **Server Software / 伺服器軟體**: Paper 1.21+ or Folia 1.21+
 - **Dependencies / 必要插件**:
-  - [Vault](https://www.spigotmc.org/resources/vault.34315/)
+  - **Vault** (For Paper servers / 適用於 Paper)
+  - **[Vault Unlocked](https://github.com/Jikoo/Vault-Unlocked)** (Required for **Folia** servers / **Folia** 伺服器必須使用此版本)
 
 ---
 
@@ -46,69 +59,36 @@ AceEconomy 是一個專為現代 Minecraft 伺服器設計的高效能、**相�
    從發布頁面下載最新的 `AceEconomy.jar`。
 2. Place the jar file into your server's `plugins` folder.
    將 jar 檔案放入伺服器的 `plugins` 資料夾中。
-3. Ensure **Vault** is installed on your server.
-   確保伺服器已安裝 **Vault**。
+3. Install **Vault** (or **Vault Unlocked** for Folia).
+   安裝 **Vault** (如果是 Folia 則安裝 **Vault Unlocked**)。
 4. (Optional) Install **PlaceholderAPI** for placeholder support.
    (選用) 安裝 **PlaceholderAPI** 以獲得變數支援。
 5. Restart your server.
    重新啟動伺服器。
 6. Configure `config.yml` to set up your database and preferences.
-   設定 `config.yml` 以配置資料庫與偏好設定。
+   設定 `config.yml` 以配置資料庫與偏好設定。詳情請見 **[設定指南](docs/config.md)**。
 
 ---
 
-## Commands & Permissions / 指令與權限
+## Commands / 指令
 
-### User Commands / 玩家指令
+> For a full list of permissions and admin commands, please check the **[Commands Wiki](docs/commands.md)**.
+> 完整權限與管理指令列表請參閱 **[指令與權限](docs/commands.md)**。
 
-| Command / 指令 | Alias / 別名 | Description / 描述 | Permission / 權限 |
-|---|---|---|---|
-| `/money` | `/bal`, `/balance` | Check your account balance.<br>查看帳戶餘額。 | `aceeconomy.use` |
-| `/pay <player> <amount>` | | Transfer money to another player.<br>轉帳給其他玩家。 | `aceeconomy.pay` |
-| `/withdraw <amount>` | | Withdraw money as a banknote.<br>提領銀行支票。 | `aceeconomy.withdraw` |
-| `/baltop [page]` | `/top`, `/balancetop` | View the top richest players.<br>查看富豪排行榜。 | `aceeconomy.command.baltop` |
-
-### Admin Commands /管理指令
-
-Base Command: `/aceeco` (Alias configurable in config.yml)
-主指令：`/aceeco`（可在 config.yml 中設定別名）
-
-Permission: `aceeconomy.admin`
-
-| Subcommand / 子指令 | Description / 描述 |
+| Command / 指令 | Description / 描述 |
 |---|---|
-| `give <player> <amount>` | Give money to a player.<br>給予玩家金錢。 |
-| `take <player> <amount>` | Take money from a player.<br>扣除玩家金錢。 |
-| `set <player> <amount>` | Set a player's balance.<br>設定玩家餘額。 |
-| `history <player>` | View a player's transaction history.<br>查看玩家交易記錄。 |
-| `rollback <player> <id>` | Rollback a specific transaction.<br>回溯特定交易。 |
-| `reload` | Reload configuration files.<br>重新載入設定檔。 | (Perm: `aceeconomy.command.reload`) |
-
----
-
-## Configuration / 設定說明
-
-### Database / 資料庫
-You can choose between `sqlite` (default, file-based) or `mysql` in `config.yml`. For production servers or networks, **MySQL** is recommended.
-您可以在 `config.yml` 中選擇 `sqlite`（預設，檔案型）或 `mysql`。對於正式伺服器或群組服，建議使用 **MySQL**。
-
-### Discord Webhook
-Enable Discord features to log transactions directly to your staff channel.
-啟用 Discord 功能可將交易記錄直接發送到管理頻道。
-
-```yaml
-discord:
-  enabled: true
-  webhook-url: "YOUR_WEBHOOK_URL"
-  min-amount: 10000.0 # Log transactions above this amount / 記錄超過此金額的交易
-```
+| `/money` | Check your account balance.<br>查看帳戶餘額。 |
+| `/pay <player> <amount>` | Transfer money to another player.<br>轉帳給其他玩家。 |
+| `/withdraw <amount>` | Withdraw money as a banknote.<br>提領銀行支票。 |
+| `/baltop` | View the top richest players.<br>查看富豪排行榜。 |
+| `/aceeco` | Admin main command.<br>管理員主指令。 |
 
 ---
 
 ## Contributing / 如何貢獻
 
-We welcome contributions! Please follow these steps:
-我們歡迎您的貢獻！請遵循以下步驟：
+We welcome contributions! Please see **[Localization Guide](docs/localization.md)** for translation contributions.
+我們歡迎您的貢獻！翻譯貢獻請參閱 **[在地化指南](docs/localization.md)**。
 
 1. **Fork** the repository.
    **Fork** 此專案。

@@ -1,0 +1,315 @@
+package com.smile.aceeconomy.storage.implementation;
+
+import com.smile.aceeconomy.AceEconomy;
+import com.smile.aceeconomy.manager.ConfigManager;
+import com.smile.aceeconomy.storage.SchemaManager;
+import com.smile.aceeconomy.storage.StorageProvider;
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
+
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.logging.Logger;
+
+/**
+ * MySQL 儲存實作。
+ * <p>
+ * 實作 {@link StorageProvider} 介面，使用 HikariCP 管理 MySQL/MariaDB 連線。
+ * 針對 MySQL 進行最佳化，包含 Prepared Statement 快取與連線池設定。
+ * </p>
+ *
+ * @author Smile
+ */
+public class MySQLImplementation implements StorageProvider {
+
+    private final AceEconomy plugin;
+    private final ConfigManager configManager;
+    private final Logger logger;
+
+    private HikariDataSource dataSource;
+
+    // Table names
+    private static final String TABLE_BALANCES = "ace_balances";
+    private static final String TABLE_USERS = "ace_users";
+
+    public MySQLImplementation(AceEconomy plugin, ConfigManager configManager) {
+        this.plugin = plugin;
+        this.configManager = configManager;
+        this.logger = plugin.getLogger();
+    }
+
+    @Override
+    public void init() {
+        try {
+            HikariConfig config = new HikariConfig();
+
+            // 基本連線設定
+            config.setJdbcUrl("jdbc:mysql://" + configManager.getMySQLHost() + ":" + configManager.getMySQLPort() + "/"
+                    + configManager.getMySQLDatabase());
+            config.setUsername(configManager.getMySQLUsername());
+            config.setPassword(configManager.getMySQLPassword());
+
+            // 嘗試偵測並使用 MariaDB 驅動，否則使用 MySQL 驅動
+            try {
+                Class.forName("org.mariadb.jdbc.Driver");
+                config.setDriverClassName("org.mariadb.jdbc.Driver");
+            } catch (ClassNotFoundException e) {
+                config.setDriverClassName("com.mysql.cj.jdbc.Driver");
+            }
+
+            // 連線池設定
+            config.setPoolName("AceEconomy-MySQL-Pool");
+            config.setMaximumPoolSize(configManager.getPoolSize());
+            config.setMinimumIdle(Math.max(1, configManager.getPoolSize() / 4));
+            config.setMaxLifetime(configManager.getMaxLifetime());
+            config.setConnectionTimeout(10000);
+            config.setLeakDetectionThreshold(10000);
+
+            // MySQL 效能優化參數
+            config.addDataSourceProperty("cachePrepStmts", "true");
+            config.addDataSourceProperty("prepStmtCacheSize", "250");
+            config.addDataSourceProperty("prepStmtCacheSqlLimit", "2048");
+            config.addDataSourceProperty("useServerPrepStmts", "true");
+            config.addDataSourceProperty("useLocalSessionState", "true");
+            config.addDataSourceProperty("rewriteBatchedStatements", "true");
+            config.addDataSourceProperty("cacheResultSetMetadata", "true");
+            config.addDataSourceProperty("cacheServerConfiguration", "true");
+            config.addDataSourceProperty("elideSetAutoCommits", "true");
+            config.addDataSourceProperty("maintainTimeStats", "false");
+
+            if (configManager.isSsl()) {
+                config.addDataSourceProperty("useSSL", "true");
+                config.addDataSourceProperty("requireSSL", "true");
+            } else {
+                config.addDataSourceProperty("useSSL", "false");
+            }
+
+            dataSource = new HikariDataSource(config);
+
+            // 測試連線
+            try (Connection conn = dataSource.getConnection()) {
+                logger.info("[AceEconomy] MySQL 連線池初始化成功");
+            }
+
+            // 執行資料庫遷移
+            // 注意：SchemaManager 目前設計是共用的，需要確認是否支援 MySQL 語法差異
+            // SchemaManager 內部會檢查 isMySQL()，但這依賴 DatabaseConnection
+            // 我們可能需要更新 SchemaManager 來接受 StorageProvider 或直接在此處理
+            // 暫時使用相容模式
+            // TODO: Update SchemaManager to properly handle MySQL via StorageProvider
+
+        } catch (SQLException e) {
+            logger.severe("MySQL 初始化失敗: " + e.getMessage());
+            e.printStackTrace();
+            throw new RuntimeException("Failed to initialize MySQL storage", e);
+        }
+    }
+
+    @Override
+    public void shutdown() {
+        if (dataSource != null && !dataSource.isClosed()) {
+            dataSource.close();
+            logger.info("[AceEconomy] MySQL 連線池已關閉");
+        }
+    }
+
+    public Connection getConnection() throws SQLException {
+        if (dataSource == null || dataSource.isClosed()) {
+            throw new SQLException("資料庫連線池未初始化或已關閉");
+        }
+        return dataSource.getConnection();
+    }
+
+    public boolean isHealthy() {
+        if (dataSource == null || dataSource.isClosed()) {
+            return false;
+        }
+        try (Connection conn = dataSource.getConnection()) {
+            return conn.isValid(5); // 5 seconds timeout
+        } catch (SQLException e) {
+            return false;
+        }
+    }
+
+    @Override
+    public CompletableFuture<Double> getBalance(UUID uuid, String currency) {
+        return CompletableFuture.supplyAsync(() -> {
+            String sql = "SELECT balance FROM " + TABLE_BALANCES + " WHERE uuid = ? AND currency_id = ?";
+            try (Connection conn = dataSource.getConnection();
+                    PreparedStatement pstmt = conn.prepareStatement(sql)) {
+
+                pstmt.setString(1, uuid.toString());
+                pstmt.setString(2, currency);
+
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    if (rs.next()) {
+                        return rs.getDouble("balance");
+                    }
+                }
+            } catch (SQLException e) {
+                logger.severe("取得餘額錯誤 (" + uuid + "): " + e.getMessage());
+                e.printStackTrace();
+            }
+            return 0.0;
+        });
+    }
+
+    @Override
+    public CompletableFuture<Map<String, Double>> getBalances(UUID uuid) {
+        return CompletableFuture.supplyAsync(() -> {
+            Map<String, Double> balances = new HashMap<>();
+            String sql = "SELECT currency_id, balance FROM " + TABLE_BALANCES + " WHERE uuid = ?";
+            try (Connection conn = dataSource.getConnection();
+                    PreparedStatement pstmt = conn.prepareStatement(sql)) {
+
+                pstmt.setString(1, uuid.toString());
+
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    while (rs.next()) {
+                        balances.put(rs.getString("currency_id"), rs.getDouble("balance"));
+                    }
+                }
+            } catch (SQLException e) {
+                logger.severe("取得玩家所有餘額錯誤 (" + uuid + "): " + e.getMessage());
+                e.printStackTrace();
+            }
+            return balances;
+        });
+    }
+
+    @Override
+    public CompletableFuture<Void> setBalance(UUID uuid, String currency, double amount) {
+        return CompletableFuture.runAsync(() -> {
+            // MySQL Syntax: INSERT ... ON DUPLICATE KEY UPDATE
+            String sql = """
+                    INSERT INTO %s (uuid, currency_id, balance, username, last_updated)
+                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON DUPLICATE KEY UPDATE
+                        balance = VALUES(balance),
+                        last_updated = CURRENT_TIMESTAMP
+                    """.formatted(TABLE_BALANCES);
+
+            try (Connection conn = dataSource.getConnection();
+                    PreparedStatement pstmt = conn.prepareStatement(sql)) {
+
+                pstmt.setString(1, uuid.toString());
+                pstmt.setString(2, currency);
+                pstmt.setDouble(3, amount);
+
+                String username = getNameByUuidSync(uuid);
+                pstmt.setString(4, username);
+
+                pstmt.executeUpdate();
+            } catch (SQLException e) {
+                logger.severe("設定餘額錯誤 (" + uuid + "): " + e.getMessage());
+                e.printStackTrace();
+            }
+        });
+    }
+
+    @Override
+    public CompletableFuture<Map<String, Double>> getTopAccounts(String currency, int limit) {
+        return CompletableFuture.supplyAsync(() -> {
+            Map<String, Double> leaderboard = new HashMap<>();
+            String sql = """
+                    SELECT username, balance FROM %s
+                    WHERE currency_id = ? AND username IS NOT NULL
+                    ORDER BY balance DESC
+                    LIMIT ?
+                    """.formatted(TABLE_BALANCES);
+
+            try (Connection conn = dataSource.getConnection();
+                    PreparedStatement pstmt = conn.prepareStatement(sql)) {
+
+                pstmt.setString(1, currency);
+                pstmt.setInt(2, limit);
+
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    while (rs.next()) {
+                        leaderboard.put(rs.getString("username"), rs.getDouble("balance"));
+                    }
+                }
+            } catch (SQLException e) {
+                logger.severe("排行榜查詢錯誤: " + e.getMessage());
+                e.printStackTrace();
+            }
+            return leaderboard;
+        });
+    }
+
+    @Override
+    public CompletableFuture<UUID> getUuidByName(String name) {
+        if (name == null || name.isBlank())
+            return CompletableFuture.completedFuture(null);
+
+        return CompletableFuture.supplyAsync(() -> {
+            String sql = "SELECT uuid FROM " + TABLE_USERS + " WHERE LOWER(username) = LOWER(?)";
+            try (Connection conn = dataSource.getConnection();
+                    PreparedStatement pstmt = conn.prepareStatement(sql)) {
+
+                pstmt.setString(1, name.trim());
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    if (rs.next()) {
+                        return UUID.fromString(rs.getString("uuid"));
+                    }
+                }
+            } catch (SQLException e) {
+                logger.warning("查詢 UUID 失敗 (" + name + "): " + e.getMessage());
+            }
+            return null;
+        });
+    }
+
+    @Override
+    public CompletableFuture<String> getNameByUuid(UUID uuid) {
+        if (uuid == null)
+            return CompletableFuture.completedFuture(null);
+        return CompletableFuture.supplyAsync(() -> getNameByUuidSync(uuid));
+    }
+
+    private String getNameByUuidSync(UUID uuid) {
+        String sql = "SELECT username FROM " + TABLE_USERS + " WHERE uuid = ?";
+        try (Connection conn = dataSource.getConnection();
+                PreparedStatement pstmt = conn.prepareStatement(sql)) {
+
+            pstmt.setString(1, uuid.toString());
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (rs.next())
+                    return rs.getString("username");
+            }
+        } catch (SQLException e) {
+            logger.warning("查詢名稱失敗 (" + uuid + "): " + e.getMessage());
+        }
+        return "Unknown";
+    }
+
+    @Override
+    public CompletableFuture<Void> updatePlayerName(UUID uuid, String name) {
+        return CompletableFuture.runAsync(() -> {
+            String sql = """
+                    INSERT INTO %s (uuid, username, last_seen)
+                    VALUES (?, ?, ?)
+                    ON DUPLICATE KEY UPDATE
+                        username = VALUES(username),
+                        last_seen = VALUES(last_seen)
+                    """.formatted(TABLE_USERS);
+
+            try (Connection conn = dataSource.getConnection();
+                    PreparedStatement pstmt = conn.prepareStatement(sql)) {
+
+                pstmt.setString(1, uuid.toString());
+                pstmt.setString(2, name);
+                pstmt.setLong(3, System.currentTimeMillis());
+                pstmt.executeUpdate();
+            } catch (SQLException e) {
+                logger.warning("更新名稱快取失敗: " + e.getMessage());
+            }
+        });
+    }
+}

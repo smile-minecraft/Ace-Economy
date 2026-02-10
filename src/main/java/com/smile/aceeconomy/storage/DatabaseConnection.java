@@ -17,7 +17,10 @@ import java.util.logging.Logger;
  * </p>
  *
  * @author Smile
+ * @deprecated This class will be removed in v1.5.0. Use {@link StorageProvider}
+ *             implementations instead.
  */
+@Deprecated
 public class DatabaseConnection {
 
     private final AceEconomy plugin;
