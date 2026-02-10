@@ -14,7 +14,6 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
@@ -99,20 +98,13 @@ public class BalanceCommand implements CommandExecutor, TabCompleter {
                     Placeholder.parsed("amount", formattedBalance));
         } else {
             // 離線玩家 - 非同步查詢
-            Bukkit.getAsyncScheduler().runNow(plugin, task -> {
-                org.bukkit.OfflinePlayer offlinePlayer = Bukkit.getOfflinePlayer(targetName);
-                // offlinePlayer.getUniqueId() is safe, but getting name might be tricky if not
-                // cached.
-                // But Bukkit.getOfflinePlayer(name) returns an object that has name if
-                // resolved.
-                // If not played before, UUID might be random (UUID version 3).
-
-                if (!offlinePlayer.hasPlayedBefore() && !offlinePlayer.isOnline()) {
-                    plugin.getMessageManager().send(sender, "player-offline", Placeholder.parsed("player", targetName));
+            plugin.getUserCacheManager().getUUID(targetName).thenAccept(uuid -> {
+                if (uuid == null) {
+                    plugin.getMessageManager().send(sender, "player-not-found",
+                            Placeholder.parsed("player", targetName));
                     return;
                 }
 
-                UUID uuid = offlinePlayer.getUniqueId();
                 plugin.getStorageHandler().loadAccount(uuid).thenAccept(account -> {
                     if (account == null) {
                         plugin.getMessageManager().send(sender, "account-not-found");
@@ -121,8 +113,7 @@ public class BalanceCommand implements CommandExecutor, TabCompleter {
                         String formattedBalance = plugin.getConfigManager().formatMoney(balance, finalCurrencyId);
 
                         plugin.getMessageManager().send(sender, "balance-other",
-                                Placeholder.parsed("player",
-                                        offlinePlayer.getName() != null ? offlinePlayer.getName() : targetName),
+                                Placeholder.parsed("player", targetName),
                                 Placeholder.parsed("currency_name", currencyName),
                                 Placeholder.parsed("amount", formattedBalance));
                     }

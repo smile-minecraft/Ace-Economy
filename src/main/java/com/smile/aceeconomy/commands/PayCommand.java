@@ -1,7 +1,6 @@
 package com.smile.aceeconomy.commands;
 
 import com.smile.aceeconomy.AceEconomy;
-import com.smile.aceeconomy.api.EconomyProvider;
 import com.smile.aceeconomy.event.EconomyTransactionEvent;
 import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
 import org.bukkit.Bukkit;
@@ -29,7 +28,6 @@ import java.util.stream.Collectors;
 public class PayCommand implements CommandExecutor, TabCompleter {
 
     private final AceEconomy plugin;
-    private final EconomyProvider economyProvider;
 
     /**
      * 建立轉帳指令處理器。
@@ -38,7 +36,6 @@ public class PayCommand implements CommandExecutor, TabCompleter {
      */
     public PayCommand(AceEconomy plugin) {
         this.plugin = plugin;
-        this.economyProvider = plugin.getEconomyProvider();
     }
 
     @Override
@@ -66,6 +63,12 @@ public class PayCommand implements CommandExecutor, TabCompleter {
         String targetName = args[0];
         String amountStr = args[1];
 
+        // 防止轉給自己
+        if (targetName.equalsIgnoreCase(player.getName())) {
+            plugin.getMessageManager().send(sender, "cannot-pay-self");
+            return true;
+        }
+
         // 解析金額
         double amount;
         try {
@@ -81,25 +84,6 @@ public class PayCommand implements CommandExecutor, TabCompleter {
             return true;
         }
 
-        // 防止轉給自己
-        if (targetName.equalsIgnoreCase(player.getName())) {
-            plugin.getMessageManager().send(sender, "cannot-pay-self");
-            return true;
-        }
-
-        // 查找目標玩家
-        Player targetPlayer = Bukkit.getPlayer(targetName);
-        if (targetPlayer == null) {
-            plugin.getMessageManager().send(sender, "player-offline", Placeholder.parsed("player", targetName));
-            return true;
-        }
-
-        // 檢查目標玩家帳戶是否已載入
-        if (!economyProvider.hasAccount(targetPlayer.getUniqueId())) {
-            plugin.getMessageManager().send(sender, "account-not-loaded");
-            return true;
-        }
-
         // 取得貨幣 ID (可選參數)
         String currencyId = plugin.getCurrencyManager().getDefaultCurrencyId();
         if (args.length >= 3) {
@@ -112,7 +96,8 @@ public class PayCommand implements CommandExecutor, TabCompleter {
             currencyId = inputCurrency;
         }
 
-        // 檢查餘額是否足夠
+        // 檢查餘額是否足夠 (Check Sender Balance)
+        // 這裡在主線程檢查一次，稍後在 transfer 裡會再檢查原子性
         double currentBalance = plugin.getCurrencyManager().getBalance(player.getUniqueId(), currencyId);
         if (currentBalance < amount) {
             String currencyName = plugin.getConfigManager().getCurrency(currencyId).name();
@@ -122,38 +107,89 @@ public class PayCommand implements CommandExecutor, TabCompleter {
             return true;
         }
 
-        // 執行轉帳
-        final double finalAmount = amount;
+        // 查找目標玩家 (優先使用在線玩家)
+        Player onlineTarget = Bukkit.getPlayer(targetName);
+        if (onlineTarget != null) {
+            executeTransfer(player, onlineTarget.getUniqueId(), onlineTarget.getName(), amount, currencyId);
+            return true;
+        }
+
+        // 離線玩家處理 - 非同步查詢 UUID
         final String finalCurrencyId = currencyId;
-        String currencyName = plugin.getConfigManager().getCurrency(currencyId).name();
+        final double finalAmount = amount;
 
-        economyProvider.transfer(player.getUniqueId(), targetPlayer.getUniqueId(), currencyId, amount)
-                .thenAccept(success -> {
-                    if (success) {
-                        // 使用 configManager.formatMoney 來格式化金額（包含貨幣符號）
-                        String formattedAmount = plugin.getConfigManager().formatMoney(finalAmount, finalCurrencyId);
+        plugin.getUserCacheManager().getUUID(targetName).thenAccept(targetUuid -> {
+            if (targetUuid == null) {
+                // 資料庫也找不到 -> 真的找不到玩家
+                plugin.getMessageManager().send(sender, "player-not-found", Placeholder.parsed("player", targetName));
+                return;
+            }
 
-                        plugin.getMessageManager().send(player, "payment-sent-currency",
-                                Placeholder.parsed("amount", formattedAmount),
-                                Placeholder.parsed("currency_name", currencyName),
-                                Placeholder.parsed("player", targetPlayer.getName()));
-
-                        plugin.getMessageManager().send(targetPlayer, "payment-received-currency",
-                                Placeholder.parsed("amount", formattedAmount),
-                                Placeholder.parsed("currency_name", currencyName),
-                                Placeholder.parsed("player", player.getName()));
-
-                        EconomyTransactionEvent event = new EconomyTransactionEvent(
-                                player.getUniqueId(), player.getName(),
-                                targetPlayer.getUniqueId(), targetPlayer.getName(),
-                                finalAmount, EconomyTransactionEvent.TransactionType.PAY);
-                        Bukkit.getPluginManager().callEvent(event);
-                    } else {
-                        plugin.getMessageManager().send(player, "transaction-failed");
-                    }
-                });
+            // 執行轉帳
+            // 回到 Global or Main 執行 executeTransfer (雖然 transfer 本身又是 async)
+            // 這裡直接執行 executeTransfer 即可，因為它會調用 loadAccount
+            executeTransfer(player, targetUuid, targetName, finalAmount, finalCurrencyId);
+        });
 
         return true;
+    }
+
+    private void executeTransfer(Player sender, java.util.UUID targetUuid, String targetName, double amount,
+            String currencyId) {
+        // 先載入目標帳戶 (非同步)
+        plugin.getStorageHandler().loadAccount(targetUuid).thenAccept(targetAccount -> {
+            if (targetAccount == null) {
+                // 可能是新玩家還沒建立帳戶
+                plugin.getMessageManager().send(sender, "player-no-account");
+                return;
+            }
+
+            // 再次檢查餘額 (防止並發變動，雖然有點多餘但安全)
+            // 注意: 若 sender 在此期間下線，getBalance 依然可以從 cache 取到
+            double currentBalance = plugin.getCurrencyManager().getBalance(sender.getUniqueId(), currencyId);
+            if (currentBalance < amount) {
+                String currencyName = plugin.getConfigManager().getCurrency(currencyId).name();
+                plugin.getMessageManager().send(sender, "insufficient-funds-currency",
+                        Placeholder.parsed("currency_name", currencyName),
+                        Placeholder.parsed("amount", String.valueOf(amount)));
+                return;
+            }
+
+            // 執行轉帳
+            String currencyName = plugin.getConfigManager().getCurrency(currencyId).name();
+            plugin.getEconomyProvider().transfer(sender.getUniqueId(), targetUuid, currencyId, amount)
+                    .thenAccept(success -> {
+                        if (success) {
+                            String formattedAmount = plugin.getConfigManager().formatMoney(amount, currencyId);
+
+                            plugin.getMessageManager().send(sender, "payment-sent-currency",
+                                    Placeholder.parsed("amount", formattedAmount),
+                                    Placeholder.parsed("currency_name", currencyName),
+                                    Placeholder.parsed("player", targetName));
+
+                            // 如果目標在線，通知他
+                            Player onlineTarget = Bukkit.getPlayer(targetUuid);
+                            if (onlineTarget != null) {
+                                plugin.getMessageManager().send(onlineTarget, "payment-received-currency",
+                                        Placeholder.parsed("amount", formattedAmount),
+                                        Placeholder.parsed("currency_name", currencyName),
+                                        Placeholder.parsed("player", sender.getName()));
+                            }
+
+                            // 觸發事件 (需回到 Global Region 或 Main Thread)
+                            EconomyTransactionEvent event = new EconomyTransactionEvent(
+                                    sender.getUniqueId(), sender.getName(),
+                                    targetUuid, targetName,
+                                    amount, EconomyTransactionEvent.TransactionType.PAY);
+
+                            // Folia compatible
+                            Bukkit.getGlobalRegionScheduler().execute(plugin,
+                                    () -> Bukkit.getPluginManager().callEvent(event));
+                        } else {
+                            plugin.getMessageManager().send(sender, "transaction-failed");
+                        }
+                    });
+        });
     }
 
     @Override

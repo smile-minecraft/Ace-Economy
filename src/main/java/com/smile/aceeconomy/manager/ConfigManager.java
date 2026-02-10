@@ -482,8 +482,7 @@ public class ConfigManager {
      * @return 訊息前綴
      */
     public String getPrefix() {
-        // 委派給 MessageManager 或回傳空字串 (視需求而定，舊程式碼可能依賴此前綴)
-        return "";
+        return plugin.getMessageManager().getPrefix();
     }
 
     /**

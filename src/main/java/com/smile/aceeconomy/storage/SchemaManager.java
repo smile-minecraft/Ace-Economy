@@ -79,6 +79,9 @@ public class SchemaManager {
             if (currentVersion < 5) {
                 migrateV5(conn);
             }
+            if (currentVersion < 6) {
+                migrateV6(conn);
+            }
 
             logger.info("[AceEconomy] Database migration complete.");
 
@@ -468,6 +471,74 @@ public class SchemaManager {
                 conn.commit();
             recordMigration(conn, 5, "Multi-Currency Schema V5");
             logger.info("遷移 V5 成功！");
+
+        } catch (SQLException e) {
+            if (isMySQL)
+                conn.rollback();
+            throw e;
+        } finally {
+            conn.setAutoCommit(autoCommit);
+        }
+    }
+
+    /**
+     * V6: 建立 ace_users 表 (離線玩家名稱快取)。
+     * 從現有 ace_balances 表中匯入已知的 uuid/username 對應。
+     */
+    private void migrateV6(Connection conn) throws SQLException {
+        logger.info("[AceEconomy] Applying Migration V6: Create ace_users table...");
+
+        String tableName = "ace_users";
+
+        String createSql = isMySQL ? """
+                CREATE TABLE IF NOT EXISTS %s (
+                    uuid VARCHAR(36) PRIMARY KEY,
+                    username VARCHAR(16) NOT NULL,
+                    last_seen BIGINT NOT NULL DEFAULT 0,
+                    INDEX idx_username (username)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """.formatted(tableName) : """
+                CREATE TABLE IF NOT EXISTS %s (
+                    uuid TEXT PRIMARY KEY,
+                    username TEXT NOT NULL,
+                    last_seen INTEGER NOT NULL DEFAULT 0
+                )
+                """.formatted(tableName);
+
+        boolean autoCommit = conn.getAutoCommit();
+        try {
+            if (isMySQL)
+                conn.setAutoCommit(false);
+
+            try (Statement stmt = conn.createStatement()) {
+                stmt.execute(createSql);
+            }
+
+            // SQLite: 建立索引
+            if (!isMySQL) {
+                try (Statement stmt = conn.createStatement()) {
+                    stmt.executeUpdate("CREATE INDEX IF NOT EXISTS idx_username ON " + tableName + " (username)");
+                }
+            }
+
+            // 從 ace_balances 匯入已知玩家
+            if (tableExists(conn, "ace_balances") && !tableHasData(conn, tableName)) {
+                logger.info("正在從 ace_balances 匯入玩家名稱快取...");
+                String seedSql = isMySQL
+                        ? "INSERT IGNORE INTO " + tableName
+                                + " (uuid, username, last_seen) SELECT DISTINCT uuid, username, 0 FROM ace_balances WHERE username IS NOT NULL AND username != ''"
+                        : "INSERT OR IGNORE INTO " + tableName
+                                + " (uuid, username, last_seen) SELECT DISTINCT uuid, username, 0 FROM ace_balances WHERE username IS NOT NULL AND username != ''";
+                try (Statement stmt = conn.createStatement()) {
+                    int rows = stmt.executeUpdate(seedSql);
+                    logger.info("已匯入 " + rows + " 筆玩家資料至 ace_users。");
+                }
+            }
+
+            if (isMySQL)
+                conn.commit();
+            recordMigration(conn, 6, "Create ace_users table");
+            logger.info("遷移 V6 成功！");
 
         } catch (SQLException e) {
             if (isMySQL)

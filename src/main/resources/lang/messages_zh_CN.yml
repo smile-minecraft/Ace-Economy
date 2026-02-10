@@ -1,0 +1,67 @@
+# ============================================
+# AceEconomy 消息配置文件 (zh_CN)
+# 格式: MiniMessage
+# ============================================
+
+prefix: "<gold>[AceEconomy]</gold> <gray>"
+
+general:
+  no-permission: "<red>你没有权限使用此指令！</red>"
+  invalid-amount: "<red>无效的金额：<white><amount></white></red>"
+  amount-must-be-positive: "<red>金额必须大于 0！</red>"
+  player-not-found: "<red>找不到玩家：<white><player></white></red>"
+  player-offline: "<red>玩家 <white><player></white> 不在线！</red>"
+  player-no-account: "<red>该玩家没有账户数据！</red>"
+  account-not-loaded: "<red>账户尚未加载，请稍后再试！</red>"
+  inventory-full: "<red>背包已满，无法提现支票！</red>"
+  transaction-failed: "<red>交易失败！</red>"
+  transaction-cancelled: "<red>交易被取消！</red>"
+  reload-success: "<green>配置文件已重新加载！</green>"
+
+economy:
+  balance-check: "你的余额：<yellow><balance></yellow>"
+  balance-check-other: "<aqua><player></aqua> 的余额：<yellow><balance></yellow>"
+  balance-check-currency: "你的<currency_name>余额：<yellow><balance></yellow>"
+  balance-check-currency-other: "<aqua><player></aqua> 的<currency_name>余额：<yellow><balance></yellow>"
+
+  payment-sent: "<green>已转账 <yellow><amount></yellow> 给 <aqua><player></aqua>！</green>"
+  payment-received: "<green>收到来自 <aqua><player></aqua> 的转账：<yellow><amount></yellow></green>"
+  payment-sent-currency: "<green>已转账 <yellow><amount></yellow> <currency_name> 给 <aqua><player></aqua>！</green>"
+  payment-received-currency: "<green>收到来自 <aqua><player></aqua> 的转账：<yellow><amount></yellow> <currency_name></green>"
+
+  cannot-pay-self: "<red>你不能转账给自己！</red>"
+  insufficient-funds: "<red>余额不足！</red>"
+  insufficient-funds-currency: "<red>你的 <currency_name> 余额不足 (需要: <amount>)！</red>"
+  unknown-currency: "<red>错误: 找不到货币 <white><currency></white>。</red>"
+
+  withdraw-success: "<green>已提取支票：<yellow><amount></yellow></green>"
+  withdraw-redeem: "<green>已兑换支票：<yellow><amount></yellow> <gray>(签发人：<issuer>)</gray></green>"
+
+admin:
+  give: "<green>已给予 <aqua><player></aqua> <yellow><amount></yellow></green>"
+  take: "<green>已从 <aqua><player></aqua> 扣除 <yellow><amount></yellow></green>"
+  set: "<green>已将 <aqua><player></aqua> 的余额设为 <yellow><amount></yellow></green>"
+
+  give-currency: "<green>已给予 <aqua><player></aqua> <yellow><amount></yellow> <currency_name></green>"
+  take-currency: "<green>已从 <aqua><player></aqua> 扣除 <yellow><amount></yellow> <currency_name></green>"
+  set-currency: "<green>已将 <aqua><player></aqua> 的 <currency_name> 余额设为 <yellow><amount></yellow></green>"
+
+  notify-give: "<green>管理员给予你 <yellow><amount></yellow></green>"
+  notify-take: "<green>管理员扣除了你 <yellow><amount></yellow></green>"
+  notify-set: "<green>管理员将你的余额设为 <yellow><amount></yellow></green>"
+
+  notify-give-currency: "<green>管理员给予你 <yellow><amount></yellow> <currency_name></green>"
+  notify-take-currency: "<green>管理员扣除了你 <yellow><amount></yellow> <currency_name></green>"
+  notify-set-currency: "<green>管理员将你的 <currency_name> 余额设为 <yellow><amount></yellow></green>"
+
+  migration-start: "<yellow>开始从 <white><plugin></white> 导入数据...</yellow>"
+  migration-progress: "<gray>导入进度：<white><current>/<total></white></gray>"
+  migration-complete: "<green>迁移完成！成功：<white><success></white>，失败：<white><fail></white></green>"
+  migration-error: "<red>迁移失败：<white><error></white></red>"
+  migration-not-available: "<red>找不到 <white><plugin></white> 的数据文件夹！</red>"
+  migration-in-progress: "<red>已有迁移任务正在进行中！</red>"
+
+console:
+  start: "AceEconomy <version> 已启用！"
+  stop: "AceEconomy 已停用！"
+  migration-start: "开始从 <plugin> 迁移数据..."

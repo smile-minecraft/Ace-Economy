@@ -1,7 +1,6 @@
 package com.smile.aceeconomy.commands;
 
 import com.smile.aceeconomy.AceEconomy;
-import com.smile.aceeconomy.api.EconomyProvider;
 import com.smile.aceeconomy.event.EconomyTransactionEvent;
 import com.smile.aceeconomy.migration.CMIMigrator;
 import com.smile.aceeconomy.migration.EssentialsMigrator;
@@ -32,7 +31,6 @@ import java.util.stream.Collectors;
 public class AdminCommand implements CommandExecutor, TabCompleter {
 
     private final AceEconomy plugin;
-    private final EconomyProvider economyProvider;
 
     private com.smile.aceeconomy.manager.LogManager logManager;
     private CommandExecutor historyCommand;
@@ -50,7 +48,6 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
      */
     public AdminCommand(AceEconomy plugin) {
         this.plugin = plugin;
-        this.economyProvider = plugin.getEconomyProvider();
     }
 
     public void setLogManager(com.smile.aceeconomy.manager.LogManager logManager) {
@@ -149,22 +146,6 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
             return true;
         }
 
-        // 查找目標玩家
-        Player targetPlayer = Bukkit.getPlayer(targetName);
-        if (targetPlayer == null) {
-            // 嘗試離線操作
-            plugin.getMessageManager().send(sender, "player-offline", Placeholder.parsed("player", targetName));
-            // MessageUtils.send(sender, "<gray>（目前僅支援在線玩家操作）</gray>"); // MessageManager
-            // usually handles this context in the message itself or we add another key
-            return true;
-        }
-
-        // 檢查帳戶
-        if (!economyProvider.hasAccount(targetPlayer.getUniqueId())) {
-            plugin.getMessageManager().send(sender, "account-not-found");
-            return true;
-        }
-
         // 取得貨幣 ID (可選參數)
         String currencyId = plugin.getCurrencyManager().getDefaultCurrencyId();
         if (args.length >= 4) {
@@ -176,99 +157,119 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
             }
             currencyId = inputCurrency;
         }
-        String currencyName = plugin.getConfigManager().getCurrency(currencyId).name();
 
-        // 執行操作
         final double finalAmount = amount;
-        switch (action) {
-            case "give" -> {
-                if (amount <= 0) {
-                    plugin.getMessageManager().send(sender, "amount-must-be-positive");
-                    return true;
-                }
-                final String gCurrency = currencyId;
-                final String gCurrencyName = currencyName;
-                economyProvider.deposit(targetPlayer.getUniqueId(), currencyId, amount).thenAccept(success -> {
-                    if (success) {
-                        String formatted = plugin.getConfigManager().formatMoney(finalAmount, gCurrency);
-                        plugin.getMessageManager().send(sender, "admin-give-success",
-                                Placeholder.parsed("player", targetPlayer.getName()),
-                                Placeholder.parsed("amount", formatted),
-                                Placeholder.parsed("currency", gCurrencyName)); // Typo in key usage? "currency_name" vs
-                                                                                // "currency" in message. checked:
-                                                                                // "currency" in example
+        final String finalCurrencyId = currencyId;
 
-                        plugin.getMessageManager().send(targetPlayer, "admin-give-received",
-                                Placeholder.parsed("amount", formatted),
-                                Placeholder.parsed("currency", gCurrencyName));
-
-                        fireTransactionEvent(sender, targetPlayer, finalAmount,
-                                EconomyTransactionEvent.TransactionType.GIVE);
-                    } else {
-                        plugin.getMessageManager().send(sender, "admin-action-failed");
-                    }
-                });
-            }
-
-            case "take" -> {
-                if (amount <= 0) {
-                    plugin.getMessageManager().send(sender, "amount-must-be-positive");
-                    return true;
-                }
-                final String tCurrency = currencyId;
-                final String tCurrencyName = currencyName;
-                economyProvider.withdraw(targetPlayer.getUniqueId(), currencyId, amount).thenAccept(success -> {
-                    if (success) {
-                        String formatted = plugin.getConfigManager().formatMoney(finalAmount, tCurrency);
-                        plugin.getMessageManager().send(sender, "admin-take-success",
-                                Placeholder.parsed("player", targetPlayer.getName()),
-                                Placeholder.parsed("amount", formatted),
-                                Placeholder.parsed("currency", tCurrencyName));
-
-                        plugin.getMessageManager().send(targetPlayer, "admin-take-received",
-                                Placeholder.parsed("amount", formatted),
-                                Placeholder.parsed("currency", tCurrencyName));
-
-                        fireTransactionEvent(sender, targetPlayer, finalAmount,
-                                EconomyTransactionEvent.TransactionType.TAKE);
-                    } else {
-                        plugin.getMessageManager().send(sender, "admin-taking-failed");
-                    }
-                });
-            }
-
-            case "set" -> {
-                if (amount < 0) {
-                    plugin.getMessageManager().send(sender, "amount-must-be-positive"); // message says "amount cannot
-                                                                                        // be negative"
-                    return true;
-                }
-                final String sCurrency = currencyId;
-                final String sCurrencyName = currencyName;
-                economyProvider.setBalance(targetPlayer.getUniqueId(), currencyId, amount).thenAccept(success -> {
-                    if (success) {
-                        String formatted = plugin.getConfigManager().formatMoney(finalAmount, sCurrency);
-                        plugin.getMessageManager().send(sender, "admin-set-success",
-                                Placeholder.parsed("player", targetPlayer.getName()),
-                                Placeholder.parsed("amount", formatted),
-                                Placeholder.parsed("currency", sCurrencyName));
-
-                        plugin.getMessageManager().send(targetPlayer, "admin-set-received",
-                                Placeholder.parsed("amount", formatted),
-                                Placeholder.parsed("currency", sCurrencyName));
-
-                        fireTransactionEvent(sender, targetPlayer, finalAmount,
-                                EconomyTransactionEvent.TransactionType.SET);
-                    } else {
-                        plugin.getMessageManager().send(sender, "admin-action-failed");
-                    }
-                });
-            }
-
-            default -> sendHelp(sender);
+        // 查找目標玩家 (優先使用在線玩家)
+        Player onlineTarget = Bukkit.getPlayer(targetName);
+        if (onlineTarget != null) {
+            executeAdminAction(sender, onlineTarget.getUniqueId(), onlineTarget.getName(), action, finalAmount,
+                    finalCurrencyId);
+            return true;
         }
 
+        // 離線玩家處理 - 非同步查詢 UUID
+        plugin.getUserCacheManager().getUUID(targetName).thenAccept(targetUuid -> {
+            if (targetUuid == null) {
+                plugin.getMessageManager().send(sender, "player-not-found", Placeholder.parsed("player", targetName));
+                return;
+            }
+            executeAdminAction(sender, targetUuid, targetName, action, finalAmount, finalCurrencyId);
+        });
+
         return true;
+    }
+
+    private void executeAdminAction(CommandSender sender, java.util.UUID targetUuid, String targetName, String action,
+            double amount, String currencyId) {
+        // 先載入目標帳戶 (非同步)
+        plugin.getStorageHandler().loadAccount(targetUuid).thenAccept(account -> {
+            if (account == null) {
+                plugin.getMessageManager().send(sender, "account-not-found");
+                return;
+            }
+
+            String currencyName = plugin.getConfigManager().getCurrency(currencyId).name();
+            final String fCurrencyName = currencyName;
+            final double fAmount = amount;
+
+            switch (action) {
+                case "give" -> {
+                    plugin.getEconomyProvider().deposit(targetUuid, currencyId, amount).thenAccept(success -> {
+                        if (success) {
+                            String formatted = plugin.getConfigManager().formatMoney(fAmount, currencyId);
+                            plugin.getMessageManager().send(sender, "admin-give-success",
+                                    Placeholder.parsed("player", targetName),
+                                    Placeholder.parsed("amount", formatted),
+                                    Placeholder.parsed("currency", fCurrencyName));
+
+                            // 如果目標在線，通知他
+                            Player targetPlayer = Bukkit.getPlayer(targetUuid);
+                            if (targetPlayer != null) {
+                                plugin.getMessageManager().send(targetPlayer, "admin-give-received",
+                                        Placeholder.parsed("amount", formatted),
+                                        Placeholder.parsed("currency", fCurrencyName));
+                            }
+
+                            fireTransactionEvent(sender, targetUuid, targetName, fAmount,
+                                    EconomyTransactionEvent.TransactionType.GIVE);
+                        } else {
+                            plugin.getMessageManager().send(sender, "admin-action-failed");
+                        }
+                    });
+                }
+
+                case "take" -> {
+                    plugin.getEconomyProvider().withdraw(targetUuid, currencyId, amount).thenAccept(success -> {
+                        if (success) {
+                            String formatted = plugin.getConfigManager().formatMoney(fAmount, currencyId);
+                            plugin.getMessageManager().send(sender, "admin-take-success",
+                                    Placeholder.parsed("player", targetName),
+                                    Placeholder.parsed("amount", formatted),
+                                    Placeholder.parsed("currency", fCurrencyName));
+
+                            Player targetPlayer = Bukkit.getPlayer(targetUuid);
+                            if (targetPlayer != null) {
+                                plugin.getMessageManager().send(targetPlayer, "admin-take-received",
+                                        Placeholder.parsed("amount", formatted),
+                                        Placeholder.parsed("currency", fCurrencyName));
+                            }
+
+                            fireTransactionEvent(sender, targetUuid, targetName, fAmount,
+                                    EconomyTransactionEvent.TransactionType.TAKE);
+                        } else {
+                            plugin.getMessageManager().send(sender, "admin-taking-failed");
+                        }
+                    });
+                }
+
+                case "set" -> {
+                    plugin.getEconomyProvider().setBalance(targetUuid, currencyId, amount).thenAccept(success -> {
+                        if (success) {
+                            String formatted = plugin.getConfigManager().formatMoney(fAmount, currencyId);
+                            plugin.getMessageManager().send(sender, "admin-set-success",
+                                    Placeholder.parsed("player", targetName),
+                                    Placeholder.parsed("amount", formatted),
+                                    Placeholder.parsed("currency", fCurrencyName));
+
+                            Player targetPlayer = Bukkit.getPlayer(targetUuid);
+                            if (targetPlayer != null) {
+                                plugin.getMessageManager().send(targetPlayer, "admin-set-received",
+                                        Placeholder.parsed("amount", formatted),
+                                        Placeholder.parsed("currency", fCurrencyName));
+                            }
+
+                            fireTransactionEvent(sender, targetUuid, targetName, fAmount,
+                                    EconomyTransactionEvent.TransactionType.SET);
+                        } else {
+                            plugin.getMessageManager().send(sender, "admin-action-failed");
+                        }
+                    });
+                }
+                default -> sendHelp(sender);
+            }
+        });
     }
 
     /**
@@ -444,7 +445,7 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
      * @param amount 交易金額
      * @param type   交易類型
      */
-    private void fireTransactionEvent(CommandSender sender, Player target, double amount,
+    private void fireTransactionEvent(CommandSender sender, java.util.UUID targetUuid, String targetName, double amount,
             EconomyTransactionEvent.TransactionType type) {
         java.util.UUID senderUuid = null;
         if (sender instanceof Player player) {
@@ -453,7 +454,7 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
 
         EconomyTransactionEvent event = new EconomyTransactionEvent(
                 senderUuid, sender.getName(),
-                target.getUniqueId(), target.getName(),
+                targetUuid, targetName,
                 amount, type);
         Bukkit.getPluginManager().callEvent(event);
     }

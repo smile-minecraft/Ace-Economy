@@ -1,0 +1,67 @@
+# ============================================
+# AceEconomy Messages (en_US)
+# Format: MiniMessage
+# ============================================
+
+prefix: "<gold>[AceEconomy]</gold> <gray>"
+
+general:
+  no-permission: "<red>You do not have permission to use this command!</red>"
+  invalid-amount: "<red>Invalid amount: <white><amount></white></red>"
+  amount-must-be-positive: "<red>Amount must be positive!</red>"
+  player-not-found: "<red>Player not found: <white><player></white></red>"
+  player-offline: "<red>Player <white><player></white> is offline!</red>"
+  player-no-account: "<red>This player has no account data!</red>"
+  account-not-loaded: "<red>Account not loaded yet, please try again later!</red>"
+  inventory-full: "<red>Inventory full, cannot redeem banknote!</red>"
+  transaction-failed: "<red>Transaction failed!</red>"
+  transaction-cancelled: "<red>Transaction cancelled!</red>"
+  reload-success: "<green>Configuration reloaded successfully!</green>"
+
+economy:
+  balance-check: "Your balance: <yellow><balance></yellow>"
+  balance-check-other: "<aqua><player></aqua>'s balance: <yellow><balance></yellow>"
+  balance-check-currency: "Your <currency_name> balance: <yellow><balance></yellow>"
+  balance-check-currency-other: "<aqua><player></aqua>'s <currency_name> balance: <yellow><balance></yellow>"
+  
+  payment-sent: "<green>Sent <yellow><amount></yellow> to <aqua><player></aqua>!</green>"
+  payment-received: "<green>Received <yellow><amount></yellow> from <aqua><player></aqua></green>"
+  payment-sent-currency: "<green>Sent <yellow><amount></yellow> <currency_name> to <aqua><player></aqua>!</green>"
+  payment-received-currency: "<green>Received <yellow><amount></yellow> <currency_name> from <aqua><player></aqua></green>"
+
+  cannot-pay-self: "<red>You cannot pay yourself!</red>"
+  insufficient-funds: "<red>Insufficient funds!</red>"
+  insufficient-funds-currency: "<red>Insufficient <currency_name> funds (Required: <amount>)!</red>"
+  unknown-currency: "<red>Error: Currency <white><currency></white> not found.</red>"
+
+  withdraw-success: "<green>Banknote created from: <yellow><amount></yellow></green>"
+  withdraw-redeem: "<green>Banknote redeemed: <yellow><amount></yellow> <gray>(Issuer: <issuer>)</gray></green>"
+
+admin:
+  give: "<green>Gave <aqua><player></aqua> <yellow><amount></yellow></green>"
+  take: "<green>Took <yellow><amount></yellow> from <aqua><player></aqua></green>"
+  set: "<green>Set <aqua><player></aqua>'s balance to <yellow><amount></yellow></green>"
+  
+  give-currency: "<green>Gave <aqua><player></aqua> <yellow><amount></yellow> <currency_name></green>"
+  take-currency: "<green>Took <yellow><amount></yellow> <currency_name> from <aqua><player></aqua></green>"
+  set-currency: "<green>Set <aqua><player></aqua>'s <currency_name> balance to <yellow><amount></yellow></green>"
+
+  notify-give: "<green>An admin gave you <yellow><amount></yellow></green>"
+  notify-take: "<green>An admin took <yellow><amount></yellow> from you</green>"
+  notify-set: "<green>An admin set your balance to <yellow><amount></yellow></green>"
+  
+  notify-give-currency: "<green>An admin gave you <yellow><amount></yellow> <currency_name></green>"
+  notify-take-currency: "<green>An admin took <yellow><amount></yellow> <currency_name> from you</green>"
+  notify-set-currency: "<green>An admin set your <currency_name> balance to <yellow><amount></yellow></green>"
+
+  migration-start: "<yellow>Starting import from <white><plugin></white>...</yellow>"
+  migration-progress: "<gray>Import progress: <white><current>/<total></white></gray>"
+  migration-complete: "<green>Import complete! Success: <white><success></white>, Failed: <white><fail></white></green>"
+  migration-error: "<red>Import failed: <white><error></white></red>"
+  migration-not-available: "<red>Data folder for <white><plugin></white> not found!</red>"
+  migration-in-progress: "<red>A migration task is already in progress!</red>"
+
+console:
+  start: "AceEconomy <version> enabled!"
+  stop: "AceEconomy disabled!"
+  migration-start: "Starting migration from <plugin>..."

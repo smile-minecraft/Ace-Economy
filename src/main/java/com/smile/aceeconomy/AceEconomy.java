@@ -51,6 +51,7 @@ public final class AceEconomy extends JavaPlugin implements Listener {
     private EconomyProvider economyProvider;
     private DiscordWebhook discordWebhook;
     private com.smile.aceeconomy.manager.LeaderboardManager leaderboardManager;
+    private com.smile.aceeconomy.manager.UserCacheManager userCacheManager;
 
     /**
      * 取得插件實例。
@@ -87,8 +88,13 @@ public final class AceEconomy extends JavaPlugin implements Listener {
         // 初始化排行榜管理器 (僅當使用 SQL 時)
         if (databaseConnection != null && databaseConnection.isHealthy()) {
             leaderboardManager = new com.smile.aceeconomy.manager.LeaderboardManager(this, databaseConnection);
+
+            // 初始化玩家快取管理器
+            userCacheManager = new com.smile.aceeconomy.manager.UserCacheManager(databaseConnection, getLogger());
+            Bukkit.getPluginManager().registerEvents(
+                    new com.smile.aceeconomy.listeners.PlayerConnectionListener(userCacheManager), this);
         } else {
-            getLogger().warning("未使用 SQL 資料庫或連線失敗，排行榜功能將失效。");
+            getLogger().warning("未使用 SQL 資料庫或連線失敗，排行榜與離線功能將失效。");
         }
 
         // 初始化經濟服務提供者
@@ -403,5 +409,14 @@ public final class AceEconomy extends JavaPlugin implements Listener {
      */
     public MessageManager getMessageManager() {
         return messageManager;
+    }
+
+    /**
+     * 取得玩家名稱快取管理器。
+     *
+     * @return 玩家名稱快取管理器
+     */
+    public com.smile.aceeconomy.manager.UserCacheManager getUserCacheManager() {
+        return userCacheManager;
     }
 }
