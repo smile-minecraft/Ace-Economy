@@ -198,8 +198,8 @@ public class SQLiteImplementation implements StorageProvider {
                 pstmt.setString(2, currency);
                 pstmt.setDouble(3, amount);
 
-                // 嘗試從 ace_users 取得 username
-                String username = getNameByUuidSync(uuid);
+                // Reuse the same connection to query username (avoid nested pool deadlock)
+                String username = getNameByUuidSync(conn, uuid);
                 pstmt.setString(4, username);
 
                 pstmt.executeUpdate();
@@ -289,9 +289,24 @@ public class SQLiteImplementation implements StorageProvider {
      * @return 玩家名稱，若找不到則回傳 "Unknown"
      */
     private String getNameByUuidSync(UUID uuid) {
+        try (Connection conn = dataSource.getConnection()) {
+            return getNameByUuidSync(conn, uuid);
+        } catch (SQLException e) {
+            logger.warning("查詢玩家名稱失敗 (取得連線失敗, " + uuid + "): " + e.getMessage());
+            return "Unknown";
+        }
+    }
+
+    /**
+     * 重用連線版本的 getNameByUuid (避免嵌套連線死鎖)。
+     *
+     * @param conn 資料庫連線
+     * @param uuid 玩家 UUID
+     * @return 玩家名稱，若找不到則回傳 "Unknown"
+     */
+    private String getNameByUuidSync(Connection conn, UUID uuid) {
         String sql = "SELECT username FROM " + TABLE_USERS + " WHERE uuid = ?";
-        try (Connection conn = dataSource.getConnection();
-                PreparedStatement pstmt = conn.prepareStatement(sql)) {
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
 
             pstmt.setString(1, uuid.toString());
 

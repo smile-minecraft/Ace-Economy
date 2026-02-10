@@ -443,7 +443,15 @@ public class CurrencyManager {
      */
     public boolean setBalance(UUID uuid, String currencyId, double amount) {
         if (amount < 0) {
-            return false;
+            // Check if debt system is enabled
+            if (!configManager.isAllowNegativeBalance()) {
+                return false;
+            }
+            // Validate against debt limit
+            double debtLimit = getDebtLimit(uuid);
+            if (Math.abs(amount) > debtLimit) {
+                return false;
+            }
         }
         validateCurrency(currencyId);
 

@@ -203,7 +203,7 @@ public class EconomyProvider {
      */
     public CompletableFuture<Boolean> setBalance(UUID uuid, String currencyId, double amount) {
         return CompletableFuture.supplyAsync(() -> {
-            if (amount < 0) {
+            if (amount < 0 && !plugin.getConfigManager().isAllowNegativeBalance()) {
                 return false;
             }
             if (!currencyManager.hasAccount(uuid)) {
