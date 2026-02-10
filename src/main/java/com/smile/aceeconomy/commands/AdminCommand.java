@@ -68,7 +68,7 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
 
         // 權限檢查
         if (!sender.hasPermission("aceeconomy.admin")) {
-            plugin.getMessageManager().send(sender, "no-permission");
+            plugin.getMessageManager().send(sender, "general.no-permission");
             return true;
         }
 
@@ -109,12 +109,12 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
         // 處理 reload 指令
         if (action.equals("reload")) {
             if (!sender.hasPermission("aceeconomy.command.reload")) {
-                plugin.getMessageManager().send(sender, "no-permission");
+                plugin.getMessageManager().send(sender, "general.no-permission");
                 return true;
             }
 
             plugin.getConfigManager().reload();
-            plugin.getMessageManager().send(sender, "reload-success");
+            plugin.getMessageManager().send(sender, "general.reload-success");
 
             // Console Log
             String senderName = sender instanceof Player ? ((Player) sender).getName() : "Console";
@@ -136,13 +136,13 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
         try {
             amount = Double.parseDouble(amountStr);
         } catch (NumberFormatException e) {
-            plugin.getMessageManager().send(sender, "invalid-amount", Placeholder.parsed("amount", amountStr));
+            plugin.getMessageManager().send(sender, "general.invalid-amount", Placeholder.parsed("amount", amountStr));
             return true;
         }
 
         // 金額驗證
         if (amount < 0 && !action.equals("set")) {
-            plugin.getMessageManager().send(sender, "amount-must-be-positive");
+            plugin.getMessageManager().send(sender, "general.amount-must-be-positive");
             return true;
         }
 
@@ -151,7 +151,7 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
         if (args.length >= 4) {
             String inputCurrency = args[3].toLowerCase();
             if (!plugin.getCurrencyManager().currencyExists(inputCurrency)) {
-                plugin.getMessageManager().send(sender, "unknown-currency",
+                plugin.getMessageManager().send(sender, "general.unknown-currency",
                         Placeholder.parsed("currency", inputCurrency));
                 return true;
             }
@@ -172,7 +172,8 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
         // 離線玩家處理 - 非同步查詢 UUID
         plugin.getUserCacheManager().getUUID(targetName).thenAccept(targetUuid -> {
             if (targetUuid == null) {
-                plugin.getMessageManager().send(sender, "player-not-found", Placeholder.parsed("player", targetName));
+                plugin.getMessageManager().send(sender, "general.player-not-found",
+                        Placeholder.parsed("player", targetName));
                 return;
             }
             executeAdminAction(sender, targetUuid, targetName, action, finalAmount, finalCurrencyId);
@@ -186,7 +187,7 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
         // 先載入目標帳戶 (非同步)
         plugin.getStorageHandler().loadAccount(targetUuid).thenAccept(account -> {
             if (account == null) {
-                plugin.getMessageManager().send(sender, "account-not-found");
+                plugin.getMessageManager().send(sender, "economy.account-not-found");
                 return;
             }
 
@@ -199,7 +200,7 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
                     plugin.getEconomyProvider().deposit(targetUuid, currencyId, amount).thenAccept(success -> {
                         if (success) {
                             String formatted = plugin.getConfigManager().formatMoney(fAmount, currencyId);
-                            plugin.getMessageManager().send(sender, "admin-give-success",
+                            plugin.getMessageManager().send(sender, "admin.give",
                                     Placeholder.parsed("player", targetName),
                                     Placeholder.parsed("amount", formatted),
                                     Placeholder.parsed("currency", fCurrencyName));
@@ -207,7 +208,7 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
                             // 如果目標在線，通知他
                             Player targetPlayer = Bukkit.getPlayer(targetUuid);
                             if (targetPlayer != null) {
-                                plugin.getMessageManager().send(targetPlayer, "admin-give-received",
+                                plugin.getMessageManager().send(targetPlayer, "admin.notify-give",
                                         Placeholder.parsed("amount", formatted),
                                         Placeholder.parsed("currency", fCurrencyName));
                             }
@@ -215,7 +216,7 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
                             fireTransactionEvent(sender, targetUuid, targetName, fAmount,
                                     EconomyTransactionEvent.TransactionType.GIVE);
                         } else {
-                            plugin.getMessageManager().send(sender, "admin-action-failed");
+                            plugin.getMessageManager().send(sender, "admin.admin-action-failed");
                         }
                     });
                 }
@@ -224,14 +225,14 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
                     plugin.getEconomyProvider().withdraw(targetUuid, currencyId, amount).thenAccept(success -> {
                         if (success) {
                             String formatted = plugin.getConfigManager().formatMoney(fAmount, currencyId);
-                            plugin.getMessageManager().send(sender, "admin-take-success",
+                            plugin.getMessageManager().send(sender, "admin.take",
                                     Placeholder.parsed("player", targetName),
                                     Placeholder.parsed("amount", formatted),
                                     Placeholder.parsed("currency", fCurrencyName));
 
                             Player targetPlayer = Bukkit.getPlayer(targetUuid);
                             if (targetPlayer != null) {
-                                plugin.getMessageManager().send(targetPlayer, "admin-take-received",
+                                plugin.getMessageManager().send(targetPlayer, "admin.notify-take",
                                         Placeholder.parsed("amount", formatted),
                                         Placeholder.parsed("currency", fCurrencyName));
                             }
@@ -239,7 +240,7 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
                             fireTransactionEvent(sender, targetUuid, targetName, fAmount,
                                     EconomyTransactionEvent.TransactionType.TAKE);
                         } else {
-                            plugin.getMessageManager().send(sender, "admin-taking-failed");
+                            plugin.getMessageManager().send(sender, "admin.admin-taking-failed");
                         }
                     });
                 }
@@ -248,14 +249,14 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
                     plugin.getEconomyProvider().setBalance(targetUuid, currencyId, amount).thenAccept(success -> {
                         if (success) {
                             String formatted = plugin.getConfigManager().formatMoney(fAmount, currencyId);
-                            plugin.getMessageManager().send(sender, "admin-set-success",
+                            plugin.getMessageManager().send(sender, "admin.set",
                                     Placeholder.parsed("player", targetName),
                                     Placeholder.parsed("amount", formatted),
                                     Placeholder.parsed("currency", fCurrencyName));
 
                             Player targetPlayer = Bukkit.getPlayer(targetUuid);
                             if (targetPlayer != null) {
-                                plugin.getMessageManager().send(targetPlayer, "admin-set-received",
+                                plugin.getMessageManager().send(targetPlayer, "admin.notify-set",
                                         Placeholder.parsed("amount", formatted),
                                         Placeholder.parsed("currency", fCurrencyName));
                             }
@@ -263,7 +264,7 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
                             fireTransactionEvent(sender, targetUuid, targetName, fAmount,
                                     EconomyTransactionEvent.TransactionType.SET);
                         } else {
-                            plugin.getMessageManager().send(sender, "admin-action-failed");
+                            plugin.getMessageManager().send(sender, "admin.admin-action-failed");
                         }
                     });
                 }
@@ -281,13 +282,13 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
      */
     private boolean handleImport(CommandSender sender, String[] args) {
         if (args.length < 2) {
-            plugin.getMessageManager().send(sender, "usage-import");
+            plugin.getMessageManager().send(sender, "admin.usage-import");
             return true;
         }
 
         // 檢查是否有遷移正在進行
         if (migrationInProgress.get()) {
-            plugin.getMessageManager().send(sender, "migration-in-progress");
+            plugin.getMessageManager().send(sender, "admin.migration-in-progress");
             return true;
         }
 
@@ -301,15 +302,15 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
         };
 
         if (migrator == null) {
-            plugin.getMessageManager().send(sender, "migration-unsupported-plugin",
+            plugin.getMessageManager().send(sender, "admin.migration-unsupported-plugin",
                     Placeholder.parsed("plugin", args[1]));
-            plugin.getMessageManager().send(sender, "migration-supported-plugins");
+            plugin.getMessageManager().send(sender, "admin.migration-supported-plugins");
             return true;
         }
 
         // 檢查來源是否可用
         if (!migrator.isAvailable()) {
-            plugin.getMessageManager().send(sender, "migration-source-not-found",
+            plugin.getMessageManager().send(sender, "admin.migration-source-not-found",
                     Placeholder.parsed("plugin", migrator.getName()));
             return true;
         }
@@ -318,23 +319,24 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
         migrationInProgress.set(true);
 
         // 發送開始訊息
-        plugin.getMessageManager().send(sender, "migration-start", Placeholder.parsed("plugin", migrator.getName()));
+        plugin.getMessageManager().send(sender, "admin.migration-start",
+                Placeholder.parsed("plugin", migrator.getName()));
         plugin.getLogger().info("開始資料遷移：" + migrator.getName());
 
         // 在非同步執行緒執行遷移
         Bukkit.getAsyncScheduler().runNow(plugin, task -> {
             migrator.migrate(sender, processed -> {
                 // 回報進度
-                plugin.getMessageManager().send(sender, "migration-progress",
+                plugin.getMessageManager().send(sender, "admin.migration-progress",
                         Placeholder.parsed("processed", String.valueOf(processed)));
             }).thenAccept(result -> {
                 // 遷移完成
                 migrationInProgress.set(false);
 
                 if (result.totalCount() == 0) {
-                    plugin.getMessageManager().send(sender, "migration-no-data");
+                    plugin.getMessageManager().send(sender, "admin.migration-no-data");
                 } else {
-                    plugin.getMessageManager().send(sender, "migration-complete",
+                    plugin.getMessageManager().send(sender, "admin.migration-complete",
                             Placeholder.parsed("success", String.valueOf(result.successCount())),
                             Placeholder.parsed("fail", String.valueOf(result.failCount())));
                 }
@@ -345,7 +347,7 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
             }).exceptionally(throwable -> {
                 // 遷移失敗
                 migrationInProgress.set(false);
-                plugin.getMessageManager().send(sender, "migration-failed",
+                plugin.getMessageManager().send(sender, "admin.migration-failed",
                         Placeholder.parsed("error", throwable.getMessage()));
                 plugin.getLogger().severe("資料遷移失敗：" + throwable.getMessage());
                 throwable.printStackTrace();
@@ -362,22 +364,22 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
      * @param sender 接收者
      */
     private void sendHelp(CommandSender sender) {
-        plugin.getMessageManager().send(sender, "admin-help-header");
-        plugin.getMessageManager().send(sender, "admin-help-money");
-        plugin.getMessageManager().send(sender, "admin-help-withdraw");
-        plugin.getMessageManager().send(sender, "admin-help-pay");
+        plugin.getMessageManager().send(sender, "admin.help-header");
+        plugin.getMessageManager().send(sender, "admin.help-money");
+        plugin.getMessageManager().send(sender, "admin.help-withdraw");
+        plugin.getMessageManager().send(sender, "admin.help-pay");
 
         if (sender.hasPermission("aceeconomy.admin")) {
-            plugin.getMessageManager().send(sender, "admin-help-admin-header");
-            plugin.getMessageManager().send(sender, "admin-help-give");
-            plugin.getMessageManager().send(sender, "admin-help-take");
-            plugin.getMessageManager().send(sender, "admin-help-set");
-            plugin.getMessageManager().send(sender, "admin-help-history");
-            plugin.getMessageManager().send(sender, "admin-help-rollback");
-            plugin.getMessageManager().send(sender, "admin-help-import");
+            plugin.getMessageManager().send(sender, "admin.help-admin-header");
+            plugin.getMessageManager().send(sender, "admin.help-give");
+            plugin.getMessageManager().send(sender, "admin.help-take");
+            plugin.getMessageManager().send(sender, "admin.help-set");
+            plugin.getMessageManager().send(sender, "admin.help-history");
+            plugin.getMessageManager().send(sender, "admin.help-rollback");
+            plugin.getMessageManager().send(sender, "admin.help-import");
         }
 
-        plugin.getMessageManager().send(sender, "admin-help-help");
+        plugin.getMessageManager().send(sender, "admin.help-help");
     }
 
     @Override

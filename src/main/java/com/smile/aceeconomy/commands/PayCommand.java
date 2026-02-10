@@ -44,19 +44,19 @@ public class PayCommand implements CommandExecutor, TabCompleter {
 
         // 必須是玩家
         if (!(sender instanceof Player player)) {
-            plugin.getMessageManager().send(sender, "console-only-player");
+            plugin.getMessageManager().send(sender, "general.console-only-player");
             return true;
         }
 
         // 權限檢查
         if (!player.hasPermission("aceeconomy.pay")) {
-            plugin.getMessageManager().send(sender, "no-permission");
+            plugin.getMessageManager().send(sender, "general.no-permission");
             return true;
         }
 
         // 參數檢查: /pay <玩家> <金額> [貨幣]
         if (args.length < 2) {
-            plugin.getMessageManager().send(sender, "usage-pay");
+            plugin.getMessageManager().send(sender, "usage.pay");
             return true;
         }
 
@@ -65,7 +65,7 @@ public class PayCommand implements CommandExecutor, TabCompleter {
 
         // 防止轉給自己
         if (targetName.equalsIgnoreCase(player.getName())) {
-            plugin.getMessageManager().send(sender, "cannot-pay-self");
+            plugin.getMessageManager().send(sender, "economy.cannot-pay-self");
             return true;
         }
 
@@ -74,13 +74,13 @@ public class PayCommand implements CommandExecutor, TabCompleter {
         try {
             amount = Double.parseDouble(amountStr);
         } catch (NumberFormatException e) {
-            plugin.getMessageManager().send(sender, "invalid-amount", Placeholder.parsed("amount", amountStr));
+            plugin.getMessageManager().send(sender, "general.invalid-amount", Placeholder.parsed("amount", amountStr));
             return true;
         }
 
         // 防止負數
         if (amount <= 0) {
-            plugin.getMessageManager().send(sender, "amount-must-be-positive");
+            plugin.getMessageManager().send(sender, "general.amount-must-be-positive");
             return true;
         }
 
@@ -89,7 +89,7 @@ public class PayCommand implements CommandExecutor, TabCompleter {
         if (args.length >= 3) {
             String inputCurrency = args[2].toLowerCase();
             if (!plugin.getCurrencyManager().currencyExists(inputCurrency)) {
-                plugin.getMessageManager().send(sender, "unknown-currency",
+                plugin.getMessageManager().send(sender, "general.unknown-currency",
                         Placeholder.parsed("currency", inputCurrency));
                 return true;
             }
@@ -101,7 +101,7 @@ public class PayCommand implements CommandExecutor, TabCompleter {
         double currentBalance = plugin.getCurrencyManager().getBalance(player.getUniqueId(), currencyId);
         if (currentBalance < amount) {
             String currencyName = plugin.getConfigManager().getCurrency(currencyId).name();
-            plugin.getMessageManager().send(sender, "insufficient-funds-currency",
+            plugin.getMessageManager().send(sender, "economy.insufficient-funds-currency",
                     Placeholder.parsed("currency_name", currencyName),
                     Placeholder.parsed("amount", String.valueOf(amount)));
             return true;
@@ -121,7 +121,8 @@ public class PayCommand implements CommandExecutor, TabCompleter {
         plugin.getUserCacheManager().getUUID(targetName).thenAccept(targetUuid -> {
             if (targetUuid == null) {
                 // 資料庫也找不到 -> 真的找不到玩家
-                plugin.getMessageManager().send(sender, "player-not-found", Placeholder.parsed("player", targetName));
+                plugin.getMessageManager().send(sender, "general.player-not-found",
+                        Placeholder.parsed("player", targetName));
                 return;
             }
 
@@ -140,7 +141,7 @@ public class PayCommand implements CommandExecutor, TabCompleter {
         plugin.getStorageHandler().loadAccount(targetUuid).thenAccept(targetAccount -> {
             if (targetAccount == null) {
                 // 可能是新玩家還沒建立帳戶
-                plugin.getMessageManager().send(sender, "player-no-account");
+                plugin.getMessageManager().send(sender, "general.player-no-account");
                 return;
             }
 
@@ -149,7 +150,7 @@ public class PayCommand implements CommandExecutor, TabCompleter {
             double currentBalance = plugin.getCurrencyManager().getBalance(sender.getUniqueId(), currencyId);
             if (currentBalance < amount) {
                 String currencyName = plugin.getConfigManager().getCurrency(currencyId).name();
-                plugin.getMessageManager().send(sender, "insufficient-funds-currency",
+                plugin.getMessageManager().send(sender, "economy.insufficient-funds-currency",
                         Placeholder.parsed("currency_name", currencyName),
                         Placeholder.parsed("amount", String.valueOf(amount)));
                 return;
@@ -162,7 +163,7 @@ public class PayCommand implements CommandExecutor, TabCompleter {
                         if (success) {
                             String formattedAmount = plugin.getConfigManager().formatMoney(amount, currencyId);
 
-                            plugin.getMessageManager().send(sender, "payment-sent-currency",
+                            plugin.getMessageManager().send(sender, "economy.payment-sent-currency",
                                     Placeholder.parsed("amount", formattedAmount),
                                     Placeholder.parsed("currency_name", currencyName),
                                     Placeholder.parsed("player", targetName));
@@ -170,7 +171,7 @@ public class PayCommand implements CommandExecutor, TabCompleter {
                             // 如果目標在線，通知他
                             Player onlineTarget = Bukkit.getPlayer(targetUuid);
                             if (onlineTarget != null) {
-                                plugin.getMessageManager().send(onlineTarget, "payment-received-currency",
+                                plugin.getMessageManager().send(onlineTarget, "economy.payment-received-currency",
                                         Placeholder.parsed("amount", formattedAmount),
                                         Placeholder.parsed("currency_name", currencyName),
                                         Placeholder.parsed("player", sender.getName()));
@@ -186,7 +187,7 @@ public class PayCommand implements CommandExecutor, TabCompleter {
                             Bukkit.getGlobalRegionScheduler().execute(plugin,
                                     () -> Bukkit.getPluginManager().callEvent(event));
                         } else {
-                            plugin.getMessageManager().send(sender, "transaction-failed");
+                            plugin.getMessageManager().send(sender, "general.transaction-failed");
                         }
                     });
         });

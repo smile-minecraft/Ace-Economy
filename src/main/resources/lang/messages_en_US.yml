@@ -38,6 +38,7 @@ economy:
 
   withdraw-success: "<green>Withdrawn banknote: <yellow><amount></yellow></green>"
   withdraw-redeem: "<green>Redeemed banknote: <yellow><amount></yellow> <gray>(Issuer: <issuer>)</gray></green>"
+  min-withdraw-amount: "<red>Minimum withdraw amount is <amount>!</red>"
   
   account-not-found: "<red>Account not found!</red>"
 

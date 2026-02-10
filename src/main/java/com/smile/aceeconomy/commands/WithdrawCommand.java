@@ -49,19 +49,19 @@ public class WithdrawCommand implements CommandExecutor, TabCompleter {
 
         // 必須是玩家
         if (!(sender instanceof Player player)) {
-            plugin.getMessageManager().send(sender, "console-only-player");
+            plugin.getMessageManager().send(sender, "general.console-only-player");
             return true;
         }
 
         // 權限檢查
         if (!player.hasPermission("aceeconomy.withdraw")) {
-            plugin.getMessageManager().send(sender, "no-permission");
+            plugin.getMessageManager().send(sender, "general.no-permission");
             return true;
         }
 
         // 參數檢查
         if (args.length < 1) {
-            plugin.getMessageManager().send(sender, "usage-withdraw");
+            plugin.getMessageManager().send(sender, "usage.withdraw");
             return true;
         }
 
@@ -70,19 +70,19 @@ public class WithdrawCommand implements CommandExecutor, TabCompleter {
         try {
             amount = Double.parseDouble(args[0]);
         } catch (NumberFormatException e) {
-            plugin.getMessageManager().send(sender, "invalid-amount", Placeholder.parsed("amount", args[0]));
+            plugin.getMessageManager().send(sender, "general.invalid-amount", Placeholder.parsed("amount", args[0]));
             return true;
         }
 
         // 金額驗證
         if (amount <= 0) {
-            plugin.getMessageManager().send(sender, "amount-must-be-positive");
+            plugin.getMessageManager().send(sender, "general.amount-must-be-positive");
             return true;
         }
 
         // 最小金額限制
         if (amount < 1) {
-            plugin.getMessageManager().send(sender, "min-withdraw-amount",
+            plugin.getMessageManager().send(sender, "economy.min-withdraw-amount",
                     Placeholder.parsed("amount", plugin.getConfigManager().formatMoney(1.0)));
             return true;
         }
@@ -101,7 +101,7 @@ public class WithdrawCommand implements CommandExecutor, TabCompleter {
         plugin.getEconomyProvider().withdraw(player.getUniqueId(), amount)
                 .thenAccept(success -> {
                     if (!success) {
-                        plugin.getMessageManager().send(player, "withdraw-failed");
+                        plugin.getMessageManager().send(player, "general.transaction-failed");
                         return;
                     }
 
@@ -258,11 +258,11 @@ public class WithdrawCommand implements CommandExecutor, TabCompleter {
                         if (player.getInventory().firstEmpty() == -1) {
                             // 背包已滿，退還金錢
                             economyProvider.deposit(player.getUniqueId(), amount);
-                            plugin.getMessageManager().send(player, "inventory-full");
+                            plugin.getMessageManager().send(player, "general.inventory-full");
                         } else {
                             player.getInventory().addItem(banknote);
                             String formattedAmount = plugin.getConfigManager().formatMoney(amount);
-                            plugin.getMessageManager().send(player, "withdraw-success",
+                            plugin.getMessageManager().send(player, "economy.withdraw-success",
                                     Placeholder.parsed("amount", formattedAmount));
                         }
                     }, null);
@@ -287,7 +287,7 @@ public class WithdrawCommand implements CommandExecutor, TabCompleter {
             String formattedValue = plugin.getConfigManager().formatMoney(value);
 
             // 設定顯示名稱（使用 MiniMessage 格式）
-            meta.displayName(plugin.getMessageManager().get("banknote-name",
+            meta.displayName(plugin.getMessageManager().get("banknote.name",
                     Placeholder.parsed("value", formattedValue)));
 
             // 設定說明
@@ -297,10 +297,10 @@ public class WithdrawCommand implements CommandExecutor, TabCompleter {
             // 為了簡化，這裡暫時使用 configManager.formatMoney 配合硬編碼風格，但使用 MessageManager 解析
 
             meta.lore(List.of(
-                    plugin.getMessageManager().get("banknote-lore-value", Placeholder.parsed("value", formattedValue)),
-                    plugin.getMessageManager().get("banknote-lore-issuer", Placeholder.parsed("issuer", issuerName)),
+                    plugin.getMessageManager().get("banknote.lore-value", Placeholder.parsed("value", formattedValue)),
+                    plugin.getMessageManager().get("banknote.lore-issuer", Placeholder.parsed("issuer", issuerName)),
                     net.kyori.adventure.text.Component.empty(),
-                    plugin.getMessageManager().get("banknote-lore-click")));
+                    plugin.getMessageManager().get("banknote.lore-click")));
 
             // 使用 PDC 儲存資料（防偽）
             PersistentDataContainer pdc = meta.getPersistentDataContainer();

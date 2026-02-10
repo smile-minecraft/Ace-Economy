@@ -145,13 +145,13 @@ public class BanknoteListener implements Listener {
         String idStr = pdc.get(getIdKey(plugin), PersistentDataType.STRING); // 新增 ID 讀取
 
         if (value == null || value <= 0) {
-            plugin.getMessageManager().send(player, "banknote-damaged");
+            plugin.getMessageManager().send(player, "banknote.damaged");
             return;
         }
 
         // 檢查帳戶是否已載入
         if (!economyProvider.hasAccount(player.getUniqueId())) {
-            plugin.getMessageManager().send(player, "account-loading");
+            plugin.getMessageManager().send(player, "general.account-not-loaded");
             return;
         }
 
@@ -170,7 +170,7 @@ public class BanknoteListener implements Listener {
                             if (log != null && log.reverted()) {
                                 // 支票已作廢
                                 item.setAmount(0); // 直接移除
-                                plugin.getMessageManager().send(player, "banknote-voided");
+                                plugin.getMessageManager().send(player, "banknote.voided");
                                 player.playSound(player.getLocation(), Sound.ENTITY_ITEM_BREAK, 1.0f, 1.0f);
                                 return;
                             }
@@ -204,12 +204,12 @@ public class BanknoteListener implements Listener {
                     player.playSound(player.getLocation(), Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 1.0f, 1.0f);
 
                     String formatted = plugin.getConfigManager().formatMoney(value);
-                    plugin.getMessageManager().send(player, "banknote-redeem-success",
+                    plugin.getMessageManager().send(player, "economy.withdraw-redeem",
                             Placeholder.parsed("amount", formatted),
                             Placeholder.parsed("issuer", issuer));
                 } else {
                     // 兌換失敗，退還支票
-                    plugin.getMessageManager().send(player, "banknote-redeem-failed");
+                    plugin.getMessageManager().send(player, "banknote.redeem-failed");
                     // 注意：物品已移除，需要退還
                     // 這裡簡化處理，實際應該再給回物品
                 }

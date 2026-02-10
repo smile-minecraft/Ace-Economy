@@ -45,14 +45,14 @@ public class BalanceCommand implements CommandExecutor, TabCompleter {
 
         // 權限檢查
         if (!sender.hasPermission("aceeconomy.use")) {
-            plugin.getMessageManager().send(sender, "no-permission");
+            plugin.getMessageManager().send(sender, "general.no-permission");
             return true;
         }
 
         // /money 或 /balance（無參數）- 查看自己餘額 (預設貨幣)
         if (args.length == 0) {
             if (!(sender instanceof Player player)) {
-                plugin.getMessageManager().send(sender, "console-only-player");
+                plugin.getMessageManager().send(sender, "general.console-only-player");
                 return true;
             }
 
@@ -61,9 +61,9 @@ public class BalanceCommand implements CommandExecutor, TabCompleter {
             String currencyName = plugin.getConfigManager().getCurrency(defaultCurrency).name();
             String formattedBalance = plugin.getConfigManager().formatMoney(balance, defaultCurrency);
 
-            plugin.getMessageManager().send(sender, "balance-self",
+            plugin.getMessageManager().send(sender, "economy.balance-check-currency",
                     Placeholder.parsed("currency_name", currencyName),
-                    Placeholder.parsed("amount", formattedBalance));
+                    Placeholder.parsed("balance", formattedBalance));
             return true;
         }
 
@@ -75,7 +75,7 @@ public class BalanceCommand implements CommandExecutor, TabCompleter {
         if (args.length >= 2) {
             String inputCurrency = args[1].toLowerCase();
             if (!currencyManager.currencyExists(inputCurrency)) {
-                plugin.getMessageManager().send(sender, "unknown-currency",
+                plugin.getMessageManager().send(sender, "general.unknown-currency",
                         Placeholder.parsed("currency", inputCurrency));
                 return true;
             }
@@ -92,30 +92,30 @@ public class BalanceCommand implements CommandExecutor, TabCompleter {
             double balance = currencyManager.getBalance(targetPlayer.getUniqueId(), finalCurrencyId);
             String formattedBalance = plugin.getConfigManager().formatMoney(balance, finalCurrencyId);
 
-            plugin.getMessageManager().send(sender, "balance-other",
+            plugin.getMessageManager().send(sender, "economy.balance-check-currency-other",
                     Placeholder.parsed("player", targetPlayer.getName()),
                     Placeholder.parsed("currency_name", currencyName),
-                    Placeholder.parsed("amount", formattedBalance));
+                    Placeholder.parsed("balance", formattedBalance));
         } else {
             // 離線玩家 - 非同步查詢
             plugin.getUserCacheManager().getUUID(targetName).thenAccept(uuid -> {
                 if (uuid == null) {
-                    plugin.getMessageManager().send(sender, "player-not-found",
+                    plugin.getMessageManager().send(sender, "general.player-not-found",
                             Placeholder.parsed("player", targetName));
                     return;
                 }
 
                 plugin.getStorageHandler().loadAccount(uuid).thenAccept(account -> {
                     if (account == null) {
-                        plugin.getMessageManager().send(sender, "account-not-found");
+                        plugin.getMessageManager().send(sender, "economy.account-not-found");
                     } else {
                         double balance = account.getBalance(finalCurrencyId);
                         String formattedBalance = plugin.getConfigManager().formatMoney(balance, finalCurrencyId);
 
-                        plugin.getMessageManager().send(sender, "balance-other",
+                        plugin.getMessageManager().send(sender, "economy.balance-check-currency-other",
                                 Placeholder.parsed("player", targetName),
                                 Placeholder.parsed("currency_name", currencyName),
-                                Placeholder.parsed("amount", formattedBalance));
+                                Placeholder.parsed("balance", formattedBalance));
                     }
                 });
             });

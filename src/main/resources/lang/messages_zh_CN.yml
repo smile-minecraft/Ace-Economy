@@ -38,6 +38,7 @@ economy:
 
   withdraw-success: "<green>已提取支票：<yellow><amount></yellow></green>"
   withdraw-redeem: "<green>已兑换支票：<yellow><amount></yellow> <gray>(签发人：<issuer>)</gray></green>"
+  min-withdraw-amount: "<red>最低提取金额为 <amount>！</red>"
   
   account-not-found: "<red>找不到账户数据！</red>"
 
