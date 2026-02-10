@@ -77,22 +77,14 @@ public class CurrencyManager {
      * @return 是否存在
      */
     public boolean currencyExists(String currencyId) {
-        if (currencyId == null)
+        if (currencyId == null) {
             return false;
-        if (configManager == null)
-            return "dollar".equalsIgnoreCase(currencyId);
-
-        String target = currencyId.trim();
-        boolean exists = configManager.getCurrencies().keySet().stream()
-                .anyMatch(k -> k.equalsIgnoreCase(target));
-
-        // Panic Debugging (臨時)
-        if (!exists && target.equalsIgnoreCase("token")) {
-            logger.warning("[Debug] Checking for 'token' failed.");
-            logger.warning("[Debug] Available Keys: " + configManager.getCurrencies().keySet());
         }
-
-        return exists;
+        if (configManager == null) {
+            return "dollar".equalsIgnoreCase(currencyId);
+        }
+        // Strict delegation to ConfigManager
+        return configManager.getCurrencies().containsKey(currencyId.toLowerCase());
     }
 
     /**
@@ -105,15 +97,8 @@ public class CurrencyManager {
         if (currencyId == null || configManager == null) {
             return configManager != null ? configManager.getDefaultCurrency() : null;
         }
-
-        String target = currencyId.trim();
-        // 尋找匹配的 key (忽略大小寫)
-        for (var entry : configManager.getCurrencies().entrySet()) {
-            if (entry.getKey().equalsIgnoreCase(target)) {
-                return entry.getValue();
-            }
-        }
-        return configManager.getDefaultCurrency();
+        // Strict delegation
+        return configManager.getCurrency(currencyId.toLowerCase());
     }
 
     /**

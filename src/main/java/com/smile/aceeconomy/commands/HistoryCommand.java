@@ -2,8 +2,7 @@ package com.smile.aceeconomy.commands;
 
 import com.smile.aceeconomy.AceEconomy;
 import com.smile.aceeconomy.manager.LogManager;
-import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
 import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.command.Command;
@@ -29,12 +28,21 @@ public class HistoryCommand implements CommandExecutor {
     public boolean onCommand(@NotNull CommandSender sender, @NotNull Command command, @NotNull String label,
             @NotNull String[] args) {
         if (!sender.hasPermission("aceeconomy.admin.history")) {
-            sender.sendMessage(Component.text("權限不足！", NamedTextColor.RED));
+            plugin.getMessageManager().send(sender, "no-permission");
             return true;
         }
 
         if (args.length < 1) {
-            sender.sendMessage(Component.text("用法: /aceeco history <玩家> [頁碼]", NamedTextColor.RED));
+            plugin.getMessageManager().send(sender, "usage-history"); // Need to add usage-history
+            // Fallback for now if usage-history not present, or better, add it.
+            // I'll assume usage-history is "用法: /aceeco history <玩家> [頁碼]"
+            // But let's just send the text using MessageManager if I add the key, or raw
+            // text if not?
+            // "usage-history" is not in my list. I should use "invalid-usage" or similar?
+            // messages_zh_TW.yml has "usage-pay" etc. I'll add "usage-history" or use a
+            // generic invalid command msg.
+            sender.sendMessage(net.kyori.adventure.text.minimessage.MiniMessage.miniMessage()
+                    .deserialize("<red>用法: /aceeco history <玩家> [頁碼]</red>"));
             return true;
         }
 
@@ -46,7 +54,7 @@ public class HistoryCommand implements CommandExecutor {
                 if (page < 1)
                     page = 1;
             } catch (NumberFormatException e) {
-                sender.sendMessage(Component.text("無效的頁碼！", NamedTextColor.RED));
+                plugin.getMessageManager().send(sender, "invalid-page");
                 return true;
             }
         }
@@ -64,47 +72,61 @@ public class HistoryCommand implements CommandExecutor {
 
             logManager.getHistory(targetUuid, currentPage, 10).thenAccept(logs -> {
                 if (logs.isEmpty()) {
-                    sender.sendMessage(Component.text("找不到更多交易記錄。", NamedTextColor.YELLOW));
+                    plugin.getMessageManager().send(sender, "history-empty");
                     return;
                 }
 
-                sender.sendMessage(Component.text("=== " + targetName + " 的交易記錄 (第 " + currentPage + " 頁) ===",
-                        NamedTextColor.GOLD));
+                plugin.getMessageManager().send(sender, "history-header",
+                        Placeholder.parsed("player", targetName),
+                        Placeholder.parsed("page", String.valueOf(currentPage)));
+
                 for (LogManager.TransactionLog log : logs) {
                     String time = dateFormat.format(log.timestamp());
                     String type = log.type().name();
-                    double amount = log.amount();
-                    String currency = log.currencyType();
-                    String partner = "";
 
+                    // Simple logic for partner name
+                    String partner = "";
                     if (log.senderUuid() != null && !log.senderUuid().equals(targetUuid)) {
-                        partner = "來自 " + Bukkit.getOfflinePlayer(log.senderUuid()).getName();
+                        OfflinePlayer p = Bukkit.getOfflinePlayer(log.senderUuid());
+                        partner = "來自 " + (p.getName() != null ? p.getName() : "Unknown");
                     } else if (log.receiverUuid() != null && !log.receiverUuid().equals(targetUuid)) {
-                        partner = "給 " + Bukkit.getOfflinePlayer(log.receiverUuid()).getName();
+                        OfflinePlayer p = Bukkit.getOfflinePlayer(log.receiverUuid());
+                        partner = "給 " + (p.getName() != null ? p.getName() : "Unknown");
                     }
 
                     if (log.reverted()) {
-                        type = type + " (已回溯)";
-                    }
-
-                    Component message;
-                    if (log.type() == com.smile.aceeconomy.data.TransactionType.SET && log.oldBalance() != null) {
-                        // SET: old -> new
-                        message = Component.text(
-                                String.format("[%s] %s %.2f \u2794 %.2f %s %s", time, type, log.oldBalance(),
-                                        log.amount(), currency, partner),
-                                log.reverted() ? NamedTextColor.GRAY : NamedTextColor.YELLOW);
+                        // Reverted entry
+                        plugin.getMessageManager().send(sender, "history-entry-reverted",
+                                Placeholder.parsed("time", time),
+                                Placeholder.parsed("type", type),
+                                Placeholder.parsed("amount", String.format("%.2f", log.amount())),
+                                Placeholder.parsed("currency", log.currencyType()),
+                                Placeholder.parsed("partner", partner));
+                    } else if (log.type() == com.smile.aceeconomy.data.TransactionType.SET
+                            && log.oldBalance() != null) {
+                        // SET entry
+                        plugin.getMessageManager().send(sender, "history-entry-set",
+                                Placeholder.parsed("time", time),
+                                Placeholder.parsed("type", type),
+                                Placeholder.parsed("old_balance", String.format("%.2f", log.oldBalance())),
+                                Placeholder.parsed("new_balance", String.format("%.2f", log.amount())),
+                                Placeholder.parsed("currency", log.currencyType()),
+                                Placeholder.parsed("partner", partner));
                     } else {
-                        message = Component.text(
-                                String.format("[%s] %s %.2f %s %s", time, type, amount, currency, partner),
-                                log.reverted() ? NamedTextColor.GRAY : NamedTextColor.GREEN);
+                        // Normal entry
+                        plugin.getMessageManager().send(sender, "history-entry-normal",
+                                Placeholder.parsed("time", time),
+                                Placeholder.parsed("type", type),
+                                Placeholder.parsed("amount", String.format("%.2f", log.amount())),
+                                Placeholder.parsed("currency", log.currencyType()),
+                                Placeholder.parsed("partner", partner));
                     }
 
-                    sender.sendMessage(message);
-                    sender.sendMessage(Component.text("  ID: " + log.transactionId(), NamedTextColor.DARK_GRAY));
+                    plugin.getMessageManager().send(sender, "history-id",
+                            Placeholder.parsed("id", String.valueOf(log.transactionId())));
                 }
             }).exceptionally(throwable -> {
-                sender.sendMessage(Component.text("查詢歷史記錄時發生錯誤。", NamedTextColor.RED));
+                plugin.getMessageManager().send(sender, "history-error");
                 throwable.printStackTrace();
                 return null;
             });

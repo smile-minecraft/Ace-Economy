@@ -2,7 +2,7 @@ package com.smile.aceeconomy.listeners;
 
 import com.smile.aceeconomy.AceEconomy;
 import com.smile.aceeconomy.api.EconomyProvider;
-import com.smile.aceeconomy.utils.MessageUtils;
+import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.Sound;
@@ -145,13 +145,13 @@ public class BanknoteListener implements Listener {
         String idStr = pdc.get(getIdKey(plugin), PersistentDataType.STRING); // 新增 ID 讀取
 
         if (value == null || value <= 0) {
-            MessageUtils.sendError(player, "這張支票已損壞！");
+            plugin.getMessageManager().send(player, "banknote-damaged");
             return;
         }
 
         // 檢查帳戶是否已載入
         if (!economyProvider.hasAccount(player.getUniqueId())) {
-            MessageUtils.sendError(player, "帳戶尚未載入，請稍後再試！");
+            plugin.getMessageManager().send(player, "account-loading");
             return;
         }
 
@@ -170,7 +170,7 @@ public class BanknoteListener implements Listener {
                             if (log != null && log.reverted()) {
                                 // 支票已作廢
                                 item.setAmount(0); // 直接移除
-                                MessageUtils.sendError(player, "此支票已被銀行註銷 (Voided Check)！");
+                                plugin.getMessageManager().send(player, "banknote-voided");
                                 player.playSound(player.getLocation(), Sound.ENTITY_ITEM_BREAK, 1.0f, 1.0f);
                                 return;
                             }
@@ -203,12 +203,13 @@ public class BanknoteListener implements Listener {
                     // 播放音效
                     player.playSound(player.getLocation(), Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 1.0f, 1.0f);
 
-                    MessageUtils.sendSuccess(player,
-                            "已兌換支票：" + MessageUtils.formatMoney(value) +
-                                    " <gray>(簽發人：" + issuer + ")</gray>");
+                    String formatted = plugin.getConfigManager().formatMoney(value);
+                    plugin.getMessageManager().send(player, "banknote-redeem-success",
+                            Placeholder.parsed("amount", formatted),
+                            Placeholder.parsed("issuer", issuer));
                 } else {
                     // 兌換失敗，退還支票
-                    MessageUtils.sendError(player, "兌換失敗，交易被取消！");
+                    plugin.getMessageManager().send(player, "banknote-redeem-failed");
                     // 注意：物品已移除，需要退還
                     // 這裡簡化處理，實際應該再給回物品
                 }

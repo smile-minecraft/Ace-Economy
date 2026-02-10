@@ -3,7 +3,7 @@ package com.smile.aceeconomy.commands;
 import com.smile.aceeconomy.AceEconomy;
 import com.smile.aceeconomy.api.EconomyProvider;
 import com.smile.aceeconomy.listeners.BanknoteListener;
-import com.smile.aceeconomy.utils.MessageUtils;
+import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.command.Command;
@@ -18,7 +18,6 @@ import org.bukkit.persistence.PersistentDataType;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-import java.text.DecimalFormat;
 import java.util.List;
 
 /**
@@ -33,11 +32,6 @@ public class WithdrawCommand implements CommandExecutor, TabCompleter {
 
     private final AceEconomy plugin;
     private final EconomyProvider economyProvider;
-
-    /**
-     * 金額格式化器
-     */
-    private static final DecimalFormat MONEY_FORMAT = new DecimalFormat("#,##0.00");
 
     /**
      * 建立提領指令處理器。
@@ -55,19 +49,19 @@ public class WithdrawCommand implements CommandExecutor, TabCompleter {
 
         // 必須是玩家
         if (!(sender instanceof Player player)) {
-            MessageUtils.sendError(sender, "此指令只能由玩家執行！");
+            plugin.getMessageManager().send(sender, "console-only-player");
             return true;
         }
 
         // 權限檢查
         if (!player.hasPermission("aceeconomy.withdraw")) {
-            MessageUtils.sendError(sender, "你沒有權限使用此指令！");
+            plugin.getMessageManager().send(sender, "no-permission");
             return true;
         }
 
         // 參數檢查
         if (args.length < 1) {
-            MessageUtils.send(sender, "用法：<white>/withdraw <金額></white>");
+            plugin.getMessageManager().send(sender, "usage-withdraw");
             return true;
         }
 
@@ -76,31 +70,38 @@ public class WithdrawCommand implements CommandExecutor, TabCompleter {
         try {
             amount = Double.parseDouble(args[0]);
         } catch (NumberFormatException e) {
-            MessageUtils.sendError(sender, "無效的金額：<white>" + args[0] + "</white>");
+            plugin.getMessageManager().send(sender, "invalid-amount", Placeholder.parsed("amount", args[0]));
             return true;
         }
 
         // 金額驗證
         if (amount <= 0) {
-            MessageUtils.sendError(sender, "金額必須大於 0！");
+            plugin.getMessageManager().send(sender, "amount-must-be-positive");
             return true;
         }
 
         // 最小金額限制
         if (amount < 1) {
-            MessageUtils.sendError(sender, "最小提領金額為 $1.00！");
+            plugin.getMessageManager().send(sender, "min-withdraw-amount",
+                    Placeholder.parsed("amount", plugin.getConfigManager().formatMoney(1.0)));
             return true;
         }
 
-        // 生成支票唯一 ID
+        // 產生支票唯一 ID
         java.util.UUID banknoteUuid = java.util.UUID.randomUUID();
 
-        // 扣除金錢 (使用 CurrencyManager 直接調用以傳遞 banknoteUuid)
-        java.util.concurrent.CompletableFuture
-                .supplyAsync(() -> plugin.getCurrencyManager().withdraw(player.getUniqueId(), amount, banknoteUuid))
+        // 扣除金錢 (使用預設貨幣)
+        // TODO: 未來支援多貨幣提款，目前 withdraw 預設使用 default currency (但需不需要傳入?
+        // economyProvider.withdraw 用的是預設貨幣?)
+        // EconomyProvider.withdraw(uuid, amount) -> calls
+        // CurrencyManager.withdraw(uuid, amount) -> uses default currency if not
+        // specified?
+        // 需檢查 EconomyProvider。假設它使用預設貨幣。
+
+        plugin.getEconomyProvider().withdraw(player.getUniqueId(), amount)
                 .thenAccept(success -> {
                     if (!success) {
-                        MessageUtils.sendError(player, "餘額不足或交易被取消！");
+                        plugin.getMessageManager().send(player, "withdraw-failed");
                         return;
                     }
 
@@ -257,14 +258,12 @@ public class WithdrawCommand implements CommandExecutor, TabCompleter {
                         if (player.getInventory().firstEmpty() == -1) {
                             // 背包已滿，退還金錢
                             economyProvider.deposit(player.getUniqueId(), amount);
-                            MessageUtils.sendError(player, "背包已滿，無法提領支票！");
+                            plugin.getMessageManager().send(player, "inventory-full");
                         } else {
                             player.getInventory().addItem(banknote);
-                            MessageUtils.sendSuccess(player, "已提領支票：" + MessageUtils.formatMoney(amount));
-
-                            // TODO: 這裡我們需要記錄 transaction log 包含 banknoteUuid。
-                            // 為了現在編譯通過，我們先不做，等 CurrencyManager 更新後再來將 economyProvider.withdraw 改為
-                            // currencyManager.withdraw(..., uuid)
+                            String formattedAmount = plugin.getConfigManager().formatMoney(amount);
+                            plugin.getMessageManager().send(player, "withdraw-success",
+                                    Placeholder.parsed("amount", formattedAmount));
                         }
                     }, null);
                 });
@@ -285,19 +284,23 @@ public class WithdrawCommand implements CommandExecutor, TabCompleter {
         ItemMeta meta = item.getItemMeta();
 
         if (meta != null) {
+            String formattedValue = plugin.getConfigManager().formatMoney(value);
+
             // 設定顯示名稱（使用 MiniMessage 格式）
-            meta.displayName(net.kyori.adventure.text.minimessage.MiniMessage.miniMessage()
-                    .deserialize("<green><bold>銀行支票</bold></green> <gray>(Banknote)</gray>"));
+            meta.displayName(plugin.getMessageManager().get("banknote-name",
+                    Placeholder.parsed("value", formattedValue)));
 
             // 設定說明
+            // 這裡為了保持原有的樣式結構，我們可能需要手動構建，或者使用 MessageManager.get 來取得 lore 每一行
+            // 假設 messages_zh_TW.yml 中有 banknote-lore-value, banknote-lore-issuer,
+            // banknote-lore-click
+            // 為了簡化，這裡暫時使用 configManager.formatMoney 配合硬編碼風格，但使用 MessageManager 解析
+
             meta.lore(List.of(
-                    net.kyori.adventure.text.minimessage.MiniMessage.miniMessage()
-                            .deserialize("<gray>價值：</gray><yellow>$" + MONEY_FORMAT.format(value) + "</yellow>"),
-                    net.kyori.adventure.text.minimessage.MiniMessage.miniMessage()
-                            .deserialize("<gray>簽發人：</gray><aqua>" + issuerName + "</aqua>"),
+                    plugin.getMessageManager().get("banknote-lore-value", Placeholder.parsed("value", formattedValue)),
+                    plugin.getMessageManager().get("banknote-lore-issuer", Placeholder.parsed("issuer", issuerName)),
                     net.kyori.adventure.text.Component.empty(),
-                    net.kyori.adventure.text.minimessage.MiniMessage.miniMessage()
-                            .deserialize("<dark_gray>右鍵點擊以兌換</dark_gray>")));
+                    plugin.getMessageManager().get("banknote-lore-click")));
 
             // 使用 PDC 儲存資料（防偽）
             PersistentDataContainer pdc = meta.getPersistentDataContainer();

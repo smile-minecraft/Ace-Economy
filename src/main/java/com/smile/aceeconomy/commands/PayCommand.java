@@ -3,7 +3,7 @@ package com.smile.aceeconomy.commands;
 import com.smile.aceeconomy.AceEconomy;
 import com.smile.aceeconomy.api.EconomyProvider;
 import com.smile.aceeconomy.event.EconomyTransactionEvent;
-import com.smile.aceeconomy.utils.MessageUtils;
+import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
 import org.bukkit.Bukkit;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
@@ -47,19 +47,19 @@ public class PayCommand implements CommandExecutor, TabCompleter {
 
         // 必須是玩家
         if (!(sender instanceof Player player)) {
-            MessageUtils.sendError(sender, "此指令只能由玩家執行！");
+            plugin.getMessageManager().send(sender, "console-only-player");
             return true;
         }
 
         // 權限檢查
         if (!player.hasPermission("aceeconomy.pay")) {
-            MessageUtils.sendError(sender, "你沒有權限使用此指令！");
+            plugin.getMessageManager().send(sender, "no-permission");
             return true;
         }
 
         // 參數檢查: /pay <玩家> <金額> [貨幣]
         if (args.length < 2) {
-            MessageUtils.send(sender, "用法：<white>/pay <玩家> <金額> [貨幣]</white>");
+            plugin.getMessageManager().send(sender, "usage-pay");
             return true;
         }
 
@@ -71,32 +71,32 @@ public class PayCommand implements CommandExecutor, TabCompleter {
         try {
             amount = Double.parseDouble(amountStr);
         } catch (NumberFormatException e) {
-            MessageUtils.sendError(sender, "無效的金額：<white>" + amountStr + "</white>");
+            plugin.getMessageManager().send(sender, "invalid-amount", Placeholder.parsed("amount", amountStr));
             return true;
         }
 
         // 防止負數
         if (amount <= 0) {
-            MessageUtils.sendError(sender, "金額必須大於 0！");
+            plugin.getMessageManager().send(sender, "amount-must-be-positive");
             return true;
         }
 
         // 防止轉給自己
         if (targetName.equalsIgnoreCase(player.getName())) {
-            MessageUtils.sendError(sender, "你不能轉帳給自己！");
+            plugin.getMessageManager().send(sender, "cannot-pay-self");
             return true;
         }
 
         // 查找目標玩家
         Player targetPlayer = Bukkit.getPlayer(targetName);
         if (targetPlayer == null) {
-            MessageUtils.sendError(sender, "玩家 <white>" + targetName + "</white> 不在線上！");
+            plugin.getMessageManager().send(sender, "player-offline", Placeholder.parsed("player", targetName));
             return true;
         }
 
         // 檢查目標玩家帳戶是否已載入
         if (!economyProvider.hasAccount(targetPlayer.getUniqueId())) {
-            MessageUtils.sendError(sender, "目標玩家帳戶尚未載入！");
+            plugin.getMessageManager().send(sender, "account-not-loaded");
             return true;
         }
 
@@ -105,7 +105,8 @@ public class PayCommand implements CommandExecutor, TabCompleter {
         if (args.length >= 3) {
             String inputCurrency = args[2].toLowerCase();
             if (!plugin.getCurrencyManager().currencyExists(inputCurrency)) {
-                MessageUtils.sendError(sender, "<red>未知的貨幣: <white>" + inputCurrency + "</white></red>");
+                plugin.getMessageManager().send(sender, "unknown-currency",
+                        Placeholder.parsed("currency", inputCurrency));
                 return true;
             }
             currencyId = inputCurrency;
@@ -115,7 +116,9 @@ public class PayCommand implements CommandExecutor, TabCompleter {
         double currentBalance = plugin.getCurrencyManager().getBalance(player.getUniqueId(), currencyId);
         if (currentBalance < amount) {
             String currencyName = plugin.getConfigManager().getCurrency(currencyId).name();
-            MessageUtils.sendError(sender, "<red>你沒有足夠的 " + currencyName + "！</red>");
+            plugin.getMessageManager().send(sender, "insufficient-funds-currency",
+                    Placeholder.parsed("currency_name", currencyName),
+                    Placeholder.parsed("amount", String.valueOf(amount)));
             return true;
         }
 
@@ -127,14 +130,18 @@ public class PayCommand implements CommandExecutor, TabCompleter {
         economyProvider.transfer(player.getUniqueId(), targetPlayer.getUniqueId(), currencyId, amount)
                 .thenAccept(success -> {
                     if (success) {
-                        MessageUtils.sendSuccess(player,
-                                "已轉帳 " + MessageUtils.formatMoney(finalAmount) + " " + currencyName
-                                        + " 給 <aqua><player></aqua>！",
-                                "player", targetPlayer.getName());
-                        MessageUtils.sendSuccess(targetPlayer,
-                                "收到來自 <aqua><player></aqua> 的轉帳：" + MessageUtils.formatMoney(finalAmount) + " "
-                                        + currencyName,
-                                "player", player.getName());
+                        // 使用 configManager.formatMoney 來格式化金額（包含貨幣符號）
+                        String formattedAmount = plugin.getConfigManager().formatMoney(finalAmount, finalCurrencyId);
+
+                        plugin.getMessageManager().send(player, "payment-sent-currency",
+                                Placeholder.parsed("amount", formattedAmount),
+                                Placeholder.parsed("currency_name", currencyName),
+                                Placeholder.parsed("player", targetPlayer.getName()));
+
+                        plugin.getMessageManager().send(targetPlayer, "payment-received-currency",
+                                Placeholder.parsed("amount", formattedAmount),
+                                Placeholder.parsed("currency_name", currencyName),
+                                Placeholder.parsed("player", player.getName()));
 
                         EconomyTransactionEvent event = new EconomyTransactionEvent(
                                 player.getUniqueId(), player.getName(),
@@ -142,7 +149,7 @@ public class PayCommand implements CommandExecutor, TabCompleter {
                                 finalAmount, EconomyTransactionEvent.TransactionType.PAY);
                         Bukkit.getPluginManager().callEvent(event);
                     } else {
-                        MessageUtils.sendError(player, "轉帳失敗！可能餘額不足或交易被取消。");
+                        plugin.getMessageManager().send(player, "transaction-failed");
                     }
                 });
 

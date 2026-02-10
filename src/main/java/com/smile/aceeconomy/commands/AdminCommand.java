@@ -6,7 +6,7 @@ import com.smile.aceeconomy.event.EconomyTransactionEvent;
 import com.smile.aceeconomy.migration.CMIMigrator;
 import com.smile.aceeconomy.migration.EssentialsMigrator;
 import com.smile.aceeconomy.migration.Migrator;
-import com.smile.aceeconomy.utils.MessageUtils;
+import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
 import org.bukkit.Bukkit;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
@@ -71,7 +71,7 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
 
         // 權限檢查
         if (!sender.hasPermission("aceeconomy.admin")) {
-            MessageUtils.sendError(sender, "你沒有權限使用此指令！");
+            plugin.getMessageManager().send(sender, "no-permission");
             return true;
         }
 
@@ -112,12 +112,12 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
         // 處理 reload 指令
         if (action.equals("reload")) {
             if (!sender.hasPermission("aceeconomy.command.reload")) {
-                MessageUtils.sendError(sender, "你沒有權限使用此指令！");
+                plugin.getMessageManager().send(sender, "no-permission");
                 return true;
             }
 
             plugin.getConfigManager().reload();
-            MessageUtils.sendSuccess(sender, "設定檔已重新載入！");
+            plugin.getMessageManager().send(sender, "reload-success");
 
             // Console Log
             String senderName = sender instanceof Player ? ((Player) sender).getName() : "Console";
@@ -139,13 +139,13 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
         try {
             amount = Double.parseDouble(amountStr);
         } catch (NumberFormatException e) {
-            MessageUtils.sendError(sender, "無效的金額：<white>" + amountStr + "</white>");
+            plugin.getMessageManager().send(sender, "invalid-amount", Placeholder.parsed("amount", amountStr));
             return true;
         }
 
         // 金額驗證
         if (amount < 0 && !action.equals("set")) {
-            MessageUtils.sendError(sender, "金額不能為負數！");
+            plugin.getMessageManager().send(sender, "amount-must-be-positive");
             return true;
         }
 
@@ -153,14 +153,15 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
         Player targetPlayer = Bukkit.getPlayer(targetName);
         if (targetPlayer == null) {
             // 嘗試離線操作
-            MessageUtils.sendError(sender, "玩家 <white>" + targetName + "</white> 不在線上！");
-            MessageUtils.send(sender, "<gray>（目前僅支援在線玩家操作）</gray>");
+            plugin.getMessageManager().send(sender, "player-offline", Placeholder.parsed("player", targetName));
+            // MessageUtils.send(sender, "<gray>（目前僅支援在線玩家操作）</gray>"); // MessageManager
+            // usually handles this context in the message itself or we add another key
             return true;
         }
 
         // 檢查帳戶
         if (!economyProvider.hasAccount(targetPlayer.getUniqueId())) {
-            MessageUtils.sendError(sender, "目標玩家帳戶尚未載入！");
+            plugin.getMessageManager().send(sender, "account-not-found");
             return true;
         }
 
@@ -169,7 +170,8 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
         if (args.length >= 4) {
             String inputCurrency = args[3].toLowerCase();
             if (!plugin.getCurrencyManager().currencyExists(inputCurrency)) {
-                MessageUtils.sendError(sender, "<red>未知的貨幣: <white>" + inputCurrency + "</white></red>");
+                plugin.getMessageManager().send(sender, "unknown-currency",
+                        Placeholder.parsed("currency", inputCurrency));
                 return true;
             }
             currencyId = inputCurrency;
@@ -181,72 +183,84 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
         switch (action) {
             case "give" -> {
                 if (amount <= 0) {
-                    MessageUtils.sendError(sender, "給予金額必須大於 0！");
+                    plugin.getMessageManager().send(sender, "amount-must-be-positive");
                     return true;
                 }
                 final String gCurrency = currencyId;
                 final String gCurrencyName = currencyName;
                 economyProvider.deposit(targetPlayer.getUniqueId(), currencyId, amount).thenAccept(success -> {
                     if (success) {
-                        MessageUtils.sendSuccess(sender,
-                                "已給予 <aqua><player></aqua> " + MessageUtils.formatMoney(finalAmount) + " "
-                                        + gCurrencyName,
-                                "player", targetPlayer.getName());
-                        MessageUtils.sendSuccess(targetPlayer,
-                                "管理員給予你 " + MessageUtils.formatMoney(finalAmount) + " " + gCurrencyName);
+                        String formatted = plugin.getConfigManager().formatMoney(finalAmount, gCurrency);
+                        plugin.getMessageManager().send(sender, "admin-give-success",
+                                Placeholder.parsed("player", targetPlayer.getName()),
+                                Placeholder.parsed("amount", formatted),
+                                Placeholder.parsed("currency", gCurrencyName)); // Typo in key usage? "currency_name" vs
+                                                                                // "currency" in message. checked:
+                                                                                // "currency" in example
+
+                        plugin.getMessageManager().send(targetPlayer, "admin-give-received",
+                                Placeholder.parsed("amount", formatted),
+                                Placeholder.parsed("currency", gCurrencyName));
 
                         fireTransactionEvent(sender, targetPlayer, finalAmount,
                                 EconomyTransactionEvent.TransactionType.GIVE);
                     } else {
-                        MessageUtils.sendError(sender, "操作失敗！");
+                        plugin.getMessageManager().send(sender, "admin-action-failed");
                     }
                 });
             }
 
             case "take" -> {
                 if (amount <= 0) {
-                    MessageUtils.sendError(sender, "扣除金額必須大於 0！");
+                    plugin.getMessageManager().send(sender, "amount-must-be-positive");
                     return true;
                 }
                 final String tCurrency = currencyId;
                 final String tCurrencyName = currencyName;
                 economyProvider.withdraw(targetPlayer.getUniqueId(), currencyId, amount).thenAccept(success -> {
                     if (success) {
-                        MessageUtils.sendSuccess(sender,
-                                "已從 <aqua><player></aqua> 扣除 " + MessageUtils.formatMoney(finalAmount) + " "
-                                        + tCurrencyName,
-                                "player", targetPlayer.getName());
-                        MessageUtils.sendSuccess(targetPlayer,
-                                "管理員扣除了你 " + MessageUtils.formatMoney(finalAmount) + " " + tCurrencyName);
+                        String formatted = plugin.getConfigManager().formatMoney(finalAmount, tCurrency);
+                        plugin.getMessageManager().send(sender, "admin-take-success",
+                                Placeholder.parsed("player", targetPlayer.getName()),
+                                Placeholder.parsed("amount", formatted),
+                                Placeholder.parsed("currency", tCurrencyName));
+
+                        plugin.getMessageManager().send(targetPlayer, "admin-take-received",
+                                Placeholder.parsed("amount", formatted),
+                                Placeholder.parsed("currency", tCurrencyName));
 
                         fireTransactionEvent(sender, targetPlayer, finalAmount,
                                 EconomyTransactionEvent.TransactionType.TAKE);
                     } else {
-                        MessageUtils.sendError(sender, "操作失敗！可能餘額不足。");
+                        plugin.getMessageManager().send(sender, "admin-taking-failed");
                     }
                 });
             }
 
             case "set" -> {
                 if (amount < 0) {
-                    MessageUtils.sendError(sender, "餘額不能為負數！");
+                    plugin.getMessageManager().send(sender, "amount-must-be-positive"); // message says "amount cannot
+                                                                                        // be negative"
                     return true;
                 }
                 final String sCurrency = currencyId;
                 final String sCurrencyName = currencyName;
                 economyProvider.setBalance(targetPlayer.getUniqueId(), currencyId, amount).thenAccept(success -> {
                     if (success) {
-                        MessageUtils.sendSuccess(sender,
-                                "已將 <aqua><player></aqua> 的" + sCurrencyName + "餘額設為 "
-                                        + MessageUtils.formatMoney(finalAmount),
-                                "player", targetPlayer.getName());
-                        MessageUtils.sendSuccess(targetPlayer,
-                                "管理員將你的" + sCurrencyName + "餘額設為 " + MessageUtils.formatMoney(finalAmount));
+                        String formatted = plugin.getConfigManager().formatMoney(finalAmount, sCurrency);
+                        plugin.getMessageManager().send(sender, "admin-set-success",
+                                Placeholder.parsed("player", targetPlayer.getName()),
+                                Placeholder.parsed("amount", formatted),
+                                Placeholder.parsed("currency", sCurrencyName));
+
+                        plugin.getMessageManager().send(targetPlayer, "admin-set-received",
+                                Placeholder.parsed("amount", formatted),
+                                Placeholder.parsed("currency", sCurrencyName));
 
                         fireTransactionEvent(sender, targetPlayer, finalAmount,
                                 EconomyTransactionEvent.TransactionType.SET);
                     } else {
-                        MessageUtils.sendError(sender, "操作失敗！");
+                        plugin.getMessageManager().send(sender, "admin-action-failed");
                     }
                 });
             }
@@ -266,13 +280,13 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
      */
     private boolean handleImport(CommandSender sender, String[] args) {
         if (args.length < 2) {
-            MessageUtils.send(sender, "<gray>用法：<white>/aceeco import <essentials|cmi></white></gray>");
+            plugin.getMessageManager().send(sender, "usage-import");
             return true;
         }
 
         // 檢查是否有遷移正在進行
         if (migrationInProgress.get()) {
-            MessageUtils.sendError(sender, "已有遷移任務正在進行中！");
+            plugin.getMessageManager().send(sender, "migration-in-progress");
             return true;
         }
 
@@ -286,14 +300,16 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
         };
 
         if (migrator == null) {
-            MessageUtils.sendError(sender, "不支援的插件：<white>" + args[1] + "</white>");
-            MessageUtils.send(sender, "<gray>支援的插件：<white>essentials, cmi</white></gray>");
+            plugin.getMessageManager().send(sender, "migration-unsupported-plugin",
+                    Placeholder.parsed("plugin", args[1]));
+            plugin.getMessageManager().send(sender, "migration-supported-plugins");
             return true;
         }
 
         // 檢查來源是否可用
         if (!migrator.isAvailable()) {
-            MessageUtils.sendError(sender, "找不到 <white>" + migrator.getName() + "</white> 的資料資料夾！");
+            plugin.getMessageManager().send(sender, "migration-source-not-found",
+                    Placeholder.parsed("plugin", migrator.getName()));
             return true;
         }
 
@@ -301,24 +317,25 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
         migrationInProgress.set(true);
 
         // 發送開始訊息
-        MessageUtils.send(sender, "<yellow>開始從 <white>" + migrator.getName() + "</white> 匯入資料...</yellow>");
+        plugin.getMessageManager().send(sender, "migration-start", Placeholder.parsed("plugin", migrator.getName()));
         plugin.getLogger().info("開始資料遷移：" + migrator.getName());
 
         // 在非同步執行緒執行遷移
         Bukkit.getAsyncScheduler().runNow(plugin, task -> {
             migrator.migrate(sender, processed -> {
                 // 回報進度
-                MessageUtils.send(sender, "<gray>匯入進度：<white>" + processed + "</white></gray>");
+                plugin.getMessageManager().send(sender, "migration-progress",
+                        Placeholder.parsed("processed", String.valueOf(processed)));
             }).thenAccept(result -> {
                 // 遷移完成
                 migrationInProgress.set(false);
 
                 if (result.totalCount() == 0) {
-                    MessageUtils.sendError(sender, "沒有找到可匯入的資料！");
+                    plugin.getMessageManager().send(sender, "migration-no-data");
                 } else {
-                    MessageUtils.sendSuccess(sender,
-                            "遷移完成！成功：<white>" + result.successCount() +
-                                    "</white>，失敗：<white>" + result.failCount() + "</white>");
+                    plugin.getMessageManager().send(sender, "migration-complete",
+                            Placeholder.parsed("success", String.valueOf(result.successCount())),
+                            Placeholder.parsed("fail", String.valueOf(result.failCount())));
                 }
 
                 plugin.getLogger().info("資料遷移完成：成功 " + result.successCount() +
@@ -327,7 +344,8 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
             }).exceptionally(throwable -> {
                 // 遷移失敗
                 migrationInProgress.set(false);
-                MessageUtils.sendError(sender, "遷移失敗：<white>" + throwable.getMessage() + "</white>");
+                plugin.getMessageManager().send(sender, "migration-failed",
+                        Placeholder.parsed("error", throwable.getMessage()));
                 plugin.getLogger().severe("資料遷移失敗：" + throwable.getMessage());
                 throwable.printStackTrace();
                 return null;
@@ -343,22 +361,22 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
      * @param sender 接收者
      */
     private void sendHelp(CommandSender sender) {
-        MessageUtils.send(sender, "<yellow>--- AceEconomy 指令幫助 ---</yellow>");
-        MessageUtils.send(sender, "<white>/money [玩家]</white> <gray>- 查看帳戶餘額</gray>");
-        MessageUtils.send(sender, "<white>/withdraw <金額></white> <gray>- 將餘額提款為支票</gray>");
-        MessageUtils.send(sender, "<white>/pay <玩家> <金額></white> <gray>- 轉帳給其他玩家</gray>");
+        plugin.getMessageManager().send(sender, "admin-help-header");
+        plugin.getMessageManager().send(sender, "admin-help-money");
+        plugin.getMessageManager().send(sender, "admin-help-withdraw");
+        plugin.getMessageManager().send(sender, "admin-help-pay");
 
         if (sender.hasPermission("aceeconomy.admin")) {
-            MessageUtils.send(sender, "<yellow>--- 管理員指令 ---</yellow>");
-            MessageUtils.send(sender, "<white>/aceeco give <玩家> <金額> [貨幣]</white> <gray>- 給予玩家金錢</gray>");
-            MessageUtils.send(sender, "<white>/aceeco take <玩家> <金額> [貨幣]</white> <gray>- 扣除玩家金錢</gray>");
-            MessageUtils.send(sender, "<white>/aceeco set <玩家> <金額> [貨幣]</white> <gray>- 設定玩家餘額</gray>");
-            MessageUtils.send(sender, "<white>/aceeco history <玩家> [頁碼]</white> <gray>- 查看交易記錄</gray>");
-            MessageUtils.send(sender, "<white>/aceeco rollback <交易ID></white> <gray>- 回溯交易</gray>");
-            MessageUtils.send(sender, "<white>/aceeco import <essentials|cmi></white> <gray>- 匯入資料</gray>");
+            plugin.getMessageManager().send(sender, "admin-help-admin-header");
+            plugin.getMessageManager().send(sender, "admin-help-give");
+            plugin.getMessageManager().send(sender, "admin-help-take");
+            plugin.getMessageManager().send(sender, "admin-help-set");
+            plugin.getMessageManager().send(sender, "admin-help-history");
+            plugin.getMessageManager().send(sender, "admin-help-rollback");
+            plugin.getMessageManager().send(sender, "admin-help-import");
         }
 
-        MessageUtils.send(sender, "<white>/aceeco help</white> <gray>- 顯示此幫助訊息</gray>");
+        plugin.getMessageManager().send(sender, "admin-help-help");
     }
 
     @Override

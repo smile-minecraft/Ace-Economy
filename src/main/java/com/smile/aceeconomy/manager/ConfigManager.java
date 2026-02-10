@@ -3,7 +3,7 @@ package com.smile.aceeconomy.manager;
 import com.smile.aceeconomy.AceEconomy;
 import com.smile.aceeconomy.data.Currency;
 import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.minimessage.MiniMessage;
+
 import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
 import net.kyori.adventure.text.minimessage.tag.resolver.TagResolver;
 import org.bukkit.command.CommandSender;
@@ -27,10 +27,9 @@ import java.util.Map;
 public class ConfigManager {
 
     private final AceEconomy plugin;
-    private final MiniMessage miniMessage;
     private FileConfiguration config;
-    private FileConfiguration messages;
-    private File messagesFile;
+
+    private String locale;
 
     // 快取的設定值
     private String databaseType;
@@ -45,7 +44,6 @@ public class ConfigManager {
 
     // Legacy support fields
     private double startBalance;
-    private String prefix;
     private String mainCommandAlias;
 
     // Discord 設定
@@ -60,7 +58,6 @@ public class ConfigManager {
      */
     public ConfigManager(AceEconomy plugin) {
         this.plugin = plugin;
-        this.miniMessage = MiniMessage.miniMessage();
     }
 
     /**
@@ -78,14 +75,12 @@ public class ConfigManager {
         plugin.reloadConfig();
         this.config = plugin.getConfig();
 
-        // 儲存並載入 messages.yml
-        saveDefaultMessages();
-        loadMessages();
-
-        // 檢查並更新 messages.yml
-        checkAndUpdate("messages.yml");
         // 重新載入以確保取得最新值
-        loadMessages();
+        plugin.reloadConfig();
+        this.config = plugin.getConfig();
+
+        // 載入語言設定
+        this.locale = config.getString("locale", "zh_TW");
 
         // 快取設定值
         cacheConfigValues();
@@ -150,40 +145,26 @@ public class ConfigManager {
     public void reload() {
         plugin.reloadConfig();
         this.config = plugin.getConfig();
-        loadMessages();
+        plugin.reloadConfig();
+        this.config = plugin.getConfig();
+        this.locale = config.getString("locale", "zh_TW");
+
+        // 重載訊息管理器
+        if (plugin.getMessageManager() != null) {
+            plugin.getMessageManager().load(locale);
+        }
+
         cacheConfigValues();
         plugin.getLogger().info("已重新載入設定檔");
     }
 
     /**
-     * 儲存預設 messages.yml。
+     * 取得當前語言設定。
+     *
+     * @return 語言代碼
      */
-    private void saveDefaultMessages() {
-        messagesFile = new File(plugin.getDataFolder(), "messages.yml");
-        if (!messagesFile.exists()) {
-            plugin.saveResource("messages.yml", false);
-        }
-    }
-
-    /**
-     * 載入 messages.yml。
-     */
-    private void loadMessages() {
-        messagesFile = new File(plugin.getDataFolder(), "messages.yml");
-
-        if (!messagesFile.exists()) {
-            saveDefaultMessages();
-        }
-
-        messages = YamlConfiguration.loadConfiguration(messagesFile);
-
-        // 合併預設值
-        InputStream defaultStream = plugin.getResource("messages.yml");
-        if (defaultStream != null) {
-            YamlConfiguration defaultConfig = YamlConfiguration.loadConfiguration(
-                    new InputStreamReader(defaultStream, StandardCharsets.UTF_8));
-            messages.setDefaults(defaultConfig);
-        }
+    public String getLocale() {
+        return locale;
     }
 
     /**
@@ -204,8 +185,8 @@ public class ConfigManager {
         // 起始餘額
         startBalance = config.getDouble("start-balance", 1000.0);
 
-        // 訊息前綴
-        prefix = messages.getString("prefix", "<gold>[AceEconomy]</gold> <gray>");
+        // 訊息前綴由 MessageManager 管理
+        // prefix = messages.getString("prefix", "<gold>[AceEconomy]</gold> <gray>");
 
         // 主指令別名
         mainCommandAlias = config.getString("settings.main-command-alias", "aceeco");
@@ -501,7 +482,8 @@ public class ConfigManager {
      * @return 訊息前綴
      */
     public String getPrefix() {
-        return prefix;
+        // 委派給 MessageManager 或回傳空字串 (視需求而定，舊程式碼可能依賴此前綴)
+        return "";
     }
 
     /**
@@ -511,7 +493,7 @@ public class ConfigManager {
      * @return 原始訊息字串
      */
     public String getRawMessage(String key) {
-        return messages.getString("messages." + key, "<red>訊息未定義: " + key + "</red>");
+        return plugin.getMessageManager().getRawMessage(key);
     }
 
     /**
@@ -521,8 +503,7 @@ public class ConfigManager {
      * @return 解析後的 Component
      */
     public Component getMessage(String key) {
-        String raw = prefix + getRawMessage(key);
-        return miniMessage.deserialize(raw);
+        return plugin.getMessageManager().get(key);
     }
 
     /**
@@ -533,14 +514,11 @@ public class ConfigManager {
      * @return 解析後的 Component
      */
     public Component getMessage(String key, Map<String, String> placeholders) {
-        String raw = prefix + getRawMessage(key);
-
         TagResolver.Builder resolverBuilder = TagResolver.builder();
         for (Map.Entry<String, String> entry : placeholders.entrySet()) {
             resolverBuilder.resolver(Placeholder.parsed(entry.getKey(), entry.getValue()));
         }
-
-        return miniMessage.deserialize(raw, resolverBuilder.build());
+        return plugin.getMessageManager().get(key, resolverBuilder.build());
     }
 
     /**
@@ -552,8 +530,7 @@ public class ConfigManager {
      * @return 解析後的 Component
      */
     public Component getMessage(String key, String phKey, String phVal) {
-        String raw = prefix + getRawMessage(key);
-        return miniMessage.deserialize(raw, Placeholder.parsed(phKey, phVal));
+        return plugin.getMessageManager().get(key, Placeholder.parsed(phKey, phVal));
     }
 
     /**
@@ -567,8 +544,7 @@ public class ConfigManager {
      * @return 解析後的 Component
      */
     public Component getMessage(String key, String phKey1, String phVal1, String phKey2, String phVal2) {
-        String raw = prefix + getRawMessage(key);
-        return miniMessage.deserialize(raw,
+        return plugin.getMessageManager().get(key,
                 Placeholder.parsed(phKey1, phVal1),
                 Placeholder.parsed(phKey2, phVal2));
     }
@@ -580,7 +556,7 @@ public class ConfigManager {
      * @param key    訊息鍵值
      */
     public void sendMessage(CommandSender sender, String key) {
-        sender.sendMessage(getMessage(key));
+        plugin.getMessageManager().send(sender, key);
     }
 
     /**
@@ -591,7 +567,11 @@ public class ConfigManager {
      * @param placeholders 佔位符對應表
      */
     public void sendMessage(CommandSender sender, String key, Map<String, String> placeholders) {
-        sender.sendMessage(getMessage(key, placeholders));
+        TagResolver.Builder resolverBuilder = TagResolver.builder();
+        for (Map.Entry<String, String> entry : placeholders.entrySet()) {
+            resolverBuilder.resolver(Placeholder.parsed(entry.getKey(), entry.getValue()));
+        }
+        plugin.getMessageManager().send(sender, key, resolverBuilder.build());
     }
 
     /**
@@ -603,6 +583,6 @@ public class ConfigManager {
      * @param phVal  佔位符值
      */
     public void sendMessage(CommandSender sender, String key, String phKey, String phVal) {
-        sender.sendMessage(getMessage(key, phKey, phVal));
+        plugin.getMessageManager().send(sender, key, Placeholder.parsed(phKey, phVal));
     }
 }

@@ -12,6 +12,7 @@ import com.smile.aceeconomy.listeners.BanknoteListener;
 import com.smile.aceeconomy.listeners.EconomyLogListener;
 import com.smile.aceeconomy.manager.ConfigManager;
 import com.smile.aceeconomy.manager.CurrencyManager;
+import com.smile.aceeconomy.manager.MessageManager;
 import com.smile.aceeconomy.service.DiscordWebhook;
 import com.smile.aceeconomy.storage.DatabaseConnection;
 import com.smile.aceeconomy.storage.JsonStorageHandler;
@@ -43,6 +44,7 @@ public final class AceEconomy extends JavaPlugin implements Listener {
     private static AceEconomy instance;
 
     private ConfigManager configManager;
+    private MessageManager messageManager;
     private DatabaseConnection databaseConnection;
     private StorageHandler storageHandler;
     private CurrencyManager currencyManager;
@@ -66,6 +68,10 @@ public final class AceEconomy extends JavaPlugin implements Listener {
         // 初始化設定檔管理器
         configManager = new ConfigManager(this);
         configManager.load();
+
+        // 初始化訊息管理器
+        messageManager = new MessageManager(this);
+        messageManager.load(configManager.getLocale());
 
         // 初始化儲存處理器（根據設定選擇）
         initializeStorage();
@@ -390,5 +396,14 @@ public final class AceEconomy extends JavaPlugin implements Listener {
      */
     public ConfigManager getConfigManager() {
         return configManager;
+    }
+
+    /**
+     * 取得訊息管理器。
+     *
+     * @return 訊息管理器實例
+     */
+    public MessageManager getMessageManager() {
+        return messageManager;
     }
 }

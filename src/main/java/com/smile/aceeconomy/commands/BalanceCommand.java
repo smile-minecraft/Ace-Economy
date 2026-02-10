@@ -2,7 +2,7 @@ package com.smile.aceeconomy.commands;
 
 import com.smile.aceeconomy.AceEconomy;
 import com.smile.aceeconomy.manager.CurrencyManager;
-import com.smile.aceeconomy.utils.MessageUtils;
+import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
 import org.bukkit.Bukkit;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
@@ -46,21 +46,25 @@ public class BalanceCommand implements CommandExecutor, TabCompleter {
 
         // 權限檢查
         if (!sender.hasPermission("aceeconomy.use")) {
-            MessageUtils.sendError(sender, "你沒有權限使用此指令！");
+            plugin.getMessageManager().send(sender, "no-permission");
             return true;
         }
 
         // /money 或 /balance（無參數）- 查看自己餘額 (預設貨幣)
         if (args.length == 0) {
             if (!(sender instanceof Player player)) {
-                MessageUtils.sendError(sender, "控制台必須指定玩家名稱！");
+                plugin.getMessageManager().send(sender, "console-only-player");
                 return true;
             }
 
             String defaultCurrency = currencyManager.getDefaultCurrencyId();
             double balance = currencyManager.getBalance(player.getUniqueId(), defaultCurrency);
             String currencyName = plugin.getConfigManager().getCurrency(defaultCurrency).name();
-            MessageUtils.send(sender, "你的" + currencyName + "餘額：" + MessageUtils.formatMoney(balance));
+            String formattedBalance = plugin.getConfigManager().formatMoney(balance, defaultCurrency);
+
+            plugin.getMessageManager().send(sender, "balance-self",
+                    Placeholder.parsed("currency_name", currencyName),
+                    Placeholder.parsed("amount", formattedBalance));
             return true;
         }
 
@@ -72,7 +76,8 @@ public class BalanceCommand implements CommandExecutor, TabCompleter {
         if (args.length >= 2) {
             String inputCurrency = args[1].toLowerCase();
             if (!currencyManager.currencyExists(inputCurrency)) {
-                MessageUtils.sendError(sender, "<red>未知的貨幣: <white>" + inputCurrency + "</white></red>");
+                plugin.getMessageManager().send(sender, "unknown-currency",
+                        Placeholder.parsed("currency", inputCurrency));
                 return true;
             }
             currencyId = inputCurrency;
@@ -86,28 +91,40 @@ public class BalanceCommand implements CommandExecutor, TabCompleter {
         if (targetPlayer != null) {
             // 在線玩家
             double balance = currencyManager.getBalance(targetPlayer.getUniqueId(), finalCurrencyId);
-            MessageUtils.send(sender,
-                    "<aqua><player></aqua> 的" + currencyName + "餘額：" + MessageUtils.formatMoney(balance),
-                    "player", targetPlayer.getName());
+            String formattedBalance = plugin.getConfigManager().formatMoney(balance, finalCurrencyId);
+
+            plugin.getMessageManager().send(sender, "balance-other",
+                    Placeholder.parsed("player", targetPlayer.getName()),
+                    Placeholder.parsed("currency_name", currencyName),
+                    Placeholder.parsed("amount", formattedBalance));
         } else {
             // 離線玩家 - 非同步查詢
             Bukkit.getAsyncScheduler().runNow(plugin, task -> {
                 org.bukkit.OfflinePlayer offlinePlayer = Bukkit.getOfflinePlayer(targetName);
+                // offlinePlayer.getUniqueId() is safe, but getting name might be tricky if not
+                // cached.
+                // But Bukkit.getOfflinePlayer(name) returns an object that has name if
+                // resolved.
+                // If not played before, UUID might be random (UUID version 3).
 
-                if (!offlinePlayer.hasPlayedBefore()) {
-                    MessageUtils.sendError(sender, "找不到玩家：<white>" + targetName + "</white>");
+                if (!offlinePlayer.hasPlayedBefore() && !offlinePlayer.isOnline()) {
+                    plugin.getMessageManager().send(sender, "player-offline", Placeholder.parsed("player", targetName));
                     return;
                 }
 
                 UUID uuid = offlinePlayer.getUniqueId();
                 plugin.getStorageHandler().loadAccount(uuid).thenAccept(account -> {
                     if (account == null) {
-                        MessageUtils.sendError(sender, "該玩家沒有帳戶資料！");
+                        plugin.getMessageManager().send(sender, "account-not-found");
                     } else {
-                        MessageUtils.send(sender,
-                                "<aqua><player></aqua> 的" + currencyName + "餘額："
-                                        + MessageUtils.formatMoney(account.getBalance(finalCurrencyId)),
-                                "player", offlinePlayer.getName() != null ? offlinePlayer.getName() : targetName);
+                        double balance = account.getBalance(finalCurrencyId);
+                        String formattedBalance = plugin.getConfigManager().formatMoney(balance, finalCurrencyId);
+
+                        plugin.getMessageManager().send(sender, "balance-other",
+                                Placeholder.parsed("player",
+                                        offlinePlayer.getName() != null ? offlinePlayer.getName() : targetName),
+                                Placeholder.parsed("currency_name", currencyName),
+                                Placeholder.parsed("amount", formattedBalance));
                     }
                 });
             });

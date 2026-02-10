@@ -2,10 +2,7 @@ package com.smile.aceeconomy.commands;
 
 import com.smile.aceeconomy.AceEconomy;
 import com.smile.aceeconomy.manager.LeaderboardManager;
-import com.smile.aceeconomy.utils.MessageUtils;
-import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.event.ClickEvent;
-import net.kyori.adventure.text.minimessage.MiniMessage;
+import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
@@ -20,7 +17,6 @@ public class BaltopCommand implements CommandExecutor, TabCompleter {
 
     private final AceEconomy plugin;
     private final LeaderboardManager leaderboardManager;
-    private final MiniMessage mm = MiniMessage.miniMessage();
 
     public BaltopCommand(AceEconomy plugin, LeaderboardManager leaderboardManager) {
         this.plugin = plugin;
@@ -31,16 +27,16 @@ public class BaltopCommand implements CommandExecutor, TabCompleter {
     public boolean onCommand(@NotNull CommandSender sender, @NotNull Command command, @NotNull String label,
             @NotNull String[] args) {
         if (!sender.hasPermission("aceeconomy.command.baltop")) {
-            MessageUtils.sendError(sender, "您沒有權限執行此指令！");
+            plugin.getMessageManager().send(sender, "no-permission");
             return true;
         }
 
         if (!leaderboardManager.isEnabled()) {
-            MessageUtils.sendError(sender, "排行榜功能已停用。");
+            plugin.getMessageManager().send(sender, "baltop-disabled");
             return true;
         }
 
-        MessageUtils.send(sender, "<gray>正在載入排行榜...</gray>");
+        plugin.getMessageManager().send(sender, "baltop-loading");
 
         // 解析參數: /baltop [貨幣] [頁碼]
         String currencyId = plugin.getCurrencyManager().getDefaultCurrencyId();
@@ -58,7 +54,8 @@ public class BaltopCommand implements CommandExecutor, TabCompleter {
                 if (plugin.getCurrencyManager().currencyExists(args[0].toLowerCase())) {
                     currencyId = args[0].toLowerCase();
                 } else {
-                    MessageUtils.sendError(sender, "<red>未知的貨幣: <white>" + args[0] + "</white></red>");
+                    plugin.getMessageManager().send(sender, "unknown-currency",
+                            Placeholder.parsed("currency", args[0]));
                     return true;
                 }
             }
@@ -71,7 +68,7 @@ public class BaltopCommand implements CommandExecutor, TabCompleter {
                 if (page < 1)
                     page = 1;
             } catch (NumberFormatException e) {
-                MessageUtils.sendError(sender, "請輸入有效的頁碼！");
+                plugin.getMessageManager().send(sender, "invalid-page");
                 return true;
             }
         }
@@ -89,7 +86,7 @@ public class BaltopCommand implements CommandExecutor, TabCompleter {
             // 但為了確保安全，我們簡單地直接發送 (Adventure audience is thread-safe usually)
 
             if (entries.isEmpty()) {
-                MessageUtils.sendError(sender, "排行榜目前沒有資料。");
+                plugin.getMessageManager().send(sender, "baltop-empty");
                 return;
             }
 
@@ -97,21 +94,26 @@ public class BaltopCommand implements CommandExecutor, TabCompleter {
             int totalPages = (int) Math.ceil((double) entries.size() / pageSize);
 
             if (finalPage > totalPages) {
-                MessageUtils.sendError(sender, "頁碼超出範圍 (最大頁數: " + totalPages + ")");
+                plugin.getMessageManager().send(sender, "baltop-invalid-page",
+                        Placeholder.parsed("max_page", String.valueOf(totalPages)));
                 return;
             }
 
             int startIndex = (finalPage - 1) * pageSize;
             int endIndex = Math.min(startIndex + pageSize, entries.size());
 
-            Component header = mm.deserialize("<gold>=== 🏆 " + currencyName + " 排行榜 ===</gold>");
-            sender.sendMessage(header);
+            // Header
+            plugin.getMessageManager().send(sender, "baltop-header", Placeholder.parsed("currency_name", currencyName));
 
             for (int i = startIndex; i < endIndex; i++) {
                 LeaderboardManager.TopEntry entry = entries.get(i);
-                String line = "<yellow>#" + entry.rank() + " <white>" + entry.name() + " <dark_gray>- <green>"
-                        + MessageUtils.formatMoney(entry.balance());
-                sender.sendMessage(mm.deserialize(line));
+                // 使用 MessageManager 格式化並發送每行，或構建 Component
+                // 這裡使用 baltop-entry key
+                String formattedBalance = plugin.getConfigManager().formatMoney(entry.balance(), finalCurrencyId);
+                plugin.getMessageManager().send(sender, "baltop-entry",
+                        Placeholder.parsed("rank", String.valueOf(entry.rank())),
+                        Placeholder.parsed("player", entry.name()),
+                        Placeholder.parsed("amount", formattedBalance));
             }
 
             // Footer / Pagination
@@ -119,14 +121,13 @@ public class BaltopCommand implements CommandExecutor, TabCompleter {
                     / 1000;
             String timeAgo = formatTimeAgo(timeAgoSeconds);
 
-            Component footer = mm.deserialize("<gray>更新於: " + timeAgo + " 前 <dark_gray>| </dark_gray>")
-                    .append(mm.deserialize("<gold>[上一頁]</gold>")
-                            .clickEvent(ClickEvent.runCommand("/baltop " + finalCurrencyId + " " + (finalPage - 1))))
-                    .append(mm.deserialize(" <gray>(" + finalPage + "/" + totalPages + ") </gray>"))
-                    .append(mm.deserialize("<gold>[下一頁]</gold>")
-                            .clickEvent(ClickEvent.runCommand("/baltop " + finalCurrencyId + " " + (finalPage + 1))));
-
-            sender.sendMessage(footer);
+            plugin.getMessageManager().send(sender, "baltop-footer",
+                    Placeholder.parsed("time_ago", timeAgo),
+                    Placeholder.parsed("currency", finalCurrencyId),
+                    Placeholder.parsed("prev_page", String.valueOf(Math.max(1, finalPage - 1))),
+                    Placeholder.parsed("page", String.valueOf(finalPage)),
+                    Placeholder.parsed("total_pages", String.valueOf(totalPages)),
+                    Placeholder.parsed("next_page", String.valueOf(Math.min(totalPages, finalPage + 1))));
         });
 
         return true;
