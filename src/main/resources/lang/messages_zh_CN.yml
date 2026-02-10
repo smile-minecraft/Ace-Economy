@@ -1,28 +1,31 @@
 # ============================================
-# AceEconomy 消息配置文件 (zh_CN)
+# AceEconomy 语言配置文件 (zh_CN)
 # 格式: MiniMessage
 # ============================================
 
 prefix: "<gold>[AceEconomy]</gold> <gray>"
 
 general:
-  no-permission: "<red>你没有权限使用此指令！</red>"
+  no-permission: "<red>你没有权限使用此命令！</red>"
   invalid-amount: "<red>无效的金额：<white><amount></white></red>"
   amount-must-be-positive: "<red>金额必须大于 0！</red>"
   player-not-found: "<red>找不到玩家：<white><player></white></red>"
   player-offline: "<red>玩家 <white><player></white> 不在线！</red>"
   player-no-account: "<red>该玩家没有账户数据！</red>"
   account-not-loaded: "<red>账户尚未加载，请稍后再试！</red>"
-  inventory-full: "<red>背包已满，无法提现支票！</red>"
+  inventory-full: "<red>背包已满，无法提取支票！</red>"
   transaction-failed: "<red>交易失败！</red>"
   transaction-cancelled: "<red>交易被取消！</red>"
   reload-success: "<green>配置文件已重新加载！</green>"
+  unknown-currency: "<red>错误: 找不到货币 <white><currency></white>。</red>"
+  console-only-player: "<red>此命令只能由玩家执行！</red>"
+  console-specify-player: "<red>控制台必须指定玩家名称！</red>"
 
 economy:
   balance-check: "你的余额：<yellow><balance></yellow>"
   balance-check-other: "<aqua><player></aqua> 的余额：<yellow><balance></yellow>"
-  balance-check-currency: "你的<currency_name>余额：<yellow><balance></yellow>"
-  balance-check-currency-other: "<aqua><player></aqua> 的<currency_name>余额：<yellow><balance></yellow>"
+  balance-check-currency: "你的 <currency_name> 余额：<yellow><balance></yellow>"
+  balance-check-currency-other: "<aqua><player></aqua> 的 <currency_name> 余额：<yellow><balance></yellow>"
 
   payment-sent: "<green>已转账 <yellow><amount></yellow> 给 <aqua><player></aqua>！</green>"
   payment-received: "<green>收到来自 <aqua><player></aqua> 的转账：<yellow><amount></yellow></green>"
@@ -32,10 +35,11 @@ economy:
   cannot-pay-self: "<red>你不能转账给自己！</red>"
   insufficient-funds: "<red>余额不足！</red>"
   insufficient-funds-currency: "<red>你的 <currency_name> 余额不足 (需要: <amount>)！</red>"
-  unknown-currency: "<red>错误: 找不到货币 <white><currency></white>。</red>"
 
   withdraw-success: "<green>已提取支票：<yellow><amount></yellow></green>"
   withdraw-redeem: "<green>已兑换支票：<yellow><amount></yellow> <gray>(签发人：<issuer>)</gray></green>"
+  
+  account-not-found: "<red>找不到账户数据！</red>"
 
 admin:
   give: "<green>已给予 <aqua><player></aqua> <yellow><amount></yellow></green>"
@@ -53,6 +57,23 @@ admin:
   notify-give-currency: "<green>管理员给予你 <yellow><amount></yellow> <currency_name></green>"
   notify-take-currency: "<green>管理员扣除了你 <yellow><amount></yellow> <currency_name></green>"
   notify-set-currency: "<green>管理员将你的 <currency_name> 余额设为 <yellow><amount></yellow></green>"
+  
+  admin-action-failed: "<red>操作失败！</red>"
+  admin-taking-failed: "<red>操作失败！可能余额不足。</red>"
+  
+  # Help messages
+  help-header: "<yellow>--- AceEconomy 命令帮助 ---</yellow>"
+  help-money: "<white>/money [玩家]</white> <gray>- 查看账户余额</gray>"
+  help-withdraw: "<white>/withdraw <金额></white> <gray>- 将余额提取为支票</gray>"
+  help-pay: "<white>/pay <玩家> <金额></white> <gray>- 转账给其他玩家</gray>"
+  help-admin-header: "<yellow>--- 管理员命令 ---</yellow>"
+  help-give: "<white>/aceeco give <玩家> <金额> [货币]</white> <gray>- 给予玩家金钱</gray>"
+  help-take: "<white>/aceeco take <玩家> <金额> [货币]</white> <gray>- 扣除玩家金钱</gray>"
+  help-set: "<white>/aceeco set <玩家> <金额> [货币]</white> <gray>- 设定玩家余额</gray>"
+  help-history: "<white>/aceeco history <玩家> [页码]</white> <gray>- 查看交易记录</gray>"
+  help-rollback: "<white>/aceeco rollback <交易ID></white> <gray>- 回滚交易</gray>"
+  help-import: "<white>/aceeco import <essentials|cmi></white> <gray>- 导入数据</gray>"
+  help-help: "<white>/aceeco help</white> <gray>- 显示此帮助信息</gray>"
 
   migration-start: "<yellow>开始从 <white><plugin></white> 导入数据...</yellow>"
   migration-progress: "<gray>导入进度：<white><current>/<total></white></gray>"
@@ -60,6 +81,50 @@ admin:
   migration-error: "<red>迁移失败：<white><error></white></red>"
   migration-not-available: "<red>找不到 <white><plugin></white> 的数据文件夹！</red>"
   migration-in-progress: "<red>已有迁移任务正在进行中！</red>"
+  migration-usage: "<gray>用法：<white>/aceeco import <essentials|cmi></white></gray>"
+  migration-unsupported-plugin: "<red>不支持的插件：<white><plugin></white></red>"
+  migration-supported-plugins: "<gray>支持的插件：<white>essentials, cmi</white></gray>"
+  migration-source-not-found: "<red>找不到 <white><plugin></white> 的数据源！</red>"
+  migration-no-data: "<red>没有找到可导入的数据！</red>"
+  migration-failed: "<red>迁移失败：<white><error></white></red>"
+  
+  usage-import: "<gray>用法：<white>/aceeco import <essentials|cmi></white></gray>"
+
+baltop:
+  header: "<gold>=== 🏆 <currency_name> 富豪榜 ===</gold>"
+  entry: "<yellow>#<rank> <white><player> <dark_gray>- <green><amount>"
+  empty: "<red>排行榜目前没有数据。</red>"
+  invalid-page: "<red>页码超出范围 (最大页数: <max_page>)"
+  footer: "<gray>更新于: <time_ago> 前 <dark_gray>| </dark_gray><click:run_command:'/baltop <currency> <prev_page>'><gold>[上一页]</gold></click> <gray>(<page>/<total_pages>) </gray><click:run_command:'/baltop <currency> <next_page>'><gold>[下一页]</gold></click>"
+  loading: "<gray>正在加载排行榜...</gray>"
+  disabled: "<red>排行榜功能已停用。</red>"
+
+history:
+  header: "<gold>=== <player> 的交易记录 (第 <page> 页) ===</gold>"
+  empty: "<yellow>找不到更多交易记录。</yellow>"
+  error: "<red>查询历史记录时发生错误。</red>"
+  entry-set: "<yellow>[<time>] <type> <old_balance> -> <new_balance> <currency> <partner></yellow>"
+  entry-normal: "<green>[<time>] <type> <amount> <currency> <partner></green>"
+  entry-reverted: "<gray>[<time>] <type> (已回滚) <amount> <currency> <partner></gray>"
+  id: "<dark_gray>  ID: <id></dark_gray>"
+  usage: "<gray>用法：<white>/aceeco history <玩家> [页码]</white></gray>"
+
+banknote:
+  name: "<green><bold>银行支票</bold></green> <gray>(Banknote)</gray>"
+  lore-value: "<gray>价值：</gray><yellow><value></yellow>"
+  lore-issuer: "<gray>签發人：</gray><aqua><issuer></aqua>"
+  lore-click: "<dark_gray>右键点击以兑换</dark_gray>"
+  damaged: "<red>这张支票已损坏！</red>"
+  voided: "<red>此支票已被银行注销 (Voided Check)！</red>"
+  redeem-success: "<green>已兑换支票：<yellow><amount></yellow> <gray>(签發人：<issuer>)</gray></green>"
+  redeem-failed: "<red>兑换失败，交易被取消！</red>"
+
+usage:
+  pay: "<gray>用法：<white>/pay <玩家> <金额> [货币]</white></gray>"
+  withdraw: "<gray>用法：<white>/withdraw <金额></white></gray>"
+  balance: "<gray>用法：<white>/balance [玩家] [货币]</white></gray>"
+  baltop: "<gray>用法：<white>/baltop [货币] [页码]</white></gray>"
+  history: "<gray>用法：<white>/aceeco history <玩家> [页码]</white></gray>"
 
 console:
   start: "AceEconomy <version> 已启用！"

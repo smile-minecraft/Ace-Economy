@@ -8,7 +8,7 @@ import org.bukkit.command.CommandMap;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabCompleter;
 import org.bukkit.plugin.Plugin;
-import org.bukkit.plugin.SimplePluginManager;
+
 import org.jetbrains.annotations.NotNull;
 
 import java.lang.reflect.Field;
@@ -80,10 +80,12 @@ public class CommandRegistrar {
      */
     private CommandMap getCommandMap() {
         try {
-            Field commandMapField = SimplePluginManager.class.getDeclaredField("commandMap");
+            org.bukkit.plugin.PluginManager pluginManager = Bukkit.getPluginManager();
+            Field commandMapField = pluginManager.getClass().getDeclaredField("commandMap");
             commandMapField.setAccessible(true);
-            return (CommandMap) commandMapField.get(Bukkit.getPluginManager());
+            return (CommandMap) commandMapField.get(pluginManager);
         } catch (Exception e) {
+            plugin.getLogger().severe("無法透過反射取得 CommandMap: " + e.getMessage());
             e.printStackTrace();
             return null;
         }
