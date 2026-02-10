@@ -118,6 +118,11 @@ public class PayCommand implements CommandExecutor, TabCompleter {
         final String finalCurrencyId = currencyId;
         final double finalAmount = amount;
 
+        if (plugin.getUserCacheManager() == null) {
+            plugin.getMessageManager().send(sender, "general.offline-support-disabled");
+            return true;
+        }
+
         plugin.getUserCacheManager().getUUID(targetName).thenAccept(targetUuid -> {
             if (targetUuid == null) {
                 // 資料庫也找不到 -> 真的找不到玩家

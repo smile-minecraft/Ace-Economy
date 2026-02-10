@@ -9,11 +9,25 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.logging.Logger;
+
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 
 /**
  * 日誌管理器。
@@ -29,6 +43,9 @@ public class LogManager {
     private final DatabaseConnection databaseConnection;
     private final Logger logger;
     private final CurrencyManager currencyManager;
+    private final File logDir;
+    private final Gson gson;
+    private final ReentrantLock fileLock = new ReentrantLock();
 
     private static final String INSERT_LOG = """
             INSERT INTO ace_transaction_logs
@@ -53,6 +70,11 @@ public class LogManager {
         this.databaseConnection = databaseConnection;
         this.logger = plugin.getLogger();
         this.currencyManager = currencyManager;
+        this.logDir = new File(plugin.getDataFolder(), "logs");
+        if (!this.logDir.exists()) {
+            this.logDir.mkdirs();
+        }
+        this.gson = new GsonBuilder().setDateFormat("yyyy-MM-dd HH:mm:ss").create();
     }
 
     /**
@@ -69,6 +91,23 @@ public class LogManager {
      */
     public void logTransaction(UUID sender, UUID receiver, double amount, String currency, TransactionType type,
             UUID banknoteUuid, String context, Double oldBalance) {
+        // 非同步寫入檔案日誌
+        CompletableFuture.runAsync(() -> {
+            Map<String, Object> logData = new LinkedHashMap<>();
+            logData.put("transaction_id",
+                    (context != null && !context.isEmpty()) ? context : "generated-" + UUID.randomUUID());
+            logData.put("type", type.name());
+            logData.put("sender", sender != null ? sender.toString() : "N/A");
+            logData.put("receiver", receiver != null ? receiver.toString() : "N/A");
+            logData.put("currency", currency);
+            logData.put("amount", amount);
+            logData.put("banknote_uuid", banknoteUuid != null ? banknoteUuid.toString() : null);
+            logData.put("old_balance", oldBalance);
+            logData.put("context", context);
+
+            logToFile("INFO", "TRANSACTION", logData);
+        });
+
         CompletableFuture.runAsync(() -> {
             try (Connection conn = databaseConnection.getConnection();
                     PreparedStatement pstmt = conn.prepareStatement(INSERT_LOG)) {
@@ -94,6 +133,11 @@ public class LogManager {
             } catch (SQLException e) {
                 logger.severe("記錄交易失敗: " + e.getMessage());
                 e.printStackTrace();
+                // 記錄錯誤到檔案
+                Map<String, Object> errorData = new LinkedHashMap<>();
+                errorData.put("error", e.getMessage());
+                errorData.put("sql_state", e.getSQLState());
+                logToFile("ERROR", "DATABASE", errorData);
             }
         });
     }
@@ -359,7 +403,7 @@ public class LogManager {
         return new TransactionLog(
                 rs.getInt("log_id"),
                 rs.getString("transaction_id"),
-                rs.getString("banknote_uuid") != null ? UUID.fromString(rs.getString("banknote_uuid")) : null,
+                banknoteUuidStr != null ? UUID.fromString(banknoteUuidStr) : null,
                 rs.getTimestamp("timestamp"),
                 rs.getString("sender_uuid") != null ? UUID.fromString(rs.getString("sender_uuid")) : null,
                 rs.getString("receiver_uuid") != null ? UUID.fromString(rs.getString("receiver_uuid")) : null,
@@ -376,6 +420,41 @@ public class LogManager {
             return rs.wasNull() ? null : val;
         } catch (SQLException e) {
             return null;
+        }
+    }
+
+    /**
+     * 將日誌寫入檔案。
+     *
+     * @param level    日誌等級 (INFO, WARN, ERROR)
+     * @param category 類別 (TRANSACTION, SYSTEM, DATABASE, etc.)
+     * @param data     詳細資料 Map
+     */
+    public void logToFile(String level, String category, Map<String, Object> data) {
+        if (logDir == null)
+            return;
+
+        // 建立日誌物件
+        Map<String, Object> logEntry = new LinkedHashMap<>();
+        logEntry.put("timestamp", LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
+        logEntry.put("level", level);
+        logEntry.put("category", category);
+        logEntry.putAll(data);
+
+        String jsonLog = gson.toJson(logEntry);
+        String dateStr = LocalDate.now().toString(); // YYYY-MM-DD
+        File file = new File(logDir, "log-" + dateStr + ".jsonl");
+
+        fileLock.lock();
+        try (BufferedWriter writer = Files.newBufferedWriter(file.toPath(), StandardCharsets.UTF_8,
+                java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND)) {
+            writer.write(jsonLog);
+            writer.newLine();
+        } catch (IOException e) {
+            logger.severe("寫入日誌檔案失敗: " + e.getMessage());
+            e.printStackTrace();
+        } finally {
+            fileLock.unlock();
         }
     }
 
