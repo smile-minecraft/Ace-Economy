@@ -13,6 +13,7 @@ general:
   player-offline: "<red>玩家 <white><player></white> 不在线！</red>"
   player-no-account: "<red>该玩家没有账户数据！</red>"
   account-not-loaded: "<red>账户尚未加载，请稍后再试！</red>"
+  invalid-time-format: "<red>无效的时间格式！请使用如 1h, 30m, 1d 的格式。</red>"
   inventory-full: "<red>背包已满，无法提取支票！</red>"
   transaction-failed: "<red>交易失败！</red>"
   transaction-cancelled: "<red>交易被取消！</red>"
@@ -126,6 +127,14 @@ usage:
   balance: "<gray>用法：<white>/balance [玩家] [货币]</white></gray>"
   baltop: "<gray>用法：<white>/baltop [货币] [页码]</white></gray>"
   history: "<gray>用法：<white>/aceeco history <玩家> [页码]</white></gray>"
+  rollback: "<gray>用法：<white>/aceeco rollback <玩家> <时间> [类别]</white></gray>"
+
+rollback:
+  usage: "<gray>用法：<white>/aceeco rollback <玩家> <时间> [类别]</white></gray>"
+  searching: "<yellow>正在搜索并回滚交易...</yellow>"
+  none-found: "<red>找不到符合条件的可回滚交易。</red>"
+  complete: "<green>回滚完成！成功：<success>，失败：<fail></green>"
+  error: "<red>执行回滚时发生错误。</red>"
 
 console:
   start: "AceEconomy <version> 已启用！"

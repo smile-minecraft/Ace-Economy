@@ -13,6 +13,7 @@ general:
   player-offline: "<red>Player <white><player></white> is offline!</red>"
   player-no-account: "<red>Player does not have an account!</red>"
   account-not-loaded: "<red>Account not loaded. Please try again later!</red>"
+  invalid-time-format: "<red>Invalid time format! Use formats like 1h, 30m, 1d.</red>"
   inventory-full: "<red>Inventory full! Cannot withdraw banknote.</red>"
   transaction-failed: "<red>Transaction failed!</red>"
   transaction-cancelled: "<red>Transaction cancelled!</red>"
@@ -126,6 +127,14 @@ usage:
   balance: "<gray>Usage: <white>/balance [player] [currency]</white></gray>"
   baltop: "<gray>Usage: <white>/baltop [currency] [page]</white></gray>"
   history: "<gray>Usage: <white>/aceeco history <player> [page]</white></gray>"
+  rollback: "<gray>Usage: <white>/aceeco rollback <player> <time> [category]</white></gray>"
+
+rollback:
+  usage: "<gray>Usage: <white>/aceeco rollback <player> <time> [category]</white></gray>"
+  searching: "<yellow>Searching and rolling back transactions...</yellow>"
+  none-found: "<red>No matching transactions found to rollback.</red>"
+  complete: "<green>Rollback complete! Success: <success>, Failed: <fail></green>"
+  error: "<red>Error occurred during rollback.</red>"
 
 console:
   start: "AceEconomy <version> Enabled!"

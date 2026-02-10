@@ -28,21 +28,20 @@ public class HistoryCommand implements CommandExecutor {
     public boolean onCommand(@NotNull CommandSender sender, @NotNull Command command, @NotNull String label,
             @NotNull String[] args) {
         if (!sender.hasPermission("aceeconomy.admin.history")) {
-            plugin.getMessageManager().send(sender, "no-permission");
+            plugin.getMessageManager().send(sender, "general.no-permission");
             return true;
         }
 
         if (args.length < 1) {
-            plugin.getMessageManager().send(sender, "usage-history"); // Need to add usage-history
+            plugin.getMessageManager().send(sender, "history.usage"); // Need to add usage-history
             // Fallback for now if usage-history not present, or better, add it.
             // I'll assume usage-history is "用法: /aceeco history <玩家> [頁碼]"
             // But let's just send the text using MessageManager if I add the key, or raw
             // text if not?
-            // "usage-history" is not in my list. I should use "invalid-usage" or similar?
-            // messages_zh_TW.yml has "usage-pay" etc. I'll add "usage-history" or use a
+            // "history.usage" is not in my list. I should use "invalid-usage" or similar?
+            // messages_zh_TW.yml has "usage-pay" etc. I'll add "history.usage" or use a
             // generic invalid command msg.
-            sender.sendMessage(net.kyori.adventure.text.minimessage.MiniMessage.miniMessage()
-                    .deserialize("<red>用法: /aceeco history <玩家> [頁碼]</red>"));
+            plugin.getMessageManager().send(sender, "history.usage");
             return true;
         }
 
@@ -54,7 +53,7 @@ public class HistoryCommand implements CommandExecutor {
                 if (page < 1)
                     page = 1;
             } catch (NumberFormatException e) {
-                plugin.getMessageManager().send(sender, "invalid-page");
+                plugin.getMessageManager().send(sender, "baltop.invalid-page");
                 return true;
             }
         }
@@ -72,11 +71,11 @@ public class HistoryCommand implements CommandExecutor {
 
             logManager.getHistory(targetUuid, currentPage, 10).thenAccept(logs -> {
                 if (logs.isEmpty()) {
-                    plugin.getMessageManager().send(sender, "history-empty");
+                    plugin.getMessageManager().send(sender, "history.empty");
                     return;
                 }
 
-                plugin.getMessageManager().send(sender, "history-header",
+                plugin.getMessageManager().send(sender, "history.header",
                         Placeholder.parsed("player", targetName),
                         Placeholder.parsed("page", String.valueOf(currentPage)));
 
@@ -96,7 +95,7 @@ public class HistoryCommand implements CommandExecutor {
 
                     if (log.reverted()) {
                         // Reverted entry
-                        plugin.getMessageManager().send(sender, "history-entry-reverted",
+                        plugin.getMessageManager().send(sender, "history.entry-reverted",
                                 Placeholder.parsed("time", time),
                                 Placeholder.parsed("type", type),
                                 Placeholder.parsed("amount", String.format("%.2f", log.amount())),
@@ -105,7 +104,7 @@ public class HistoryCommand implements CommandExecutor {
                     } else if (log.type() == com.smile.aceeconomy.data.TransactionType.SET
                             && log.oldBalance() != null) {
                         // SET entry
-                        plugin.getMessageManager().send(sender, "history-entry-set",
+                        plugin.getMessageManager().send(sender, "history.entry-set",
                                 Placeholder.parsed("time", time),
                                 Placeholder.parsed("type", type),
                                 Placeholder.parsed("old_balance", String.format("%.2f", log.oldBalance())),
@@ -114,7 +113,7 @@ public class HistoryCommand implements CommandExecutor {
                                 Placeholder.parsed("partner", partner));
                     } else {
                         // Normal entry
-                        plugin.getMessageManager().send(sender, "history-entry-normal",
+                        plugin.getMessageManager().send(sender, "history.entry-normal",
                                 Placeholder.parsed("time", time),
                                 Placeholder.parsed("type", type),
                                 Placeholder.parsed("amount", String.format("%.2f", log.amount())),
@@ -122,11 +121,11 @@ public class HistoryCommand implements CommandExecutor {
                                 Placeholder.parsed("partner", partner));
                     }
 
-                    plugin.getMessageManager().send(sender, "history-id",
+                    plugin.getMessageManager().send(sender, "history.id",
                             Placeholder.parsed("id", String.valueOf(log.transactionId())));
                 }
             }).exceptionally(throwable -> {
-                plugin.getMessageManager().send(sender, "history-error");
+                plugin.getMessageManager().send(sender, "history.error");
                 throwable.printStackTrace();
                 return null;
             });

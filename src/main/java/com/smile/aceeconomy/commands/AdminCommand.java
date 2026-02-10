@@ -191,6 +191,9 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
                 return;
             }
 
+            // Fix: Cache the account so CurrencyManager/EconomyProvider can access it
+            plugin.getCurrencyManager().cacheAccount(account);
+
             String currencyName = plugin.getConfigManager().getCurrency(currencyId).name();
             final String fCurrencyName = currencyName;
             final double fAmount = amount;

@@ -3,9 +3,7 @@ package com.smile.aceeconomy.commands;
 import com.smile.aceeconomy.AceEconomy;
 import com.smile.aceeconomy.manager.LogManager;
 import com.smile.aceeconomy.utils.TimeUtil;
-import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.format.NamedTextColor;
-import net.kyori.adventure.text.minimessage.MiniMessage;
+import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
 import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.command.Command;
@@ -32,14 +30,12 @@ public class RollbackCommand implements CommandExecutor {
     public boolean onCommand(@NotNull CommandSender sender, @NotNull Command command, @NotNull String label,
             @NotNull String[] args) {
         if (!sender.hasPermission("aceeconomy.admin.rollback")) {
-            sender.sendMessage(Component.text("權限不足！", NamedTextColor.RED));
+            plugin.getMessageManager().send(sender, "general.no-permission");
             return true;
         }
 
         if (args.length < 2) {
-            sender.sendMessage(Component.text("用法: /aceeco rollback <玩家> <時間> [類別]", NamedTextColor.RED));
-            sender.sendMessage(Component.text("時間範例: 1h, 30m, 1d", NamedTextColor.GRAY));
-            sender.sendMessage(Component.text("類別: all(預設), trade, admin", NamedTextColor.GRAY));
+            plugin.getMessageManager().send(sender, "rollback.usage");
             return true;
         }
 
@@ -49,14 +45,14 @@ public class RollbackCommand implements CommandExecutor {
 
         long durationMillis = TimeUtil.parseDuration(durationStr);
         if (durationMillis <= 0) {
-            sender.sendMessage(Component.text("無效的時間格式！請使用如 1h, 30m, 1d 的格式。", NamedTextColor.RED));
+            plugin.getMessageManager().send(sender, "general.invalid-time-format");
             return true;
         }
 
         long sinceTimestamp = System.currentTimeMillis() - durationMillis;
 
         // 非同步處理
-        sender.sendMessage(Component.text("正在搜尋並回溯交易...", NamedTextColor.YELLOW));
+        plugin.getMessageManager().send(sender, "rollback.searching");
         Bukkit.getAsyncScheduler().runNow(plugin, task -> {
             OfflinePlayer target = Bukkit.getOfflinePlayer(targetName);
             UUID targetUuid = target.getUniqueId();
@@ -67,14 +63,14 @@ public class RollbackCommand implements CommandExecutor {
 
             logManager.getLogs(targetUuid, sinceTimestamp, category).thenAccept(logs -> {
                 if (logs.isEmpty()) {
-                    sender.sendMessage(Component.text("找不到符合條件的可回溯交易。", NamedTextColor.RED));
+                    plugin.getMessageManager().send(sender, "rollback.none-found");
                     return;
                 }
 
                 AtomicInteger successCount = new AtomicInteger(0);
                 AtomicInteger failCount = new AtomicInteger(0);
                 List<String> errors = new ArrayList<>();
-                double totalValue = 0;
+                // Remove unused totalValue variable
 
                 // 依序執行回溯 (雖然是 batch，但為了安全還是逐筆呼叫 rollbackTransaction)
                 // 若要優化效能，可實作 batch rollback，但目前邏輯複用較安全
@@ -101,14 +97,12 @@ public class RollbackCommand implements CommandExecutor {
                     }
                 }
 
-                sender.sendMessage(Component.text("回溯完成！", NamedTextColor.GREEN));
-                sender.sendMessage(Component.text("成功: " + successCount.get(), NamedTextColor.GREEN));
-                if (failCount.get() > 0) {
-                    sender.sendMessage(Component.text("失敗: " + failCount.get(), NamedTextColor.RED));
-                }
+                plugin.getMessageManager().send(sender, "rollback.complete",
+                        Placeholder.parsed("success", String.valueOf(successCount.get())),
+                        Placeholder.parsed("fail", String.valueOf(failCount.get())));
 
             }).exceptionally(throwable -> {
-                sender.sendMessage(Component.text("執行回溯時發生錯誤。", NamedTextColor.RED));
+                plugin.getMessageManager().send(sender, "rollback.error");
                 throwable.printStackTrace();
                 return null;
             });
