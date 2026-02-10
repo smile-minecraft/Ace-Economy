@@ -374,7 +374,7 @@ public class MySQLImplementation implements StorageProvider {
                         pstmt.setString(1, balance.uuid().toString());
                         pstmt.setString(2, balance.currency());
                         pstmt.setDouble(3, balance.amount());
-                        pstmt.setLong(4, System.currentTimeMillis());
+                        pstmt.setTimestamp(4, new java.sql.Timestamp(System.currentTimeMillis()));
                         pstmt.addBatch();
                     }
                     pstmt.executeBatch();

@@ -73,10 +73,10 @@ public class BanknoteInputListener implements Listener {
             return;
         }
 
-        // Dispatch the withdraw command on the global region scheduler (Folia-safe)
+        // Dispatch the withdraw command on the player's entity scheduler (Folia-safe)
         final double finalAmount = amount;
-        Bukkit.getGlobalRegionScheduler().execute(plugin, () -> {
+        player.getScheduler().run(plugin, task -> {
             Bukkit.dispatchCommand(player, "withdraw " + finalAmount);
-        });
+        }, null);
     }
 }
