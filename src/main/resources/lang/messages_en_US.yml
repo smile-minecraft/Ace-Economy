@@ -75,6 +75,7 @@ admin:
   help-history: "<white>/aceeco history <player> [page]</white> <gray>- View transaction history</gray>"
   help-rollback: "<white>/aceeco rollback <id></white> <gray>- Rollback transaction</gray>"
   help-import: "<white>/aceeco import <essentials|cmi></white> <gray>- Import data</gray>"
+  help-migrate: "<white>/aceeco migrate <sqlite|mysql></white> <gray>- Migrate storage type</gray>"
   help-help: "<white>/aceeco help</white> <gray>- Show this help</gray>"
 
   migration-start: "<yellow>Starting data import from <white><plugin></white>...</yellow>"
@@ -140,3 +141,21 @@ console:
   start: "AceEconomy <version> Enabled!"
   stop: "AceEconomy Disabled!"
   migration-start: "Starting migration from <plugin>..."
+
+# GUI Messages
+gui:
+  bank-title: "<gradient:#FFD700:#FFA500>🏦 AceEconomy Dashboard</gradient>"
+  bank-profile-name: "<gradient:aqua:blue>👤 Account: {player}</gradient>"
+  bank-assets-name: "<green>💵 Assets (Balance)"
+  bank-debt-name: "<red>📉 Debt & Credit"
+  bank-history-name: "<gold>📜 Transaction History"
+  bank-withdraw-name: "<green>💸 Withdraw Banknote"
+  bank-withdraw-lore:
+    - "<gray>Left-Click: $1,000</gray>"
+    - "<gray>Right-Click: $10,000</gray>"
+    - "<gray>Shift-Click: Custom Amount</gray>"
+  bank-close-name: "<!italic><red>Close Menu"
+  bank-loading: "<!italic><yellow>Loading data..."
+  input-request: "<yellow>Please type the amount you want to withdraw in chat:</yellow> <gray>(Type 'cancel' to stop)</gray>"
+  input-invalid: "<red>Invalid number! Please try again.</red>"
+  input-cancel: "<yellow>Withdrawal cancelled.</yellow>"

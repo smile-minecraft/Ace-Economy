@@ -133,12 +133,6 @@ public final class AceEconomy extends JavaPlugin implements Listener {
                 ServicePriority.Normal);
         getLogger().info("已註冊 Native API (EconomyProvider)");
 
-        // 嘗試掛鉤 Vault
-        setupVault();
-
-        // 初始化權限管理器 (需在 setupVault/setupChat 後)
-        permissionManager = new com.smile.aceeconomy.manager.PermissionManager(this);
-
         // 嘗試掛鉤 PlaceholderAPI
         setupPlaceholderAPI();
 
@@ -150,6 +144,7 @@ public final class AceEconomy extends JavaPlugin implements Listener {
         Bukkit.getPluginManager().registerEvents(new BanknoteListener(this), this);
         Bukkit.getPluginManager().registerEvents(new EconomyLogListener(this, discordWebhook), this);
         Bukkit.getPluginManager().registerEvents(new com.smile.aceeconomy.gui.GUIListener(this), this);
+        Bukkit.getPluginManager().registerEvents(new com.smile.aceeconomy.listener.BanknoteInputListener(this), this);
 
         getLogger().info("AceEconomy 已啟用！");
     }

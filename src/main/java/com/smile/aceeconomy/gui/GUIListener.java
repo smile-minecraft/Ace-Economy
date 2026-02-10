@@ -1,17 +1,24 @@
 package com.smile.aceeconomy.gui;
 
 import com.smile.aceeconomy.AceEconomy;
-import net.kyori.adventure.text.minimessage.MiniMessage;
+import com.smile.aceeconomy.listener.BanknoteInputListener;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.inventory.ClickType;
 import org.bukkit.event.inventory.InventoryClickEvent;
 
+/**
+ * Handles player interactions within the BankMenu GUI.
+ * <p>
+ * Cancels all clicks to prevent item theft, routes specific slot clicks
+ * to their handlers (withdraw, close), and integrates with
+ * {@link BanknoteInputListener} for custom amount input.
+ * </p>
+ */
 public class GUIListener implements Listener {
 
     private final AceEconomy plugin;
-    private final MiniMessage miniMessage = MiniMessage.miniMessage();
 
     public GUIListener(AceEconomy plugin) {
         this.plugin = plugin;
@@ -44,14 +51,16 @@ public class GUIListener implements Listener {
 
     private void handleWithdrawClick(Player player, ClickType clickType) {
         if (clickType.isLeftClick() && !clickType.isShiftClick()) {
+            // Left-Click: $1,000 quick withdraw
             player.performCommand("withdraw 1000");
         } else if (clickType.isRightClick() && !clickType.isShiftClick()) {
+            // Right-Click: $10,000 quick withdraw
             player.performCommand("withdraw 10000");
         } else if (clickType.isShiftClick()) {
+            // Shift-Click: Custom amount via chat input
             player.closeInventory();
-            player.sendMessage(miniMessage.deserialize("<yellow>Please type amount in chat:"));
-            // Note: This just prompts the user. If input capture is needed, a ChatListener
-            // would be required.
+            plugin.getMessageManager().send(player, "gui.input-request");
+            BanknoteInputListener.awaitingInput.add(player.getUniqueId());
         }
     }
 }

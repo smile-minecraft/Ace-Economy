@@ -121,23 +121,67 @@ public class ConfigManager {
 
     /**
      * 檢查並遷移 config.yml 至最新版本。
+     * <p>
+     * 對於 v1.4 之前的版本，由於新增了大量結構性變更（Banknote、SSL、Debt 等），
+     * 採用備份舊檔案後重新產生的方式，確保使用者取得完整的新設定與註釋。
+     * </p>
      */
     private void checkAndMigrateConfig() {
-        // 檢查是否為舊版設定 (缺 locale)
-        if (!config.contains("locale")) {
-            plugin.getLogger().info("Detecting legacy config (missing 'locale'). Migrating to version 1.3...");
+        double currentVersion = config.getDouble("config-version", 1.0);
 
-            config.set("locale", "zh_TW"); // Default to zh_TW for upgrading users
-
-            // Update version
-            config.set("config-version", 1.3);
-
-            plugin.saveConfig();
-            plugin.getLogger().info("Config migrated to version 1.3.");
+        // 從 JAR 內建的 config.yml 讀取最新版本號（不寫死在程式碼中）
+        double requiredVersion = currentVersion; // fallback: 不觸發遷移
+        try (InputStream resourceStream = plugin.getResource("config.yml")) {
+            if (resourceStream != null) {
+                YamlConfiguration resourceConfig = YamlConfiguration.loadConfiguration(
+                        new InputStreamReader(resourceStream, StandardCharsets.UTF_8));
+                requiredVersion = resourceConfig.getDouble("config-version", 1.0);
+            }
+        } catch (Exception e) {
+            plugin.getLogger().warning("無法讀取內建 config.yml 版本號: " + e.getMessage());
         }
 
-        // 使用原有的 checkAndUpdate 進行標準更新檢查
-        checkAndUpdate("config.yml");
+        if (currentVersion >= requiredVersion) {
+            // 已是最新版本，執行標準缺鍵補全
+            checkAndUpdate("config.yml");
+            return;
+        }
+
+        // --- 版本過舊：備份並重置 ---
+        plugin.getLogger().warning("==============================================");
+        plugin.getLogger().warning("偵測到過時的設定檔 (v" + currentVersion + ")！");
+        plugin.getLogger().warning("正在備份舊設定檔並更新至 v" + requiredVersion + "...");
+        plugin.getLogger().warning("==============================================");
+
+        File configFile = new File(plugin.getDataFolder(), "config.yml");
+        String backupName = "config.backup.v" + currentVersion + ".yml";
+        File backupFile = new File(plugin.getDataFolder(), backupName);
+
+        // 防止重複備份覆蓋
+        if (backupFile.exists()) {
+            backupName = "config.backup.v" + currentVersion + "." + System.currentTimeMillis() + ".yml";
+            backupFile = new File(plugin.getDataFolder(), backupName);
+        }
+
+        // 備份舊檔案
+        boolean renamed = configFile.renameTo(backupFile);
+        if (!renamed) {
+            plugin.getLogger().severe("無法備份舊設定檔！設定遷移中止。");
+            plugin.getLogger().severe("請手動將 config.yml 重新命名後重啟伺服器。");
+            return;
+        }
+
+        plugin.getLogger().info("舊設定檔已備份至: " + backupName);
+
+        // 釋出新的預設 config.yml
+        plugin.saveResource("config.yml", false);
+
+        // 重新載入
+        plugin.reloadConfig();
+        this.config = plugin.getConfig();
+
+        plugin.getLogger().info("設定檔已更新至 v" + requiredVersion + "！");
+        plugin.getLogger().warning("請檢查新的 config.yml 並將舊設定（如 MySQL 連線資訊）從備份檔遷移過來。");
     }
 
     /**

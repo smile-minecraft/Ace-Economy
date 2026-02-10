@@ -13,6 +13,7 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.logging.Level;
 
@@ -31,6 +32,8 @@ public class MessageManager {
     // Data Structures
     private final Map<String, String> primaryMap = new HashMap<>();
     private final Map<String, String> fallbackMap = new HashMap<>();
+    private final Map<String, List<String>> primaryListMap = new HashMap<>();
+    private final Map<String, List<String>> fallbackListMap = new HashMap<>();
 
     private String prefix;
 
@@ -51,6 +54,8 @@ public class MessageManager {
     public void load(String locale) {
         primaryMap.clear();
         fallbackMap.clear();
+        primaryListMap.clear();
+        fallbackListMap.clear();
 
         // 1. Load internal en_US into fallbackMap
         loadInternalFallback();
@@ -70,7 +75,7 @@ public class MessageManager {
             if (is != null) {
                 YamlConfiguration config = YamlConfiguration
                         .loadConfiguration(new InputStreamReader(is, StandardCharsets.UTF_8));
-                flatten(config, fallbackMap);
+                flatten(config, fallbackMap, fallbackListMap);
             } else {
                 plugin.getLogger().severe("CRITICAL: Internal messages_en_US.yml not found!");
             }
@@ -136,15 +141,21 @@ public class MessageManager {
                 }
             }
 
-            flatten(config, primaryMap);
+            flatten(config, primaryMap, primaryListMap);
         } catch (Exception e) {
             plugin.getLogger().log(Level.SEVERE, "Failed to load language file: " + fileName, e);
         }
     }
 
-    private void flatten(ConfigurationSection section, Map<String, String> targetMap) {
+    private void flatten(ConfigurationSection section, Map<String, String> targetMap,
+            Map<String, List<String>> targetListMap) {
         for (String key : section.getKeys(true)) {
-            if (section.isString(key)) {
+            if (section.isList(key)) {
+                List<String> list = section.getStringList(key);
+                if (!list.isEmpty()) {
+                    targetListMap.put(key, list);
+                }
+            } else if (section.isString(key)) {
                 targetMap.put(key, section.getString(key));
             }
         }
@@ -208,6 +219,38 @@ public class MessageManager {
      */
     public Component get(String key, TagResolver... tags) {
         return miniMessage.deserialize(getRaw(key), tags);
+    }
+
+    /**
+     * Gets a list of raw message strings for list-type keys (e.g., lore).
+     *
+     * @param key Message key
+     * @return List of raw strings, or empty list if key not found
+     */
+    public List<String> getList(String key) {
+        List<String> value = primaryListMap.get(key);
+        if (value != null)
+            return value;
+        value = fallbackListMap.get(key);
+        if (value != null)
+            return value;
+        return List.of();
+    }
+
+    /**
+     * Gets a list of Components parsed from a list-type key.
+     *
+     * @param key  Message key
+     * @param tags Tag resolvers
+     * @return List of Components
+     */
+    public List<Component> getComponents(String key, TagResolver... tags) {
+        List<String> rawList = getList(key);
+        List<Component> components = new java.util.ArrayList<>();
+        for (String line : rawList) {
+            components.add(miniMessage.deserialize(line, tags));
+        }
+        return components;
     }
 
     /**

@@ -30,7 +30,7 @@ commands:
     aliases: [balancetop, top]
   bank:
     description: Open the AceEconomy Dashboard.
-    aliases: [eco, menu, bankmenu]
+    aliases: [menu, bankmenu]
     usage: /bank
 
 permissions:

@@ -106,6 +106,11 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
             return handleImport(sender, args);
         }
 
+        // 處理 migrate 指令 (內部儲存遷移)
+        if (action.equals("migrate")) {
+            return handleMigrate(sender, args);
+        }
+
         // 處理 reload 指令
         if (action.equals("reload")) {
             if (!sender.hasPermission("aceeconomy.command.reload")) {
@@ -362,6 +367,78 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
     }
 
     /**
+     * 處理內部儲存遷移指令。
+     * <p>
+     * 將資料從目前的儲存系統遷移至指定目標 (sqlite/mysql)。
+     * </p>
+     *
+     * @param sender 發送者
+     * @param args   參數
+     * @return 是否成功處理
+     */
+    private boolean handleMigrate(CommandSender sender, String[] args) {
+        if (args.length < 2) {
+            sender.sendMessage(net.kyori.adventure.text.Component.text(
+                    "用法: /aceeco migrate <sqlite|mysql>",
+                    net.kyori.adventure.text.format.NamedTextColor.YELLOW));
+            return true;
+        }
+
+        if (migrationInProgress.get()) {
+            plugin.getMessageManager().send(sender, "admin.migration-in-progress");
+            return true;
+        }
+
+        com.smile.aceeconomy.manager.MigrationManager mm = plugin.getMigrationManager();
+        if (mm == null) {
+            sender.sendMessage(net.kyori.adventure.text.Component.text(
+                    "遷移系統不可用 (儲存提供者未初始化)",
+                    net.kyori.adventure.text.format.NamedTextColor.RED));
+            return true;
+        }
+
+        String targetType = args[1].toLowerCase();
+        if (!targetType.equals("mysql") && !targetType.equals("sqlite") && !targetType.equals("mariadb")) {
+            sender.sendMessage(net.kyori.adventure.text.Component.text(
+                    "不支援的目標類型: " + targetType + "。支援: sqlite, mysql",
+                    net.kyori.adventure.text.format.NamedTextColor.RED));
+            return true;
+        }
+
+        migrationInProgress.set(true);
+        sender.sendMessage(net.kyori.adventure.text.Component.text(
+                "開始遷移至 " + targetType + "...",
+                net.kyori.adventure.text.format.NamedTextColor.YELLOW));
+        plugin.getLogger().info("開始儲存遷移至: " + targetType);
+
+        mm.migrate(targetType).thenAccept(result -> {
+            migrationInProgress.set(false);
+            if (result.success()) {
+                sender.sendMessage(net.kyori.adventure.text.Component.text(
+                        "遷移完成！使用者: " + result.users() + "，餘額: " + result.balances()
+                                + "，耗時: " + result.duration() + "ms",
+                        net.kyori.adventure.text.format.NamedTextColor.GREEN));
+                plugin.getLogger().info("儲存遷移完成: " + result.message());
+            } else {
+                sender.sendMessage(net.kyori.adventure.text.Component.text(
+                        "遷移失敗: " + result.message(),
+                        net.kyori.adventure.text.format.NamedTextColor.RED));
+                plugin.getLogger().severe("儲存遷移失敗: " + result.message());
+            }
+        }).exceptionally(ex -> {
+            migrationInProgress.set(false);
+            sender.sendMessage(net.kyori.adventure.text.Component.text(
+                    "遷移發生異常: " + ex.getMessage(),
+                    net.kyori.adventure.text.format.NamedTextColor.RED));
+            plugin.getLogger().severe("儲存遷移異常: " + ex.getMessage());
+            ex.printStackTrace();
+            return null;
+        });
+
+        return true;
+    }
+
+    /**
      * 發送指令幫助訊息。
      *
      * @param sender 接收者
@@ -380,6 +457,7 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
             plugin.getMessageManager().send(sender, "admin.help-history");
             plugin.getMessageManager().send(sender, "admin.help-rollback");
             plugin.getMessageManager().send(sender, "admin.help-import");
+            plugin.getMessageManager().send(sender, "admin.help-migrate");
         }
 
         plugin.getMessageManager().send(sender, "admin.help-help");
@@ -394,7 +472,8 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
 
         if (args.length == 1) {
             // 補全操作類型
-            List<String> actions = new ArrayList<>(List.of("give", "take", "set", "import", "history", "rollback"));
+            List<String> actions = new ArrayList<>(
+                    List.of("give", "take", "set", "import", "migrate", "history", "rollback"));
             if (sender.hasPermission("aceeconomy.command.reload")) {
                 actions.add("reload");
             }
@@ -411,6 +490,13 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
                 String prefix = args[1].toLowerCase();
                 return plugins.stream()
                         .filter(p -> p.startsWith(prefix))
+                        .toList();
+            } else if (action.equals("migrate")) {
+                // 補全儲存類型
+                List<String> types = List.of("sqlite", "mysql");
+                String prefix = args[1].toLowerCase();
+                return types.stream()
+                        .filter(t -> t.startsWith(prefix))
                         .toList();
             } else {
                 // 補全在線玩家名稱

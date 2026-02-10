@@ -75,6 +75,7 @@ admin:
   help-history: "<white>/aceeco history <玩家> [页码]</white> <gray>- 查看交易记录</gray>"
   help-rollback: "<white>/aceeco rollback <交易ID></white> <gray>- 回滚交易</gray>"
   help-import: "<white>/aceeco import <essentials|cmi></white> <gray>- 导入数据</gray>"
+  help-migrate: "<white>/aceeco migrate <sqlite|mysql></white> <gray>- 迁移储存类型</gray>"
   help-help: "<white>/aceeco help</white> <gray>- 显示此帮助信息</gray>"
 
   migration-start: "<yellow>开始从 <white><plugin></white> 导入数据...</yellow>"
@@ -140,3 +141,21 @@ console:
   start: "AceEconomy <version> 已启用！"
   stop: "AceEconomy 已停用！"
   migration-start: "开始从 <plugin> 迁移数据..."
+
+# GUI 消息
+gui:
+  bank-title: "<gradient:#FFD700:#FFA500>🏦 AceEconomy 银行系统</gradient>"
+  bank-profile-name: "<gradient:aqua:blue>👤 账户信息: {player}</gradient>"
+  bank-assets-name: "<green>💵 现金资产 (Balance)"
+  bank-debt-name: "<red>📉 信用与负债 (Debt)"
+  bank-history-name: "<gold>📜 近期交易记录"
+  bank-withdraw-name: "<green>💸 签发支票"
+  bank-withdraw-lore:
+    - "<gray>左键: 提取 $1,000</gray>"
+    - "<gray>右键: 提取 $10,000</gray>"
+    - "<gray>Shift+点击: 自定义金额</gray>"
+  bank-close-name: "<!italic><red>关闭菜单"
+  bank-loading: "<!italic><yellow>加载中..."
+  input-request: "<yellow>请在聊天栏输入您要提取的金额：</yellow> <gray>(输入 'cancel' 取消)</gray>"
+  input-invalid: "<red>无效的数字！请重新输入。</red>"
+  input-cancel: "<yellow>已取消提取。</yellow>"

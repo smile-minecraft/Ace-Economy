@@ -88,6 +88,7 @@ public class MySQLImplementation implements StorageProvider {
                 config.addDataSourceProperty("requireSSL", "true");
             } else {
                 config.addDataSourceProperty("useSSL", "false");
+                config.addDataSourceProperty("allowPublicKeyRetrieval", "true");
             }
 
             dataSource = new HikariDataSource(config);
@@ -97,12 +98,9 @@ public class MySQLImplementation implements StorageProvider {
                 logger.info("[AceEconomy] MySQL 連線池初始化成功");
             }
 
-            // 執行資料庫遷移
-            // 注意：SchemaManager 目前設計是共用的，需要確認是否支援 MySQL 語法差異
-            // SchemaManager 內部會檢查 isMySQL()，但這依賴 DatabaseConnection
-            // 我們可能需要更新 SchemaManager 來接受 StorageProvider 或直接在此處理
-            // 暫時使用相容模式
-            // TODO: Update SchemaManager to properly handle MySQL via StorageProvider
+            // 執行資料庫遷移 (建立/更新 Schema)
+            SchemaManager schemaManager = new SchemaManager(plugin, this::getConnection, true);
+            schemaManager.migrate();
 
         } catch (SQLException e) {
             logger.severe("MySQL 初始化失敗: " + e.getMessage());
