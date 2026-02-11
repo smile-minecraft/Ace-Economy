@@ -190,6 +190,7 @@ public class MySQLImplementation implements StorageProvider {
                     VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
                     ON DUPLICATE KEY UPDATE
                         balance = VALUES(balance),
+                        username = VALUES(username),
                         last_updated = CURRENT_TIMESTAMP
                     """.formatted(TABLE_BALANCES);
 
@@ -353,8 +354,12 @@ public class MySQLImplementation implements StorageProvider {
             // Or INSERT ... ON DUPLICATE KEY UPDATE.
             // Using REPLACE INTO is simpler for migration.
             String insertUser = "REPLACE INTO " + TABLE_USERS + " (uuid, username, last_seen) VALUES (?, ?, ?)";
+            // Updated to populate username
             String insertBalance = "REPLACE INTO " + TABLE_BALANCES
-                    + " (uuid, currency_id, balance, last_updated) VALUES (?, ?, ?, ?)";
+                    + " (uuid, currency_id, balance, username, last_updated) VALUES (?, ?, ?, ?, ?)";
+
+            // Map UUID to Username for balance insertion
+            Map<UUID, String> userMap = new HashMap<>();
 
             try (Connection conn = dataSource.getConnection()) {
                 conn.setAutoCommit(false);
@@ -365,6 +370,8 @@ public class MySQLImplementation implements StorageProvider {
                         pstmt.setString(2, user.name());
                         pstmt.setLong(3, System.currentTimeMillis());
                         pstmt.addBatch();
+
+                        userMap.put(user.uuid(), user.name());
                     }
                     pstmt.executeBatch();
                 }
@@ -374,7 +381,11 @@ public class MySQLImplementation implements StorageProvider {
                         pstmt.setString(1, balance.uuid().toString());
                         pstmt.setString(2, balance.currency());
                         pstmt.setDouble(3, balance.amount());
-                        pstmt.setTimestamp(4, new java.sql.Timestamp(System.currentTimeMillis()));
+
+                        String username = userMap.getOrDefault(balance.uuid(), "Unknown");
+                        pstmt.setString(4, username);
+
+                        pstmt.setTimestamp(5, new java.sql.Timestamp(System.currentTimeMillis()));
                         pstmt.addBatch();
                     }
                     pstmt.executeBatch();

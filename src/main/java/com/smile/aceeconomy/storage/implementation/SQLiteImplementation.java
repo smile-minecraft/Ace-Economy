@@ -80,6 +80,9 @@ public class SQLiteImplementation implements StorageProvider {
             SchemaManager schemaManager = new SchemaManager(plugin, this::getConnection, false);
             schemaManager.migrate();
 
+            // 修復可能的 NULL username (Leaderboard fix)
+            fixNullUsernames();
+
             logger.info("[AceEconomy] SQLite 儲存提供者初始化完成");
 
         } catch (SQLException e) {
@@ -87,6 +90,27 @@ public class SQLiteImplementation implements StorageProvider {
             e.printStackTrace();
             throw new RuntimeException("Failed to initialize SQLite storage", e);
         }
+    }
+
+    private void fixNullUsernames() {
+        CompletableFuture.runAsync(() -> {
+            try (Connection conn = dataSource.getConnection();
+                    java.sql.Statement stmt = conn.createStatement()) {
+
+                int updated = stmt.executeUpdate(
+                        """
+                                UPDATE ace_balances
+                                SET username = (SELECT username FROM ace_users WHERE ace_users.uuid = ace_balances.uuid)
+                                WHERE username IS NULL AND EXISTS (SELECT 1 FROM ace_users WHERE ace_users.uuid = ace_balances.uuid)
+                                """);
+
+                if (updated > 0) {
+                    logger.info("[AceEconomy] 自動修復了 " + updated + " 筆遺失的玩家名稱資料 (Leaderboard Fix)");
+                }
+            } catch (SQLException e) {
+                logger.warning("[AceEconomy] 自動修復玩家名稱失敗: " + e.getMessage());
+            }
+        });
     }
 
     @Override
@@ -184,6 +208,7 @@ public class SQLiteImplementation implements StorageProvider {
                     VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
                     ON CONFLICT(uuid, currency_id) DO UPDATE SET
                         balance = excluded.balance,
+                        username = excluded.username,
                         last_updated = CURRENT_TIMESTAMP
                     """.formatted(TABLE_BALANCES);
 
@@ -384,8 +409,12 @@ public class SQLiteImplementation implements StorageProvider {
         return CompletableFuture.runAsync(() -> {
             String insertUser = "INSERT OR REPLACE INTO " + TABLE_USERS
                     + " (uuid, username, last_seen) VALUES (?, ?, ?)";
+            // Updated to populate username
             String insertBalance = "INSERT OR REPLACE INTO " + TABLE_BALANCES
-                    + " (uuid, currency_id, balance, last_updated) VALUES (?, ?, ?, ?)";
+                    + " (uuid, currency_id, balance, username, last_updated) VALUES (?, ?, ?, ?, ?)";
+
+            // Map UUID to Username for balance insertion
+            Map<UUID, String> userMap = new HashMap<>();
 
             try (Connection conn = dataSource.getConnection()) {
                 conn.setAutoCommit(false);
@@ -396,6 +425,8 @@ public class SQLiteImplementation implements StorageProvider {
                         pstmt.setString(2, user.name());
                         pstmt.setLong(3, System.currentTimeMillis());
                         pstmt.addBatch();
+
+                        userMap.put(user.uuid(), user.name());
                     }
                     pstmt.executeBatch();
                 }
@@ -405,7 +436,11 @@ public class SQLiteImplementation implements StorageProvider {
                         pstmt.setString(1, balance.uuid().toString());
                         pstmt.setString(2, balance.currency());
                         pstmt.setDouble(3, balance.amount());
-                        pstmt.setLong(4, System.currentTimeMillis());
+
+                        String username = userMap.getOrDefault(balance.uuid(), "Unknown");
+                        pstmt.setString(4, username);
+
+                        pstmt.setLong(5, System.currentTimeMillis());
                         pstmt.addBatch();
                     }
                     pstmt.executeBatch();
