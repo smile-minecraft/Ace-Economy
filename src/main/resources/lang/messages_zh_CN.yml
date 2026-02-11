@@ -21,6 +21,7 @@ general:
   unknown-currency: "<red>错误: 找不到货币 <white><currency></white>。</red>"
   console-only-player: "<red>此命令只能由玩家执行！</red>"
   console-specify-player: "<red>控制台必须指定玩家名称！</red>"
+  offline-support-disabled: "<red>离线玩家支持目前已停用。</red>"
 
 economy:
   balance-check: "你的余额：<yellow><balance></yellow>"

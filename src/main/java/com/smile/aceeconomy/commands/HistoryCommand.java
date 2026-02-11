@@ -33,15 +33,7 @@ public class HistoryCommand implements CommandExecutor {
         }
 
         if (args.length < 1) {
-            plugin.getMessageManager().send(sender, "history.usage"); // Need to add usage-history
-            // Fallback for now if usage-history not present, or better, add it.
-            // I'll assume usage-history is "用法: /aceeco history <玩家> [頁碼]"
-            // But let's just send the text using MessageManager if I add the key, or raw
-            // text if not?
-            // "history.usage" is not in my list. I should use "invalid-usage" or similar?
-            // messages_zh_TW.yml has "usage-pay" etc. I'll add "history.usage" or use a
-            // generic invalid command msg.
-            plugin.getMessageManager().send(sender, "history.usage");
+            plugin.getMessageManager().send(sender, "usage.history");
             return true;
         }
 

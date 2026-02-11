@@ -21,6 +21,7 @@ general:
   unknown-currency: "<red>Error: Unknown currency <white><currency></white>.</red>"
   console-only-player: "<red>This command can only be executed by players!</red>"
   console-specify-player: "<red>Console must specify a player name!</red>"
+  offline-support-disabled: "<red>Offline player support is currently disabled.</red>"
 
 economy:
   balance-check: "Your balance: <yellow><balance></yellow>"
