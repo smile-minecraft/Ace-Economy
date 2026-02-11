@@ -31,11 +31,17 @@ public class StorageFactory {
 
         logger.info("[AceEconomy] 初始化儲存系統，類型: " + type);
 
-        if (type.equals("mysql") || type.equals("mariadb")) {
-            return new MySQLImplementation(plugin, configManager);
+        switch (type) {
+            case "mysql", "mariadb" -> {
+                return new MySQLImplementation(plugin, configManager);
+            }
+            case "sqlite" -> {
+                return new SQLiteImplementation(plugin);
+            }
+            default -> {
+                logger.warning("[AceEconomy] 未知的儲存系統類型: " + type + "，預設使用 SQLite。");
+                return new SQLiteImplementation(plugin);
+            }
         }
-
-        // 預設為 SQLite
-        return new SQLiteImplementation(plugin, configManager);
     }
 }

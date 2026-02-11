@@ -1,7 +1,6 @@
 package com.smile.aceeconomy.storage.implementation;
 
 import com.smile.aceeconomy.AceEconomy;
-import com.smile.aceeconomy.manager.ConfigManager;
 import com.smile.aceeconomy.storage.SchemaManager;
 import com.smile.aceeconomy.storage.StorageProvider;
 import com.zaxxer.hikari.HikariConfig;
@@ -30,7 +29,6 @@ import java.util.logging.Logger;
 public class SQLiteImplementation implements StorageProvider {
 
     private final AceEconomy plugin;
-    private final ConfigManager configManager;
     private final Logger logger;
 
     private HikariDataSource dataSource;
@@ -42,12 +40,10 @@ public class SQLiteImplementation implements StorageProvider {
     /**
      * 建立 SQLite 儲存實作。
      *
-     * @param plugin        插件實例
-     * @param configManager 設定管理器
+     * @param plugin 插件實例
      */
-    public SQLiteImplementation(AceEconomy plugin, ConfigManager configManager) {
+    public SQLiteImplementation(AceEconomy plugin) {
         this.plugin = plugin;
-        this.configManager = configManager;
         this.logger = plugin.getLogger();
     }
 

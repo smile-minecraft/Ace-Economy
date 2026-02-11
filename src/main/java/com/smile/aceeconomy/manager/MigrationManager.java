@@ -44,8 +44,7 @@ public class MigrationManager {
                     targetStorage = new com.smile.aceeconomy.storage.implementation.MySQLImplementation(plugin,
                             plugin.getConfigManager());
                 } else if (targetType.equalsIgnoreCase("sqlite")) {
-                    targetStorage = new com.smile.aceeconomy.storage.implementation.SQLiteImplementation(plugin,
-                            plugin.getConfigManager());
+                    targetStorage = new com.smile.aceeconomy.storage.implementation.SQLiteImplementation(plugin);
                 } else {
                     throw new IllegalArgumentException("Unsupported target type: " + targetType);
                 }

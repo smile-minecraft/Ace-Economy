@@ -27,16 +27,16 @@ public class BaltopCommand implements CommandExecutor, TabCompleter {
     public boolean onCommand(@NotNull CommandSender sender, @NotNull Command command, @NotNull String label,
             @NotNull String[] args) {
         if (!sender.hasPermission("aceeconomy.command.baltop")) {
-            plugin.getMessageManager().send(sender, "no-permission");
+            plugin.getMessageManager().send(sender, "general.no-permission");
             return true;
         }
 
         if (!leaderboardManager.isEnabled()) {
-            plugin.getMessageManager().send(sender, "baltop-disabled");
+            plugin.getMessageManager().send(sender, "baltop.disabled");
             return true;
         }
 
-        plugin.getMessageManager().send(sender, "baltop-loading");
+        plugin.getMessageManager().send(sender, "baltop.loading");
 
         // 解析參數: /baltop [貨幣] [頁碼]
         String currencyId = plugin.getCurrencyManager().getDefaultCurrencyId();
@@ -54,7 +54,7 @@ public class BaltopCommand implements CommandExecutor, TabCompleter {
                 if (plugin.getCurrencyManager().currencyExists(args[0].toLowerCase())) {
                     currencyId = args[0].toLowerCase();
                 } else {
-                    plugin.getMessageManager().send(sender, "unknown-currency",
+                    plugin.getMessageManager().send(sender, "general.unknown-currency",
                             Placeholder.parsed("currency", args[0]));
                     return true;
                 }
@@ -68,7 +68,7 @@ public class BaltopCommand implements CommandExecutor, TabCompleter {
                 if (page < 1)
                     page = 1;
             } catch (NumberFormatException e) {
-                plugin.getMessageManager().send(sender, "invalid-page");
+                plugin.getMessageManager().send(sender, "baltop.invalid-page");
                 return true;
             }
         }
@@ -86,7 +86,7 @@ public class BaltopCommand implements CommandExecutor, TabCompleter {
             // 但為了確保安全，我們簡單地直接發送 (Adventure audience is thread-safe usually)
 
             if (entries.isEmpty()) {
-                plugin.getMessageManager().send(sender, "baltop-empty");
+                plugin.getMessageManager().send(sender, "baltop.empty");
                 return;
             }
 
@@ -94,7 +94,7 @@ public class BaltopCommand implements CommandExecutor, TabCompleter {
             int totalPages = (int) Math.ceil((double) entries.size() / pageSize);
 
             if (finalPage > totalPages) {
-                plugin.getMessageManager().send(sender, "baltop-invalid-page",
+                plugin.getMessageManager().send(sender, "baltop.invalid-page",
                         Placeholder.parsed("max_page", String.valueOf(totalPages)));
                 return;
             }
@@ -103,14 +103,14 @@ public class BaltopCommand implements CommandExecutor, TabCompleter {
             int endIndex = Math.min(startIndex + pageSize, entries.size());
 
             // Header
-            plugin.getMessageManager().send(sender, "baltop-header", Placeholder.parsed("currency_name", currencyName));
+            plugin.getMessageManager().send(sender, "baltop.header", Placeholder.parsed("currency_name", currencyName));
 
             for (int i = startIndex; i < endIndex; i++) {
                 LeaderboardManager.TopEntry entry = entries.get(i);
                 // 使用 MessageManager 格式化並發送每行，或構建 Component
-                // 這裡使用 baltop-entry key
+                // 這裡使用 baltop.entry key
                 String formattedBalance = plugin.getConfigManager().formatMoney(entry.balance(), finalCurrencyId);
-                plugin.getMessageManager().send(sender, "baltop-entry",
+                plugin.getMessageManager().send(sender, "baltop.entry",
                         Placeholder.parsed("rank", String.valueOf(entry.rank())),
                         Placeholder.parsed("player", entry.name()),
                         Placeholder.parsed("amount", formattedBalance));
@@ -121,7 +121,7 @@ public class BaltopCommand implements CommandExecutor, TabCompleter {
                     / 1000;
             String timeAgo = formatTimeAgo(timeAgoSeconds);
 
-            plugin.getMessageManager().send(sender, "baltop-footer",
+            plugin.getMessageManager().send(sender, "baltop.footer",
                     Placeholder.parsed("time_ago", timeAgo),
                     Placeholder.parsed("currency", finalCurrencyId),
                     Placeholder.parsed("prev_page", String.valueOf(Math.max(1, finalPage - 1))),
