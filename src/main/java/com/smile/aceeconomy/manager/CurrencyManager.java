@@ -38,13 +38,6 @@ public class CurrencyManager {
     private final AceEconomy plugin;
     private LogManager logManager;
 
-    /**
-     * 建立貨幣管理器。
-     *
-     * @param plugin         插件實例
-     * @param storageHandler 儲存處理器
-     * @param configManager  設定檔管理器
-     */
     private final PermissionManager permissionManager;
 
     /**
@@ -346,16 +339,6 @@ public class CurrencyManager {
      * @param banknoteUuid 支票 UUID (可為 null)
      * @param force        是否強制（忽略餘額檢查）
      * @return 操作是否成功
-     */
-    /**
-     * 從玩家帳戶提款 (指定貨幣，完整參數)。
-     *
-     * @param uuid         玩家 UUID
-     * @param currencyId   貨幣 ID
-     * @param amount       提款金額
-     * @param banknoteUuid 支票 UUID (可為 null)
-     * @param force        是否強制（忽略餘額檢查）
-     * @return 操作是否成功
      * @throws IllegalArgumentException                                  如果貨幣 ID 無效
      * @throws com.smile.aceeconomy.exception.InsufficientFundsException 如果餘額不足且非強制
      */
@@ -405,12 +388,6 @@ public class CurrencyManager {
         }
     }
 
-    /**
-     * 取得玩家的債務上限。
-     *
-     * @param uuid 玩家 UUID
-     * @return 債務上限 (正數)
-     */
     /**
      * 取得玩家的債務上限。
      *

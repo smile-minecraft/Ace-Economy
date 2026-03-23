@@ -29,6 +29,7 @@ import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.UUID;
+import java.util.logging.Level;
 
 /**
  * AceEconomy 主插件類別。
@@ -177,7 +178,7 @@ public final class AceEconomy extends JavaPlugin implements Listener {
             getLogger().info("使用 SQL 儲存系統 (" + storageType + ")");
         } catch (Exception e) {
             getLogger().severe("儲存系統初始化失敗: " + e.getMessage());
-            e.printStackTrace();
+            getLogger().log(Level.SEVERE, "儲存系統初始化異常，詳見堆疊追蹤", e);
             getLogger().severe("回退至 JSON 儲存");
             storageHandler = new JsonStorageHandler(getDataFolder().toPath(), getLogger());
             storageHandler.initialize();
@@ -277,8 +278,7 @@ public final class AceEconomy extends JavaPlugin implements Listener {
                 this,
                 ServicePriority.Normal);
 
-        // 使用 ANSI 綠色輸出成功訊息
-        getLogger().info("\u001B[32m[AceEconomy] Vault 掛鉤成功！\u001B[0m");
+        getLogger().info("[AceEconomy] Vault 掛鉤成功！");
 
         // 設定 Chat (用於權限 Meta 資料讀取)
         setupChat();
@@ -315,7 +315,7 @@ public final class AceEconomy extends JavaPlugin implements Listener {
 
         // 註冊擴展
         new AceEcoExpansion(this).register();
-        getLogger().info("\u001B[32m[AceEconomy] PlaceholderAPI 掛鉤成功！\u001B[0m");
+        getLogger().info("[AceEconomy] PlaceholderAPI 掛鉤成功！");
     }
 
     @Override
@@ -371,7 +371,7 @@ public final class AceEconomy extends JavaPlugin implements Listener {
             getLogger().info("已載入玩家資料: " + playerName);
         }).exceptionally(throwable -> {
             getLogger().severe("載入玩家資料時發生錯誤: " + playerName);
-            throwable.printStackTrace();
+            getLogger().log(Level.SEVERE, "登入資料載入異常，玩家: " + playerName, throwable);
             return null;
         });
     }
@@ -401,7 +401,7 @@ public final class AceEconomy extends JavaPlugin implements Listener {
                 getLogger().info("已儲存玩家資料: " + playerName);
             }).exceptionally(throwable -> {
                 getLogger().severe("儲存玩家資料時發生錯誤: " + playerName);
-                throwable.printStackTrace();
+                getLogger().log(Level.SEVERE, "離線資料儲存異常，玩家: " + playerName, throwable);
                 return null;
             });
         });
