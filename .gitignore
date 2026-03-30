@@ -14,4 +14,6 @@ build/
 Thumbs.db
 
 # --- Antigravity Agent ---
-/.agent
+/.Agent
+
+.settings/
