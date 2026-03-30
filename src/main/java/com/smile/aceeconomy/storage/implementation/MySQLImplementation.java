@@ -215,7 +215,8 @@ public class MySQLImplementation implements StorageProvider {
     @Override
     public CompletableFuture<Map<String, Double>> getTopAccounts(String currency, int limit) {
         return CompletableFuture.supplyAsync(() -> {
-            Map<String, Double> leaderboard = new HashMap<>();
+            // Use LinkedHashMap to preserve ORDER BY DESC order
+            Map<String, Double> leaderboard = new java.util.LinkedHashMap<>();
             String sql = """
                     SELECT username, balance FROM %s
                     WHERE currency_id = ? AND username IS NOT NULL
@@ -397,12 +398,6 @@ public class MySQLImplementation implements StorageProvider {
 
             } catch (SQLException e) {
                 logger.severe("資料匯入失敗: " + e.getMessage());
-                try (Connection conn = dataSource.getConnection()) {
-                    if (!conn.getAutoCommit())
-                        conn.rollback();
-                } catch (SQLException ex) {
-                    ex.printStackTrace();
-                }
                 throw new RuntimeException("Import failed", e);
             }
         });

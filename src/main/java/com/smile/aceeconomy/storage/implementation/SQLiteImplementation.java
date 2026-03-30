@@ -235,7 +235,8 @@ public class SQLiteImplementation implements StorageProvider {
     @Override
     public CompletableFuture<Map<String, Double>> getTopAccounts(String currency, int limit) {
         return CompletableFuture.supplyAsync(() -> {
-            Map<String, Double> leaderboard = new HashMap<>();
+            // Use LinkedHashMap to preserve ORDER BY DESC order
+            Map<String, Double> leaderboard = new java.util.LinkedHashMap<>();
 
             String sql = """
                     SELECT username, balance FROM %s
@@ -452,13 +453,6 @@ public class SQLiteImplementation implements StorageProvider {
 
             } catch (SQLException e) {
                 logger.severe("資料匯入失敗: " + e.getMessage());
-                // Try rollback
-                try (Connection conn = dataSource.getConnection()) {
-                    if (!conn.getAutoCommit())
-                        conn.rollback();
-                } catch (SQLException ex) {
-                    ex.printStackTrace();
-                }
                 throw new RuntimeException("Import failed", e);
             }
         });

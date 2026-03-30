@@ -49,7 +49,7 @@ public class PayCommand implements CommandExecutor, TabCompleter {
         }
 
         // 權限檢查
-        if (!player.hasPermission("aceeconomy.pay")) {
+        if (!player.hasPermission("aceeconomy.command.pay")) {
             plugin.getMessageManager().send(sender, "general.no-permission");
             return true;
         }

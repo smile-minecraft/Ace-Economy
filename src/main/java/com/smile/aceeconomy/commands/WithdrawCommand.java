@@ -54,7 +54,7 @@ public class WithdrawCommand implements CommandExecutor, TabCompleter {
         }
 
         // 權限檢查
-        if (!player.hasPermission("aceeconomy.withdraw")) {
+        if (!player.hasPermission("aceeconomy.command.withdraw")) {
             plugin.getMessageManager().send(sender, "general.no-permission");
             return true;
         }

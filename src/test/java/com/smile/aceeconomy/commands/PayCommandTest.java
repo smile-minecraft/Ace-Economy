@@ -91,7 +91,7 @@ class PayCommandTest extends TestBase {
     @Test
     @DisplayName("沒有權限時拒絕")
     void testNoPermission_Rejected() {
-        when(sender.hasPermission("aceeconomy.pay")).thenReturn(false);
+        when(sender.hasPermission("aceeconomy.command.pay")).thenReturn(false);
 
         payCommand.onCommand(sender, command, "pay", new String[] { "Receiver", "100" });
 

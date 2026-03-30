@@ -93,7 +93,7 @@ public class ConfigManager {
         saveDefaultLanguageFiles();
 
         // 載入語言設定
-        this.locale = config.getString("locale", "zh_TW");
+        this.locale = config.getString("settings.locale", "zh_TW");
 
         // 快取設定值
         cacheConfigValues();
@@ -243,7 +243,7 @@ public class ConfigManager {
         this.config = plugin.getConfig();
         plugin.reloadConfig();
         this.config = plugin.getConfig();
-        this.locale = config.getString("locale", "zh_TW");
+        this.locale = config.getString("settings.locale", "zh_TW");
 
         // 重載訊息管理器
         if (plugin.getMessageManager() != null) {

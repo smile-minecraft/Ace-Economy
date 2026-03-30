@@ -1,123 +1,385 @@
-# 🎮 Commands & Permissions / 指令與權限
+# Commands & Permissions
 
 This page lists all available commands in AceEconomy and their corresponding permissions.
+
+---
+
+## Player Commands
+
+These commands are the primary interaction points for players.
+
+### `/money`
+
+| Property | Value |
+|----------|-------|
+| Aliases | `/bal`, `/balance` |
+| Permission | `aceeconomy.command.money` |
+| Default | true |
+
+Check your current balance.
+
+**Example:**
+- `/money`
+
+---
+
+### `/pay`
+
+| Property | Value |
+|----------|-------|
+| Permission | `aceeconomy.command.pay` |
+| Default | true |
+
+Transfer money to another online player.
+
+**Usage:** `/pay <player> <amount>`
+
+**Example:**
+- `/pay Smile 500` — Sends 500 to player Smile
+
+---
+
+### `/withdraw`
+
+| Property | Value |
+|----------|-------|
+| Permission | `aceeconomy.command.withdraw` |
+| Default | true |
+
+Withdraw money as a physical banknote item. Right-click the item to deposit it back into your account.
+
+**Usage:** `/withdraw <amount>`
+
+**Example:**
+- `/withdraw 1000` — Receive a banknote worth 1000
+
+---
+
+### `/baltop`
+
+| Property | Value |
+|----------|-------|
+| Aliases | `/top`, `/balancetop` |
+| Permission | `aceeconomy.command.baltop` |
+| Default | true |
+
+View the server's richest players. Requires SQL database (MySQL/SQLite).
+
+**Usage:** `/baltop [page]`
+
+**Example:**
+- `/baltop` — View page 1
+- `/baltop 2` — View page 2
+
+---
+
+### `/bank` (Dashboard)
+
+| Property | Value |
+|----------|-------|
+| Aliases | `/menu`, `/bankmenu` |
+| Permission | `aceeconomy.command.bank` |
+| Default | true |
+
+Open the AceEconomy Dashboard menu.
+
+**Usage:** `/bank`
+
+---
+
+## Admin Commands
+
+| Base Command | `/aceeco` (customizable in config.yml) |
+|--------------|----------------------------------------|
+| Permission | `aceeconomy.admin` (for all subcommands except reload) |
+
+---
+
+### `/aceeco give`
+
+Give money to a player. Works even if the player is offline (requires SQL).
+
+**Usage:** `/aceeco give <player> <amount>`
+
+**Example:**
+- `/aceeco give Smile 10000`
+
+---
+
+### `/aceeco take`
+
+Remove money from a player.
+
+**Usage:** `/aceeco take <player> <amount>`
+
+**Example:**
+- `/aceeco take Smile 5000`
+
+---
+
+### `/aceeco set`
+
+Set a player's balance to a specific amount.
+
+**Usage:** `/aceeco set <player> <amount>`
+
+**Example:**
+- `/aceeco set Smile 1000` — Set Smile's balance to exactly 1000
+
+---
+
+### `/aceeco history`
+
+View the recent transaction history for a player. Shows the last 10 transactions.
+
+**Usage:** `/aceeco history <player>`
+
+**Information displayed:**
+- Transaction ID
+- Type (PAY, ADMIN, WITHDRAW, DEPOSIT, ROLLBACK)
+- Amount
+- Timestamp
+- Whether reverted
+
+---
+
+### `/aceeco rollback`
+
+Reverse a specific transaction. Useful for refunding accidental payments or correcting admin mistakes.
+
+**Usage:** `/aceeco rollback <player> <transaction_id>`
+
+**How it works:**
+1. System verifies the transaction hasn't already been rolled back
+2. System calculates the opposite amount (if +500, rollback does -500)
+3. System applies the opposite amount to the player's balance
+4. Original transaction is marked as `reverted = true`
+5. A new `ROLLBACK` transaction is logged
+
+---
+
+### `/aceeco reload`
+
+| Property | Value |
+|----------|-------|
+| Permission | `aceeconomy.admin.reload` |
+| Default | op |
+
+Reload `config.yml` and language files without restarting the server.
+
+**Usage:** `/aceeco reload`
+
+---
+
+## Permission Nodes Summary
+
+| Permission Node | Default | Description |
+|-----------------|---------|-------------|
+| `aceeconomy.command.money` | true | Access `/money` |
+| `aceeconomy.command.pay` | true | Access `/pay` |
+| `aceeconomy.command.withdraw` | true | Access `/withdraw` |
+| `aceeconomy.command.baltop` | true | Access `/baltop` |
+| `aceeconomy.command.bank` | true | Access `/bank` dashboard |
+| `aceeconomy.admin` | op | Admin (wildcard) |
+| `aceeconomy.admin.give` | op | Access `/aceeco give` |
+| `aceeconomy.admin.take` | op | Access `/aceeco take` |
+| `aceeconomy.admin.set` | op | Access `/aceeco set` |
+| `aceeconomy.admin.history` | op | Access `/aceeco history` |
+| `aceeconomy.admin.rollback` | op | Access `/aceeco rollback` |
+| `aceeconomy.admin.reload` | op | Access `/aceeco reload` |
+| `aceeconomy.bypass.debt` | op | Bypass debt limits |
+
+---
+
+---
+
+# 指令與權限
+
 本頁面列出 AceEconomy 中所有可用的指令及其對應權限。
 
 ---
 
-## 🏗️ Core Commands / 核心指令
+## 玩家指令
 
-These commands are the primary interaction points for players.
 這些指令是玩家與經濟系統互動的主要方式。
 
 ### `/money`
-**Alias**: `/bal`, `/balance`
-**Permission**: `aceeconomy.use`
 
-Check your current balance.
+| 屬性 | 值 |
+|------|-----|
+| 別名 | `/bal`、`/balance` |
+| 權限 | `aceeconomy.command.money` |
+| 預設 | true |
+
 查看您的當前餘額。
 
-**Example**:
+**範例：**
 - `/money`
 
-### `/pay`
-**Permission**: `aceeconomy.pay`
+---
 
-Send money to another online player.
+### `/pay`
+
+| 屬性 | 值 |
+|------|-----|
+| 權限 | `aceeconomy.command.pay` |
+| 預設 | true |
+
 轉帳給其他線上玩家。
 
-**Usage**: `/pay <player> <amount>`
-**用法**: `/pay <玩家> <金額>`
+**用法：** `/pay <玩家> <金額>`
 
-**Example**:
-- `/pay Smile 500` - Sends 500 currency to Smile. (轉帳 500 元給 Smile)
+**範例：**
+- `/pay Smile 500` — 轉帳 500 給玩家 Smile
+
+---
 
 ### `/withdraw`
-**Permission**: `aceeconomy.withdraw`
 
-Withdraw money into a physical banknote item. Right-click the item to deposit it back.
-將金錢提領為實體銀行支票物品。右鍵點擊該物品可存回。
+| 屬性 | 值 |
+|------|-----|
+| 權限 | `aceeconomy.command.withdraw` |
+| 預設 | true |
 
-**Usage**: `/withdraw <amount>`
-**用法**: `/withdraw <金額>`
+將金錢提領為實體銀行支票物品。右鍵點擊該物品可存回帳戶。
 
-**Example**:
-- `/withdraw 1000` - Receive a banknote worth 1000. (獲得一張價值 1000 的支票)
+**用法：** `/withdraw <金額>`
+
+**範例：**
+- `/withdraw 1000` — 獲得一張價值 1000 的支票
+
+---
 
 ### `/baltop`
-**Alias**: `/top`, `/balancetop`
-**Permission**: `aceeconomy.command.baltop`
 
-View the server's richest players. Requires SQL database (MySQL/SQLite) for optimal performance.
-查看伺服器中最富有的玩家。建議使用 SQL 資料庫 (MySQL/SQLite) 以獲得最佳效能。
+| 屬性 | 值 |
+|------|-----|
+| 別名 | `/top`、`/balancetop` |
+| 權限 | `aceeconomy.command.baltop` |
+| 預設 | true |
 
-**Usage**: `/baltop [page]`
-**用法**: `/baltop [頁碼]`
+查看伺服器中最富有的玩家。需要 SQL 資料庫（MySQL/SQLite）。
 
-**Example**:
-- `/baltop` - View page 1 (default). (查看第 1 頁)
-- `/baltop 2` - View page 2. (查看第 2 頁)
+**用法：** `/baltop [頁碼]`
+
+**範例：**
+- `/baltop` — 查看第 1 頁
+- `/baltop 2` — 查看第 2 頁
 
 ---
 
-## 🛠️ Admin Commands / 管理員指令
+### `/bank`（儀表板）
 
-**Base Command**: `/aceeco` (Can be customized in `config.yml`)
-**主指令**: `/aceeco` (可在 `config.yml` 中自訂)
-**Permission**: `aceeconomy.admin` (Required for all subcommands below except reload)
-**權限**: `aceeconomy.admin` (除重載外，所有子指令皆需要此權限)
+| 屬性 | 值 |
+|------|-----|
+| 別名 | `/menu`、`/bankmenu` |
+| 權限 | `aceeconomy.command.bank` |
+| 預設 | true |
 
-### `give`
-**Usage**: `/aceeco give <player> <amount>`
-Give money to a player. Works even if the player is offline (requires SQL).
-給予玩家金錢。即使玩家離線也能運作 (需使用 SQL)。
+開啟 AceEconomy 儀表板選單。
 
-### `take`
-**Usage**: `/aceeco take <player> <amount>`
-Remove money from a player.
+**用法：** `/bank`
+
+---
+
+## 管理員指令
+
+| 主指令 | `/aceco`（可在 config.yml 中自訂）|
+|--------|----------------------------------|
+| 權限 | `aceeconomy.admin`（除重載外所有子指令）|
+
+---
+
+### `/aceeco give`
+
+給予玩家金錢。即使玩家離線也能運作（需使用 SQL）。
+
+**用法：** `/aceeco give <玩家> <金額>`
+
+**範例：**
+- `/aceeco give Smile 10000`
+
+---
+
+### `/aceeco take`
+
 扣除玩家金錢。
 
-### `set`
-**Usage**: `/aceeco set <player> <amount>`
-Set a player's balance to a specific amount.
-設定玩家餘額為特定金額。
+**用法：** `/aceeco take <玩家> <金額>`
 
-### `history`
-**Usage**: `/aceeco history <player>`
-View the recent transaction history for a player. Shows the last 10 transactions.
-查看玩家近期的交易記錄。顯示最近 10 筆交易。
-
-Includes:
-- Transaction ID (交易 ID)
-- Type (Deposit/Withdraw) (類型：存款/提款)
-- Amount (金額)
-- Time (時間)
-
-### `rollback`
-**Usage**: `/aceeco rollback <player> <transaction_id>`
-Reverses a specific transaction. Useful for refunding accidental payments or correcting admin mistakes.
-回溯特定交易。適用於退款意外轉帳或修正管理員錯誤。
-
-**How it works**:
-It calculates the reverse operation (e.g., if ID#5 was `+500`, rollback does `-500`) and logs a new `ROLLBACK` transaction.
-**運作方式**：
-系統計算反向操作 (例如 ID#5 是 `+500`，回溯將執行 `-500`) 並記錄一筆新的 `ROLLBACK` 交易。
-
-### `reload`
-**Permission**: `aceeconomy.command.reload`
-**Usage**: `/aceeco reload`
-Reloads `config.yml` and language files.
-重新載入 `config.yml` 與語言檔案。
+**範例：**
+- `/aceeco take Smile 5000`
 
 ---
 
-## 🔐 Permission Nodes Summary / 權限節點總結
+### `/aceeco set`
 
-| Node / 節點 | Default / 預設 | Description / 描述 |
-|---|---|---|
-| `aceeconomy.use` | true | Access `/money`. (使用 `/money`) |
-| `aceeconomy.pay` | true | Access `/pay`. (使用 `/pay`) |
-| `aceeconomy.withdraw` | true | Access `/withdraw`. (使用 `/withdraw`) |
-| `aceeconomy.command.baltop` | true | Access `/baltop`. (使用 `/baltop`) |
-| `aceeconomy.admin` | op | Access admin commands (`give`, `take`, `set`...). (使用管理指令) |
-| `aceeconomy.command.reload` | op | Access `/aceeco reload`. (使用重載指令) |
+設定玩家餘額為特定金額。
+
+**用法：** `/aceeco set <玩家> <金額>`
+
+**範例：**
+- `/aceeco set Smile 1000` — 將 Smile 的餘額設為 1000
+
+---
+
+### `/aceeco history`
+
+查看玩家近期的交易記錄。顯示最近 10 筆交易。
+
+**用法：** `/aceeco history <玩家>`
+
+**顯示資訊：**
+- 交易 ID
+- 類型（PAY、ADMIN、WITHDRAW、DEPOSIT、ROLLBACK）
+- 金額
+- 時間戳記
+- 是否已回溯
+
+---
+
+### `/aceeco rollback`
+
+回溯特定交易。適用於退款意外轉帳或修正管理員錯誤。
+
+**用法：** `/aceeco rollback <玩家> <交易ID>`
+
+**運作方式：**
+1. 系統驗證該交易尚未被回溯
+2. 系統計算反向金額（若為 +500，回溯執行 -500）
+3. 系統將反向金額應用於玩家餘額
+4. 原始交易標記為 `reverted = true`
+5. 建立一筆新的 `ROLLBACK` 交易記錄
+
+---
+
+### `/aceeco reload`
+
+| 屬性 | 值 |
+|------|-----|
+| 權限 | `aceeconomy.admin.reload` |
+| 預設 | op |
+
+重新載入 `config.yml` 與語言檔案，無需重啟伺服器。
+
+**用法：** `/aceeco reload`
+
+---
+
+## 權限節點總結
+
+| 權限節點 | 預設 | 說明 |
+|----------|------|------|
+| `aceeconomy.command.money` | true | 使用 `/money` |
+| `aceeconomy.command.pay` | true | 使用 `/pay` |
+| `aceeconomy.command.withdraw` | true | 使用 `/withdraw` |
+| `aceeconomy.command.baltop` | true | 使用 `/baltop` |
+| `aceeconomy.command.bank` | true | 使用 `/bank` 儀表板 |
+| `aceeconomy.admin` | op | 管理員（萬用字元）|
+| `aceeconomy.admin.give` | op | 使用 `/aceeco give` |
+| `aceeconomy.admin.take` | op | 使用 `/aceeco take` |
+| `aceeconomy.admin.set` | op | 使用 `/aceeco set` |
+| `aceeconomy.admin.history` | op | 使用 `/aceeco history` |
+| `aceeconomy.admin.rollback` | op | 使用 `/aceeco rollback` |
+| `aceeconomy.admin.reload` | op | 使用 `/aceeco reload` |
+| `aceeconomy.bypass.debt` | op | 繞過負債限制 |

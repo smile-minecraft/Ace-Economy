@@ -200,7 +200,19 @@ public class VaultImpl implements Economy {
         }
 
         // 使用 EconomyProvider 進行操作（同步等待結果）
-        boolean success = economyProvider.deposit(player.getUniqueId(), amount).join();
+        boolean success;
+        String errorMessage = "交易被取消";
+        try {
+            success = economyProvider.deposit(player.getUniqueId(), amount).join();
+        } catch (Exception e) {
+            success = false;
+            Throwable cause = e.getCause();
+            if (cause != null) {
+                errorMessage = cause.getMessage();
+            } else {
+                errorMessage = e.getMessage();
+            }
+        }
 
         double balance = currencyManager.getBalance(player.getUniqueId());
         if (success) {

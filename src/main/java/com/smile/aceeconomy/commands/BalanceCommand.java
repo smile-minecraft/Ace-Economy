@@ -118,6 +118,10 @@ public class BalanceCommand implements CommandExecutor, TabCompleter {
             }
         } else {
             // 離線玩家 - 非同步查詢
+            if (plugin.getUserCacheManager() == null) {
+                plugin.getMessageManager().send(sender, "general.offline-support-disabled");
+                return true;
+            }
             plugin.getUserCacheManager().getUUID(targetName).thenAccept(uuid -> {
                 if (uuid == null) {
                     plugin.getMessageManager().send(sender, "general.player-not-found",

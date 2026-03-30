@@ -159,10 +159,18 @@ public class BanknoteListener implements Listener {
         if (idStr != null) {
             final double finalValue = value;
             final String finalIssuer = issuer != null ? issuer : "未知";
-            final java.util.UUID banknoteUuid = java.util.UUID.fromString(idStr);
 
-            plugin.getCurrencyManager().getLogManager().getTransactionByBanknote(banknoteUuid)
-                    .thenAccept(log -> {
+            final java.util.UUID banknoteUuid;
+            try {
+                banknoteUuid = java.util.UUID.fromString(idStr);
+            } catch (IllegalArgumentException e) {
+                plugin.getMessageManager().send(player, "banknote.damaged");
+                return;
+            }
+
+            if (plugin.getCurrencyManager().getLogManager() != null) {
+                plugin.getCurrencyManager().getLogManager().getTransactionByBanknote(banknoteUuid)
+                        .thenAccept(log -> {
                         // 回到主執行緒或 Region 執行緒處理後續 (需注意 Folia)
                         // 這裡 thenAccept 會在某個執行緒執行。我們需要調度回玩家執行緒進行操作 (如移除物品)。
 
@@ -179,6 +187,10 @@ public class BanknoteListener implements Listener {
                             proccessRedeem(player, item, finalValue, finalIssuer);
                         }, null);
                     });
+            } else {
+                // logManager 不可用 (JSON/非 SQL 模式)，直接兌換
+                proccessRedeem(player, item, finalValue, finalIssuer);
+            }
 
             return; // 結束同步流程，等待非同步回調
         }
@@ -188,18 +200,18 @@ public class BanknoteListener implements Listener {
     }
 
     private void proccessRedeem(Player player, ItemStack item, double value, String issuer) {
-        // 移除支票物品
-        if (item.getAmount() > 1) {
-            item.setAmount(item.getAmount() - 1);
-        } else {
-            player.getInventory().setItemInMainHand(null);
-        }
-
-        // 存入金錢
+        // 先存入金錢，成功後再移除支票物品（避免兌換失敗導致物品丟失）
         economyProvider.deposit(player.getUniqueId(), value).thenAccept(success -> {
             // 使用玩家排程器確保 Folia 安全
             player.getScheduler().run(plugin, task -> {
                 if (success) {
+                    // 移除支票物品
+                    if (item.getAmount() > 1) {
+                        item.setAmount(item.getAmount() - 1);
+                    } else {
+                        player.getInventory().setItemInMainHand(null);
+                    }
+
                     // 播放音效
                     player.playSound(player.getLocation(), Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 1.0f, 1.0f);
 
@@ -208,10 +220,8 @@ public class BanknoteListener implements Listener {
                             Placeholder.parsed("amount", formatted),
                             Placeholder.parsed("issuer", issuer));
                 } else {
-                    // 兌換失敗，退還支票
+                    // 兌換失敗，支票物品保留（未移除）
                     plugin.getMessageManager().send(player, "banknote.redeem-failed");
-                    // 注意：物品已移除，需要退還
-                    // 這裡簡化處理，實際應該再給回物品
                 }
             }, null);
         });

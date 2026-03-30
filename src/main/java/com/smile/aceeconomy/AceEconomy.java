@@ -79,9 +79,6 @@ public final class AceEconomy extends JavaPlugin implements Listener {
         // 初始化儲存處理器（根據設定選擇）
         initializeStorage();
 
-        // 嘗試掛鉤 Vault (Move Up for PermissionManager)
-        setupVault();
-
         // 初始化權限管理器 (Dependency for CurrencyManager)
         permissionManager = new com.smile.aceeconomy.manager.PermissionManager(this);
 
@@ -120,6 +117,9 @@ public final class AceEconomy extends JavaPlugin implements Listener {
 
         // 初始化經濟服務提供者
         economyProvider = new EconomyProvider(this);
+
+        // 嘗試掛鉤 Vault (需在 economyProvider 建立後)
+        setupVault();
 
         // 初始化 Discord Webhook
         discordWebhook = new DiscordWebhook(this);

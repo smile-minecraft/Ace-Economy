@@ -272,7 +272,7 @@ class AdminCommandTest extends TestBase {
     @DisplayName("沒有 reload 權限時拒絕")
     void testReload_NoPermission() {
         when(admin.hasPermission("aceeconomy.admin")).thenReturn(true);
-        when(admin.hasPermission("aceeconomy.command.reload")).thenReturn(false);
+        when(admin.hasPermission("aceeconomy.admin.reload")).thenReturn(false);
 
         adminCommand.onCommand(admin, command, "aceeco", new String[] { "reload" });
 

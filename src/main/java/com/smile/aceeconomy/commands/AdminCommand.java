@@ -113,7 +113,7 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
 
         // 處理 reload 指令
         if (action.equals("reload")) {
-            if (!sender.hasPermission("aceeconomy.command.reload")) {
+            if (!sender.hasPermission("aceeconomy.admin.reload")) {
                 plugin.getMessageManager().send(sender, "general.no-permission");
                 return true;
             }
@@ -175,6 +175,11 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
         }
 
         // 離線玩家處理 - 非同步查詢 UUID
+        if (plugin.getUserCacheManager() == null) {
+            plugin.getMessageManager().send(sender, "general.offline-support-disabled");
+            return true;
+        }
+
         plugin.getUserCacheManager().getUUID(targetName).thenAccept(targetUuid -> {
             if (targetUuid == null) {
                 plugin.getMessageManager().send(sender, "general.player-not-found",
