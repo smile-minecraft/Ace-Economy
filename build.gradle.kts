@@ -53,6 +53,9 @@ dependencies {
     // AceLib on the test classpath so the consumer-foundation smoke test can exercise the public API surface.
     // This is test-only and is NOT part of the production/runtime classpath, so it is never shaded into the plugin JAR.
     testImplementation("com.github.smile-minecraft:AceLib:v1.0.0")
+
+    // SQLite JDBC driver for real, offline persistence contract tests (test-only; never shaded into the plugin).
+    testImplementation("org.xerial:sqlite-jdbc:3.47.0.0")
 }
 
 tasks.test {
