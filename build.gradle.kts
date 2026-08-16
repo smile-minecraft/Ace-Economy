@@ -1,7 +1,7 @@
 plugins {
     java
-    id("io.papermc.paperweight.userdev") version "2.0.0-beta.14"
-    id("com.gradleup.shadow") version "8.3.5"
+    id("io.papermc.paperweight.userdev") version "2.0.0-beta.21"
+    id("com.gradleup.shadow") version "9.6.1"
     id("maven-publish")
 }
 
@@ -10,7 +10,7 @@ version = "1.4.0"
 description = "A Folia-compatible economy plugin"
 
 java {
-    toolchain.languageVersion.set(JavaLanguageVersion.of(21))
+    toolchain.languageVersion.set(JavaLanguageVersion.of(25))
     withSourcesJar()
     withJavadocJar()
 }
@@ -23,8 +23,11 @@ repositories {
 }
 
 dependencies {
-    // Paper API (Folia-compatible)
-    paperweight.paperDevBundle("1.21.4-R0.1-SNAPSHOT")
+    // Paper / Folia API (Folia-compatible) — 26.1.2 dev bundle
+    paperweight.paperDevBundle("26.1.2.build.74-stable")
+
+    // AceLib v1.0.0 (Folia-first base library) — provided at runtime by the server, never shaded
+    compileOnly("com.github.smile-minecraft:AceLib:v1.0.0")
 
     // Vault API (經濟整合介面)
     compileOnly("com.github.MilkBowl:VaultAPI:1.7.1")
@@ -41,10 +44,15 @@ dependencies {
 
     // Testing
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.0")
+    // Gradle 9.x no longer auto-provides the JUnit Platform launcher on the test runtime classpath.
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.10.0")
     testImplementation("org.yaml:snakeyaml:2.2") // For testing YAML files
-    testImplementation("org.mockito:mockito-core:5.11.0")
-    testImplementation("org.mockito:mockito-junit-jupiter:5.11.0")
+    testImplementation("org.mockito:mockito-core:5.23.0")
+    testImplementation("org.mockito:mockito-junit-jupiter:5.23.0")
     testImplementation("com.github.MilkBowl:VaultAPI:1.7.1") // Vault on test classpath for Mockito inline mock maker
+    // AceLib on the test classpath so the consumer-foundation smoke test can exercise the public API surface.
+    // This is test-only and is NOT part of the production/runtime classpath, so it is never shaded into the plugin JAR.
+    testImplementation("com.github.smile-minecraft:AceLib:v1.0.0")
 }
 
 tasks.test {
@@ -54,7 +62,7 @@ tasks.test {
 tasks {
     compileJava {
         options.encoding = "UTF-8"
-        options.release.set(21)
+        options.release.set(25)
     }
 
     javadoc {
@@ -67,7 +75,7 @@ tasks {
             "name" to project.name,
             "version" to project.version,
             "description" to project.description,
-            "apiVersion" to "1.21"
+            "apiVersion" to "1.26"
         )
         inputs.properties(props)
         filesMatching("plugin.yml") {

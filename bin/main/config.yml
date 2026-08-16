@@ -2,8 +2,10 @@
 # AceEconomy 設定檔
 # ============================================
 
-# 設定檔版本（請勿修改）
-config-version: 1.4
+# v2 config schema contract (clean-slate, AceLib ConfigManager)
+# 版本欄位為 AceLib 約定的 `version: "major.minor"`；v2 固定為 2.0。
+# 本檔不讀取、不遷移 v1 的 config-version 表面。
+version: "2.0"
 
 # 資料儲存設定
 storage:

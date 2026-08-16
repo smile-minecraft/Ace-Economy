@@ -17,3 +17,5 @@ Thumbs.db
 /.Agent
 
 .settings/
+.opencode/
+.agent/
