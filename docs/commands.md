@@ -2,6 +2,25 @@
 
 This page lists all available commands in AceEconomy and their corresponding permissions.
 
+## v2 AceLib command surface
+
+The v2 presentation layer registers the following AceLib subcommands. Argument validation is
+typed, currency names are completed case-insensitively, and player replies are routed through
+AceLib's Folia-safe reply sink.
+
+| Command | Usage | Sender policy | Permission |
+|---|---|---|---|
+| `/money` | `balance [player] [currency]` | Player for own balance; console may specify a player | `aceeconomy.command.money` |
+| `/pay` | `send <player> <amount> [currency]` | Player only | `aceeconomy.command.pay` |
+| `/withdraw` | `cash <amount> [currency]` | Player only | `aceeconomy.command.withdraw` |
+| `/baltop` | `top [currency]` | Player or console | `aceeconomy.command.baltop` |
+| `/bank` | `open` | Player only | `aceeconomy.command.bank` |
+| `/aceeco` | `give`, `take`, `set` `<player> <amount> [currency]`; `reload` | Admin mutations; `reload` console only | `aceeconomy.admin.*` |
+
+Amounts must be positive, fit the configured currency scale, and remain below the command
+overflow cap. Unknown currencies, players, and typed economy failures are returned as typed
+command errors rather than being matched from display text.
+
 ---
 
 ## Player Commands
