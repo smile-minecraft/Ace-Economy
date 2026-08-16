@@ -54,6 +54,13 @@ dependencies {
     // This is test-only and is NOT part of the production/runtime classpath, so it is never shaded into the plugin JAR.
     testImplementation("com.github.smile-minecraft:AceLib:v1.0.0")
 
+    // PlaceholderAPI is compileOnly for production; bring it onto the test classpath (compile AND
+    // runtime) so the v2 PAPI expansion, its fakes, and contract tests can reference and load
+    // me.clip.placeholderapi types at test execution time. Transitive deps (bstats/adventure) are not
+    // needed by the tested surface (onRequest/resolve, not register()), so exclude them to keep the
+    // offline test runtime self-contained. Test-only: never shaded into the plugin JAR.
+    testImplementation("me.clip:placeholderapi:2.11.6") { isTransitive = false }
+
     // SQLite JDBC driver for real, offline persistence contract tests (test-only; never shaded into the plugin).
     testImplementation("org.xerial:sqlite-jdbc:3.47.0.0")
 }

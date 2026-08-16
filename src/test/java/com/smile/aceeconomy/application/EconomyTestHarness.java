@@ -13,7 +13,7 @@ import com.smile.aceeconomy.ports.inmemory.RecordingAuditSink;
 import java.util.List;
 
 /** Shared in-memory wiring for application/api tests (no vendor code). */
-final class EconomyTestHarness {
+public final class EconomyTestHarness {
 
     final CurrencyRegistry currencies;
     final InMemoryAccountRepository repo;
@@ -22,7 +22,7 @@ final class EconomyTestHarness {
     final InMemoryTransactionEventPublisher publisher;
     final EconomyService service;
 
-    EconomyTestHarness(DebtPolicy debtPolicy, Amount startBalance) {
+    public EconomyTestHarness(DebtPolicy debtPolicy, Amount startBalance) {
         this.currencies = CurrencyRegistry.of(List.of(
                 Currency.define("dollar", "Dollar", "$", 2, true),
                 Currency.define("token", "Token", "T", 0, false)));
@@ -33,11 +33,23 @@ final class EconomyTestHarness {
         this.service = new EconomyService(currencies, debtPolicy, startBalance, repo, audit, clock, publisher);
     }
 
-    Currency dollar() {
+    public Currency dollar() {
         return currencies.getDefault();
     }
 
-    Amount dollar(double v) {
+    public Amount dollar(double v) {
         return currencies.getDefault().amountOf(v);
+    }
+
+    public CurrencyRegistry currencies() {
+        return currencies;
+    }
+
+    public EconomyService service() {
+        return service;
+    }
+
+    public InMemoryTransactionEventPublisher publisher() {
+        return publisher;
     }
 }
