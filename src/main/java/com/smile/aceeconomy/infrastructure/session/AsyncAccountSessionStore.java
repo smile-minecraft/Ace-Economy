@@ -19,13 +19,13 @@ import java.util.concurrent.Executor;
  * cancelled mid-flight, so {@link #cancelLoad(UUID)} is best-effort; the session generation guard in
  * {@link PlayerSessionManager} is the authoritative safety against stale results.
  */
-final class AsyncAccountSessionStore implements SessionStore {
+public final class AsyncAccountSessionStore implements SessionStore {
 
     private final AccountRepository accounts;
     private final Executor ioExecutor;
     private final ConcurrentHashMap<UUID, CompletableFuture<Account>> inFlight = new ConcurrentHashMap<>();
 
-    AsyncAccountSessionStore(AccountRepository accounts, Executor ioExecutor) {
+    public AsyncAccountSessionStore(AccountRepository accounts, Executor ioExecutor) {
         this.accounts = accounts;
         this.ioExecutor = ioExecutor;
     }

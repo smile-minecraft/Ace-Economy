@@ -51,18 +51,18 @@ class CommandSurfaceCapabilityTest {
                 "aceeconomy.admin", "aceeconomy.command.pay", "aceeconomy.command.money",
                 "aceeconomy.command.baltop", "aceeconomy.command.withdraw",
                 "aceeconomy.admin.give", "aceeconomy.admin.take", "aceeconomy.admin.set",
-                "aceeconomy.admin.rollback", "aceeconomy.bypass.debt", "aceeconomy.command.bank")) {
+                "aceeconomy.bypass.debt", "aceeconomy.command.bank")) {
             assertTrue(perms.containsKey(p), "必須保留權限 " + p);
         }
     }
 
     @Test
-    @DisplayName("plugin.yml 必須宣告 Vault 依賴與 Folia 支援")
+    @DisplayName("plugin.yml 必須宣告可選 Vault 整合與 Folia 支援")
     void testDependenciesAndFolia() {
         Map<String, Object> cfg = loadPluginYml();
         assertTrue(cfg.containsKey("depend"), "必須宣告 depend");
-        List<String> depend = (List<String>) cfg.get("depend");
-        assertTrue(depend.contains("Vault"), "必須依賴 Vault (經濟整合介面)");
+        List<String> softdepend = (List<String>) cfg.get("softdepend");
+        assertTrue(softdepend.contains("Vault"), "Vault 應為可選整合 (由 readiness gate 控制)");
         assertEquals(true, cfg.get("folia-supported"), "必須宣告 folia-supported: true");
     }
 }

@@ -13,7 +13,7 @@ import java.util.UUID;
  *
  * <p>This is a NEW public surface. It does NOT promise v1 binary compatibility: method
  * signatures, the typed result type ({@link EconomyResult}), the event type
- * ({@link TransactionEvent}) and the failure model ({@link EconomyError}) are intentionally
+ * ({@link com.smile.aceeconomy.domain.TransactionEvent}) and the failure model ({@link EconomyError}) are intentionally
  * different from v1 {@code EconomyProvider} / {@code EconomyTransactionEvent}.</p>
  */
 public interface EconomyApi {

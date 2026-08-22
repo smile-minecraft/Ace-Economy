@@ -99,13 +99,13 @@ class ConfigCapabilityTest {
     }
 
     @Test
-    @DisplayName("config.yml 必須保留儲存類型設定 (sqlite/mysql 能力)")
+    @DisplayName("config.yml 必須宣告 v2 JSON 儲存類型")
     void testStorageCapability() {
         Map<String, Object> cfg = loadConfig();
         @SuppressWarnings("unchecked")
         Map<String, Object> storage = (Map<String, Object>) cfg.get("storage");
         assertTrue(storage.containsKey("type"), "必須保留 storage.type");
         Object type = storage.get("type");
-        assertTrue(List.of("sqlite", "mysql").contains(type), "storage.type 必須為 sqlite 或 mysql");
+        assertEquals("json", type, "v2 production default must be json");
     }
 }

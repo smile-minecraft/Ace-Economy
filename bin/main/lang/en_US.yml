@@ -1,0 +1,24 @@
+# ============================================
+# AceEconomy v2 Language File (en_US)
+# Format: MiniMessage (tags) + {placeholder} (typed variable substitution)
+# Placeholders use {name} syntax (AceLib LangManager); MiniMessage styling uses <tag>.
+# ============================================
+
+message:
+  prefix: "<gold>[AceEconomy]</gold> <gray>"
+
+general:
+  no-permission: "<red>You do not have permission to use this command!</red>"
+  invalid-amount: "<red>Invalid amount: <white>{amount}</white></red>"
+  player-not-found: "<red>Player not found: <white>{player}</white></red>"
+  status: "<green>Status: <white>{status}</white></green>"
+
+economy:
+  balance-check: "Your balance: <yellow>{balance}</yellow>"
+  balance-check-other: "<aqua>{player}</aqua>'s balance: <yellow>{balance}</yellow>"
+  payment-sent: "<green>Sent <yellow>{amount}</yellow> to <aqua>{player}</aqua>!</green>"
+  payment-received: "<green>Received <yellow>{amount}</yellow> from <aqua>{player}</aqua>!</green>"
+  insufficient-funds: "<red>Insufficient funds!</red>"
+
+admin:
+  give: "<green>Given <yellow>{amount}</yellow> to <aqua>{player}</aqua></green>"

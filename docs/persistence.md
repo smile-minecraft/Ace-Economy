@@ -96,13 +96,17 @@ The SQL backend targets MySQL with the `MySqlDialect`. The generated DDL pins
 `ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`, uses `VARCHAR(36)` for UUID columns and `BOOLEAN` for the
 reverted flag, and writes the version row with `INSERT IGNORE`.
 
-To run against MySQL you must:
+To run against MySQL you configure it through the v2 config surface; no manual JDBC wiring is
+required:
 
 1. Provision a MySQL 8+ database and a dedicated user.
-2. Provide the MySQL JDBC driver on the runtime classpath (it is **not** shaded into the plugin
-   JAR; the server / classpath must supply it).
-3. Supply a `Connection` to `SqlBackend` configured with the `MySqlDialect` (wiring is outside this
-   document's scope — see the application composition layer).
+2. Set `storage.type: mysql` in `config.yml` and fill in the `storage.mysql.*` settings (JDBC URL,
+   credentials, and HikariCP pool options). The MySQL JDBC driver is **shaded into the plugin JAR**
+   — it is an `implementation` dependency of `build.gradle.kts`, preserved by `mergeServiceFiles()`
+   and the `minimize` exclusions — so the operator does **not** drop a driver JAR into `plugins/`.
+3. `CompositionRoot` reads `storage.mysql.*` via `StorageConfigParser` and
+   `PersistenceBackendFactory` builds the `SqlBackend` + `MySqlDialect` (with the HikariCP
+   `DataSource`) at startup. You do **not** supply a `Connection` manually.
 
 > **Test status — live MySQL not executed.** The MySQL path is covered by *offline, deterministic*
 > contract tests only: `V2Schema.ddlStatements(mySqlDialect)` and `versionInsertSql` are asserted to

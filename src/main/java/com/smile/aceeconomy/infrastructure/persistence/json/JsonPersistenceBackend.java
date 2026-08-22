@@ -193,6 +193,20 @@ public final class JsonPersistenceBackend
     }
 
     @Override
+    public List<Account> listAll() {
+        lock.lock();
+        try {
+            List<Account> result = new ArrayList<>(model.accounts.size());
+            for (JsonModel.JsonAccount account : model.accounts.values()) {
+                result.add(toAccount(account));
+            }
+            return List.copyOf(result);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    @Override
     public void save(Account account) {
         lock.lock();
         try {

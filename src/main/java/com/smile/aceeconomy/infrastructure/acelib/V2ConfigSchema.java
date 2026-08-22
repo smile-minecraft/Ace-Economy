@@ -37,16 +37,30 @@ public final class V2ConfigSchema {
                 // settings / locale
                 new FieldSpec("settings.locale", "zh_TW", false),
                 new FieldSpec("settings.main-command-alias", "aceeco", false),
-                // storage
-                new FieldSpec("storage.type", "sqlite", false),
+                // storage — backend selection and per-backend connection settings.
+                // All values flow into PersistenceBackendFactory; defaults match the
+                // v2.0.0 fresh-install contract (JSON) and the parser's hard-coded defaults.
+                new FieldSpec("storage.type", "json", false),
+                new FieldSpec("storage.sqlite.path", "data-v2.sqlite", false),
+                new FieldSpec("storage.mysql.host", "localhost", false),
+                new FieldSpec("storage.mysql.port", 3306, false),
+                new FieldSpec("storage.mysql.database", "aceeconomy", false),
+                new FieldSpec("storage.mysql.username", "root", false),
+                new FieldSpec("storage.mysql.password", "", false),
+                new FieldSpec("storage.mysql.pool-size", 10, false),
+                new FieldSpec("storage.mysql.max-lifetime", 1_800_000, false),
                 // discord
                 new FieldSpec("discord.enabled", false, false),
                 new FieldSpec("discord.webhook-url", "", false),
                 // currencies (retained multi-currency capability)
                 new FieldSpec("currencies.dollar.default", true, false),
                 new FieldSpec("currencies.dollar.name", "金幣", false),
+                new FieldSpec("currencies.dollar.symbol", "$", false),
+                new FieldSpec("currencies.dollar.scale", 2, false),
                 new FieldSpec("currencies.token.default", false, false),
                 new FieldSpec("currencies.token.name", "活動代幣", false),
+                new FieldSpec("currencies.token.symbol", "ⓒ", false),
+                new FieldSpec("currencies.token.scale", 0, false),
                 // leaderboard
                 new FieldSpec("leaderboard.enabled", true, false),
                 new FieldSpec("leaderboard.page-size", 10, false)

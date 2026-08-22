@@ -1,0 +1,23 @@
+# ============================================
+# AceEconomy v2 Language File (zh_CN)
+# Format: MiniMessage (tags) + {placeholder} (typed variable substitution)
+# ============================================
+
+message:
+  prefix: "<gold>[AceEconomy]</gold> <gray>"
+
+general:
+  no-permission: "<red>您没有使用此指令的权限！</red>"
+  invalid-amount: "<red>无效金额：<white>{amount}</white></red>"
+  player-not-found: "<red>找不到玩家：<white>{player}</white></red>"
+  status: "<green>状态：<white>{status}</white></green>"
+
+economy:
+  balance-check: "您的余额：<yellow>{balance}</yellow>"
+  balance-check-other: "<aqua>{player}</aqua> 的余额：<yellow>{balance}</yellow>"
+  payment-sent: "<green>已发送 <yellow>{amount}</yellow> 给 <aqua>{player}</aqua>！</green>"
+  payment-received: "<green>已收到来自 <aqua>{player}</aqua> 的 <yellow>{amount}</yellow>！</green>"
+  insufficient-funds: "<red>余额不足！</red>"
+
+admin:
+  give: "<green>已给予 <aqua>{player}</aqua> <yellow>{amount}</yellow></green>"

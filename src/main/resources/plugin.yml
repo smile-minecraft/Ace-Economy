@@ -6,9 +6,9 @@ author: Smile
 api-version: ${apiVersion}
 folia-supported: true
 depend:
-  - Vault
   - AceLib
 softdepend:
+  - Vault
   - PlaceholderAPI
 
 commands:
@@ -47,8 +47,6 @@ permissions:
       aceeconomy.admin.take: true
       aceeconomy.admin.set: true
       aceeconomy.admin.reload: true
-      aceeconomy.admin.history: true
-      aceeconomy.admin.rollback: true
       aceeconomy.bypass.debt: true
       aceeconomy.command.bank: true
   aceeconomy.command.pay:
@@ -74,12 +72,6 @@ permissions:
     default: op
   aceeconomy.admin.reload:
     description: Allow use of /aceeco reload
-    default: op
-  aceeconomy.admin.history:
-    description: Allow use of /aceeco history
-    default: op
-  aceeconomy.admin.rollback:
-    description: Allow use of /aceeco rollback
     default: op
   aceeconomy.bypass.debt:
     description: Allow player to bypass debt limits

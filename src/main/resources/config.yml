@@ -8,27 +8,35 @@
 version: "2.0"
 
 # 資料儲存設定
+# 儲存類型決定 CompositionRoot 在 startPersistence() 中接線哪個 backend：
+#   json   → JsonPersistenceBackend（預設，fresh install 自動建立 data-v2.json）
+#   sqlite → SqlBackend + SqliteDialect，檔案位於 plugin data folder 下
+#   mysql  → SqlBackend + MySqlDialect，連線與 pool 由 storage.mysql.* 提供
 storage:
-  # 儲存類型: sqlite 或 mysql
-  type: sqlite
+  type: json
 
-  # MySQL 連線設定（僅當 type 為 mysql 時使用）
+  # 僅當 type 為 sqlite 時使用；檔案必須位於 plugin data folder 內，路徑越界會被拒絕
+  sqlite:
+    path: data-v2.sqlite
+
+  # 僅當 type 為 mysql 時使用；host / port / database / username / password 全部
+  # 來自 config，不在原始碼或預設值中硬編任何 secret
   mysql:
     host: localhost
     port: 3306
     database: aceeconomy
     username: root
-    password: password
-    
-  # Connection Pool Settings
-  pool-size: 10
-  max-lifetime: 1800000
+    password: ""
+
+    # HikariCP 連線池設定（僅 mysql 模式生效）
+    pool-size: 10
+    max-lifetime: 1800000
 
 # 一般設定
 settings:
   # 語言設定 (en_US, zh_TW, zh_CN)
   locale: zh_TW
-  
+
   # 主指令別名 (預設: aceeco)
   # 若設定為 "bank"，則可以使用 /bank 來執行 /aceeco 指令
   main-command-alias: "aceeco"
@@ -45,12 +53,12 @@ currencies:
   dollar: # 內部 ID
     name: "金幣"
     symbol: "$"
-    format: "#,##0.00"
+    scale: 2
     default: true # 這是 Vault 使用的主要貨幣
   token:
     name: "活動代幣"
     symbol: "ⓒ"
-    format: "#,##0"
+    scale: 0
     default: false
 
 # 玩家新建帳戶時的預設餘額
@@ -62,13 +70,6 @@ discord:
   enabled: false
   # Webhook URL
   webhook-url: "https://discord.com/api/webhooks/..."
-  # 僅記錄超過此金額的交易
-  min-amount: 0.0
-  # 記錄事件類型
-  log-events:
-    transaction: true  # /pay
-    admin: true        # /aceeco set/give/take
-    server: true       # Plugin enable/disable
 
 # 排行榜設定
 leaderboard:

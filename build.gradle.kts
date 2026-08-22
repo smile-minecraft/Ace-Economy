@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.smile.aceeconomy"
-version = "1.4.0"
+version = "2.0.0"
 description = "A Folia-compatible economy plugin"
 
 java {
@@ -42,6 +42,18 @@ dependencies {
     implementation("org.slf4j:slf4j-api:2.0.9")
     implementation("org.slf4j:slf4j-nop:2.0.9")
 
+    // JDBC drivers — both SQLite and MySQL are first-class runtime backends in v2.0.0.
+    // Production wiring goes through PersistenceBackendFactory + SqlBackend; the drivers
+    // are shaded into the plugin JAR so the operator does not have to drop them in
+    // plugins/ separately. JDBC service files (META-INF/services/java.sql.Driver) are
+    // preserved by mergeServiceFiles() below — minimize also excludes the driver JARs
+    // so reflective DriverManager lookup keeps working.
+    // The version is pinned with strictly() so a transitive upgrade (e.g. via the
+    // paperweight dev-bundle, which currently pulls 3.49.1.0) cannot silently change
+    // the test classpath artifact away from what is shipped in the plugin JAR.
+    implementation("org.xerial:sqlite-jdbc") { version { strictly("3.47.0.0") } }
+    implementation("com.mysql:mysql-connector-j:9.1.0")
+
     // Testing
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.0")
     // Gradle 9.x no longer auto-provides the JUnit Platform launcher on the test runtime classpath.
@@ -61,16 +73,35 @@ dependencies {
     // offline test runtime self-contained. Test-only: never shaded into the plugin JAR.
     testImplementation("me.clip:placeholderapi:2.11.6") { isTransitive = false }
 
-    // SQLite JDBC driver for real, offline persistence contract tests (test-only; never shaded into the plugin).
-    testImplementation("org.xerial:sqlite-jdbc:3.47.0.0")
+    // SQLite JDBC driver for real, offline persistence contract tests. Same pinned
+    // version as the production runtime so the test classpath artifact matches what is
+    // shaded into the plugin JAR; strictly() also keeps a transitive paperweight upgrade
+    // (which currently resolves 3.49.1.0) from silently shifting the test driver.
+    testImplementation("org.xerial:sqlite-jdbc") { version { strictly("3.47.0.0") } }
 }
 
 tasks.test {
     useJUnitPlatform()
 }
 
+val v2FoundationOutput = layout.buildDirectory.dir("classes/foundation")
+
+val compileV2Foundation by tasks.registering(JavaCompile::class) {
+    source = fileTree("src/main/java") {
+        exclude("com/smile/aceeconomy/bootstrap/**")
+        exclude("com/smile/aceeconomy/AceEconomy.java")
+    }
+    classpath = sourceSets.main.get().compileClasspath
+    destinationDirectory.set(v2FoundationOutput)
+    options.encoding = "UTF-8"
+    options.release.set(25)
+    options.sourcepath = files("src/main/java")
+}
+
 tasks {
     compileJava {
+        dependsOn(compileV2Foundation)
+        classpath = sourceSets.main.get().compileClasspath + files(v2FoundationOutput)
         options.encoding = "UTF-8"
         options.release.set(25)
     }
@@ -107,13 +138,23 @@ tasks {
         // 🔥 關鍵修正：必須合併 Service Files，否則 Relocate 後 SLF4J 2.x 會找不到 Provider
         mergeServiceFiles()
 
+        // Without INCLUDE on the JDBC service file, the default EXCLUDE strategy silently
+        // drops one of (sqlite-jdbc, mysql-connector-j) when both register the same
+        // META-INF/services/java.sql.Driver — leaving one driver unreachable at runtime.
+        duplicatesStrategy = DuplicatesStrategy.INCLUDE
+
         // 2. IMPORTANT: Remove the "-all" classifier so this JAR replaces the default one
         archiveClassifier.set("")
 
-        // 3. Minimize jar but exclude NOP from being removed
+        // 3. Minimize jar but exclude runtime-critical deps from being removed
         minimize {
+            exclude(dependency("com.zaxxer:HikariCP:5.1.0"))
             exclude(dependency("org.slf4j:slf4j-nop"))
             exclude(dependency("org.slf4j:slf4j-api"))
+            // JDBC drivers must survive minimize so META-INF/services/java.sql.Driver and
+            // their supporting classes are intact when DriverManager looks them up.
+            exclude(dependency("org.xerial:sqlite-jdbc:3.47.0.0"))
+            exclude(dependency("com.mysql:mysql-connector-j:9.1.0"))
         }
 
         // 排除不需要的 metadata

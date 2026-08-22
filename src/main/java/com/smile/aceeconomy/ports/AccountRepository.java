@@ -3,6 +3,7 @@ package com.smile.aceeconomy.ports;
 import com.smile.aceeconomy.domain.Account;
 import com.smile.aceeconomy.domain.Amount;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -18,4 +19,7 @@ public interface AccountRepository {
 
     /** Create and persist a brand-new account with the given initial balances. */
     Account create(UUID uuid, String ownerName, Map<String, Amount> initialBalances);
+
+    /** Snapshot of every known account, for read-only scans such as the leaderboard. */
+    List<Account> listAll();
 }

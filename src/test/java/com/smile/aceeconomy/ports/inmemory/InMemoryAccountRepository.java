@@ -5,6 +5,7 @@ import com.smile.aceeconomy.domain.Amount;
 import com.smile.aceeconomy.ports.AccountRepository;
 
 import java.util.Map;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -34,5 +35,10 @@ public final class InMemoryAccountRepository implements AccountRepository {
         Account a = Account.create(uuid, ownerName, initialBalances);
         store.put(uuid, a);
         return a;
+    }
+
+    @Override
+    public List<Account> listAll() {
+        return List.copyOf(store.values());
     }
 }

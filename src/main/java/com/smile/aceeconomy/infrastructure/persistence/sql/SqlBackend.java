@@ -45,6 +45,14 @@ import java.util.UUID;
  *       so a corrupt backup cannot destroy existing data.</li>
  * </ul>
  *
+ * <p>Thread safety (durable contract): every public method that touches {@link #connection}
+ * is {@code synchronized} on this backend instance. A single {@link SqlBackend} therefore
+ * serializes all JDBC access; concurrent callers see one operation at a time. This matches
+ * {@link com.smile.aceeconomy.infrastructure.persistence.json.JsonPersistenceBackend}, which
+ * guards the in-memory model with a {@code ReentrantLock}, and keeps domain semantics
+ * identical across backends (no hidden concurrent-write surprises when an operator switches
+ * {@code storage.type}).</p>
+ *
  * <p>Only {@code java.sql} is used here; no vendor driver types leak into the port boundary.</p>
  */
 public final class SqlBackend
@@ -52,7 +60,7 @@ public final class SqlBackend
 
     private final Connection connection;
     private final SqlDialect dialect;
-    private boolean initialized = false;
+    private volatile boolean initialized = false;
 
     public SqlBackend(Connection connection, SqlDialect dialect) {
         this.connection = connection;
@@ -62,7 +70,7 @@ public final class SqlBackend
     // ---------------- lifecycle ----------------
 
     @Override
-    public void initialize() throws PersistenceException {
+    public synchronized void initialize() throws PersistenceException {
         try {
             createSchema();
             initialized = true;
@@ -72,7 +80,7 @@ public final class SqlBackend
     }
 
     @Override
-    public void close() {
+    public synchronized void close() {
         try {
             connection.close();
         } catch (SQLException ignore) {
@@ -87,7 +95,7 @@ public final class SqlBackend
     }
 
     @Override
-    public int schemaVersion() throws PersistenceException {
+    public synchronized int schemaVersion() throws PersistenceException {
         try {
             if (!tableExists(V2Schema.schemaTable())) {
                 return 0;
@@ -104,7 +112,7 @@ public final class SqlBackend
     }
 
     @Override
-    public boolean needsRecreation() throws PersistenceException {
+    public synchronized boolean needsRecreation() throws PersistenceException {
         try {
             if (!tableExists(V2Schema.schemaTable())) {
                 // Fresh only if no v2 table exists at all; otherwise a partial init left tables behind.
@@ -120,7 +128,7 @@ public final class SqlBackend
     }
 
     @Override
-    public void truncateAndRecreate() throws PersistenceException {
+    public synchronized void truncateAndRecreate() throws PersistenceException {
         try {
             dropSchema();
             createSchema();
@@ -131,14 +139,14 @@ public final class SqlBackend
     }
 
     @Override
-    public void backup(OutputStream out) throws PersistenceException, IOException {
+    public synchronized void backup(OutputStream out) throws PersistenceException, IOException {
         JsonModel model = loadAllIntoModel();
         out.write(model.toJson().getBytes(StandardCharsets.UTF_8));
         out.flush();
     }
 
     @Override
-    public void restore(InputStream in) throws PersistenceException, IOException {
+    public synchronized void restore(InputStream in) throws PersistenceException, IOException {
         byte[] bytes = in.readAllBytes();
         JsonModel candidate = JsonModel.fromJson(new String(bytes, StandardCharsets.UTF_8));
         if (candidate.schemaVersion != JsonModel.SCHEMA_VERSION) {
@@ -179,7 +187,7 @@ public final class SqlBackend
     // ---------------- account repository ----------------
 
     @Override
-    public boolean exists(UUID uuid) {
+    public synchronized boolean exists(UUID uuid) {
         try (PreparedStatement ps = connection.prepareStatement(
                 "SELECT 1 FROM " + V2Schema.accountsTable() + " WHERE owner = ?")) {
             ps.setString(1, uuid.toString());
@@ -192,7 +200,7 @@ public final class SqlBackend
     }
 
     @Override
-    public Optional<Account> load(UUID uuid) {
+    public synchronized Optional<Account> load(UUID uuid) {
         try (PreparedStatement ps = connection.prepareStatement(
                 "SELECT owner_name FROM " + V2Schema.accountsTable() + " WHERE owner = ?")) {
             ps.setString(1, uuid.toString());
@@ -210,7 +218,24 @@ public final class SqlBackend
     }
 
     @Override
-    public void save(Account account) {
+    public synchronized List<Account> listAll() {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT owner, owner_name FROM " + V2Schema.accountsTable() + " ORDER BY owner")) {
+            List<Account> result = new ArrayList<>();
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    UUID owner = UUID.fromString(rs.getString("owner"));
+                    result.add(Account.create(owner, rs.getString("owner_name"), loadBalances(owner)));
+                }
+            }
+            return List.copyOf(result);
+        } catch (SQLException e) {
+            throw new PersistenceException("Failed to list accounts", e);
+        }
+    }
+
+    @Override
+    public synchronized void save(Account account) {
         try {
             connection.setAutoCommit(false);
             try (PreparedStatement del = connection.prepareStatement(
@@ -253,7 +278,7 @@ public final class SqlBackend
     }
 
     @Override
-    public Account create(UUID uuid, String ownerName, Map<String, Amount> initialBalances) {
+    public synchronized Account create(UUID uuid, String ownerName, Map<String, Amount> initialBalances) {
         Optional<Account> existing = load(uuid);
         if (existing.isPresent()) {
             return existing.get(); // safe: never overwrite an existing account
@@ -266,7 +291,7 @@ public final class SqlBackend
     // ---------------- transaction repository ----------------
 
     @Override
-    public void append(Transaction transaction) throws PersistenceException {
+    public synchronized void append(Transaction transaction) throws PersistenceException {
         try {
             insertTransactionRow(transaction, false);
         } catch (SQLException e) {
@@ -275,7 +300,7 @@ public final class SqlBackend
     }
 
     @Override
-    public void appendBatch(List<Transaction> transactions) throws PersistenceException {
+    public synchronized void appendBatch(List<Transaction> transactions) throws PersistenceException {
         if (transactions.isEmpty()) {
             return;
         }
@@ -300,7 +325,7 @@ public final class SqlBackend
     }
 
     @Override
-    public void markReverted(UUID transactionId) throws PersistenceException {
+    public synchronized void markReverted(UUID transactionId) throws PersistenceException {
         try {
             try (PreparedStatement ps = connection.prepareStatement(
                     "UPDATE " + V2Schema.transactionsTable() + " SET reverted = ? WHERE id = ?")) {
@@ -318,7 +343,7 @@ public final class SqlBackend
     }
 
     @Override
-    public boolean isReverted(UUID transactionId) throws PersistenceException {
+    public synchronized boolean isReverted(UUID transactionId) throws PersistenceException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "SELECT reverted FROM " + V2Schema.transactionsTable() + " WHERE id = ?")) {
             ps.setString(1, transactionId.toString());
@@ -331,7 +356,7 @@ public final class SqlBackend
     }
 
     @Override
-    public List<Transaction> loadByAccount(UUID accountId) throws PersistenceException {
+    public synchronized List<Transaction> loadByAccount(UUID accountId) throws PersistenceException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "SELECT * FROM " + V2Schema.transactionsTable()
                         + " WHERE account_id = ? ORDER BY timestamp")) {
@@ -343,7 +368,7 @@ public final class SqlBackend
     }
 
     @Override
-    public List<Transaction> loadAll() throws PersistenceException {
+    public synchronized List<Transaction> loadAll() throws PersistenceException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "SELECT * FROM " + V2Schema.transactionsTable() + " ORDER BY timestamp")) {
             return readTransactions(ps.executeQuery());
