@@ -1,243 +1,186 @@
-# Localization
+# AceEconomy localization
 
-AceEconomy supports multiple languages for server operators worldwide.
+AceEconomy v2 keeps its language resources in `lang/<locale>.yml`. This guide explains how to
+change a server language, edit a translation, preserve the key namespace, and reload the result.
+The examples use the built-in `en_US`, `zh_TW`, and `zh_CN` locales.
 
----
+AceEconomy v2 的語系資源使用 `lang/<locale>.yml`。本指南說明如何變更伺服器語言、修改翻譯、
+維持 key namespace，以及重新載入結果。範例使用內建的 `en_US`、`zh_TW` 與 `zh_CN` 語系。
 
-## Supported Locales
+## File locations and locales
 
-| Locale | Language | Status |
-|--------|----------|--------|
-| `en_US` | English | Default |
-| `zh_TW` | Traditional Chinese | Built-in |
-| `zh_CN` | Simplified Chinese | Built-in |
+After the first start, edit the files in the plugin data folder:
 
-The language files are located in: `plugins/AceEconomy/lang/`
-
----
-
-## Changing the Language
-
-1. Open `config.yml` in your server's `plugins/AceEconomy/` folder
-2. Find or add the `settings.locale` option:
-   ```yaml
-   settings:
-     locale: "zh_TW"
-   ```
-3. Run `/aceeco reload` or restart your server
-
----
-
-## Creating a New Translation
-
-### Step 1: Copy an Existing File
-
-Copy `messages_en_US.yml` and rename it to your target locale (e.g., `messages_fr_FR.yml`).
-
-### Step 2: Edit the Values
-
-Edit the values using **MiniMessage** formatting (supported since Minecraft 1.21).
-
-**Example:**
-```yaml
-prefix: "<gradient:#FF5555:#55FF55>AceEconomy</gradient> <gray>» "
-balance: "<green>Your balance: <yellow><amount>"
-pay-success: "<green>Successfully paid <yellow><amount> <green>to <aqua><player>."
+```text
+plugins/AceEconomy/lang/en_US.yml
+plugins/AceEconomy/lang/zh_TW.yml
+plugins/AceEconomy/lang/zh_CN.yml
 ```
 
-### Step 3: Activate Your Language
-
-Update `config.yml`:
+The locale is selected in `plugins/AceEconomy/config.yml`:
 
 ```yaml
 settings:
-  locale: "fr_FR"
+  locale: zh_TW
 ```
 
-### Step 4: Reload
+The v2 files are named `lang/<locale>.yml`. The older `messages_<locale>.yml` naming belongs to the
+previous layout; do not use it when editing v2 messages.
 
-Run `/aceeco reload` to apply changes.
+首次啟動後，請修改插件資料夾中的檔案：
 
----
-
-## MiniMessage Formatting
-
-MiniMessage allows rich text formatting with tags. Here are commonly used tags:
-
-| Tag | Description | Example |
-|-----|-------------|---------|
-| `<green>` | Green text | `<green>Success` |
-| `<red>` | Red text | `<red>Error` |
-| `<yellow>` | Yellow text | `<yellow>Warning` |
-| `<aqua>` | Aqua text | `<aqua>Player` |
-| `<gray>` | Gray text | `<gray>Info` |
-| `<bold>` | Bold text | `<bold>Important` |
-| `<italic>` | Italic text | `<italic>Note` |
-| `<hover:show_text:"...">` | Hover tooltip | `<hover:show_text:"Click me">Button` |
-| `<click:run_command:"...">` | Click action | `<click:run_command:"/money">Click</click>` |
-| `<gradient:color1:color2>` | Gradient text | `<gradient:#FF5555:#55FF55>Rainbow</gradient>` |
-
----
-
-## Contributing Translations
-
-We welcome community translations to help AceEconomy reach more players!
-
-### How to Contribute
-
-1. **Fork** the repository on GitHub
-2. Add your new language file to `src/main/resources/lang/`
-3. Ensure the filename follows the pattern: `messages_<LOCALE>.yml`
-4. Create a **Pull Request**
-
-### Translation File Template
-
-```yaml
-# AceEconomy Language File
-# Locale: Your Locale (e.g., fr_FR)
-
-prefix: "<gray>AceEconomy <dark_gray>» "
-
-# Commands
-command:
-  money: "Check your balance"
-  pay: "Pay another player"
-  baltop: "View richest players"
-
-# Messages
-messages:
-  balance: "<green>Your balance: <yellow><amount>"
-  pay-success: "<green>Paid <yellow><amount> <green>to <aqua><player>"
-  pay-received: "<green>Received <yellow><amount> <green>from <aqua><player>"
-  pay-failed: "<red>Insufficient balance"
-
-# Errors
-errors:
-  player-not-found: "<red>Player not found"
-  invalid-amount: "<red>Invalid amount"
-  same-player: "<red>Cannot pay yourself"
+```text
+plugins/AceEconomy/lang/en_US.yml
+plugins/AceEconomy/lang/zh_TW.yml
+plugins/AceEconomy/lang/zh_CN.yml
 ```
 
----
-
----
-
-# 在地化
-
-AceEconomy 支援多種語言，方便全球伺服器運營者使用。
-
----
-
-## 支援的語系
-
-| 語系 | 語言 | 狀態 |
-|------|------|------|
-| `en_US` | 英文 | 預設 |
-| `zh_TW` | 正體中文 | 內建 |
-| `zh_CN` | 簡體中文 | 內建 |
-
-語言檔案位於：`plugins/AceEconomy/lang/`
-
----
-
-## 變更語言
-
-1. 開啟伺服器 `plugins/AceEconomy/` 資料夾中的 `config.yml`
-2. 找到或新增 `settings.locale` 選項：
-   ```yaml
-   settings:
-     locale: "zh_TW"
-   ```
-3. 執行 `/aceeco reload` 或重啟伺服器
-
----
-
-## 建立新翻譯
-
-### 步驟 1：複製現有檔案
-
-複製 `messages_en_US.yml` 並重新命名為您的目標語系（如 `messages_fr_FR.yml`）。
-
-### 步驟 2：編輯內容
-
-使用 **MiniMessage** 格式編輯內容（Minecraft 1.21 起支援）。
-
-**範例：**
-```yaml
-prefix: "<gradient:#FF5555:#55FF55>AceEconomy</gradient> <gray>» "
-balance: "<green>Your balance: <yellow><amount>"
-pay-success: "<green>Successfully paid <yellow><amount> <green>to <aqua><player>."
-```
-
-### 步驟 3：啟用您的語言
-
-更新 `config.yml`：
+語系在 `plugins/AceEconomy/config.yml` 選擇：
 
 ```yaml
 settings:
-  locale: "fr_FR"
+  locale: zh_TW
 ```
 
-### 步驟 4：重新載入
+v2 使用 `lang/<locale>.yml` 命名。舊版的 `messages_<locale>.yml` 屬於之前的檔案配置；修改 v2
+訊息時不要使用舊檔名。
 
-執行 `/aceeco reload` 套用變更。
+## How a v2 message is written
 
----
+Language files use two separate syntaxes:
 
-## MiniMessage 格式
+- **Key namespace:** dotted YAML paths such as `general.invalid-amount` and
+  `economy.payment-sent`. Keep the namespace and key names unchanged; translate values, not keys.
+- **Typed placeholders:** write variables as `{placeholder}`, for example `{amount}`, `{player}`,
+  `{balance}`, and `{status}`. Keep the braces and placeholder name intact.
+- **MiniMessage:** use tags such as `<red>`, `<yellow>`, `<aqua>`, `<green>`, and `</red>` for
+  presentation. Tags are rendered after variable substitution, so they should not be replaced with
+  legacy colour-code syntax.
 
-MiniMessage 允許使用標籤進行豐富的文字格式設定。以下是常用標籤：
-
-| 標籤 | 說明 | 範例 |
-|------|------|------|
-| `<green>` | 綠色文字 | `<green>成功` |
-| `<red>` | 紅色文字 | `<red>錯誤` |
-| `<yellow>` | 黃色文字 | `<yellow>警告` |
-| `<aqua>` | 淺藍色文字 | `<aqua>玩家` |
-| `<gray>` | 灰色文字 | `<gray>資訊` |
-| `<bold>` | 粗體文字 | `<bold>重要` |
-| `<italic>` | 斜體文字 | `<italic>備註` |
-| `<hover:show_text:"...">` | 懸停提示 | `<hover:show_text:"點擊我">按鈕` |
-| `<click:run_command:"...">` | 點擊動作 | `<click:run_command:"/money">點擊</click>` |
-| `<gradient:color1:color2>` | 漸層文字 | `<gradient:#FF5555:#55FF55>彩虹</gradient>` |
-
----
-
-## 貢獻翻譯
-
-我們歡迎社群翻譯，幫助 AceEconomy 觸及更多玩家！
-
-### 如何貢獻
-
-1. 在 GitHub 上 **Fork** 此專案
-2. 將您的新語言檔案加入 `src/main/resources/lang/`
-3. 確保檔案名稱遵循格式：`messages_<語系>.yml`
-4. 建立 **Pull Request**
-
-### 翻譯檔案範本
+For example, the same key can carry different wording while keeping the contract:
 
 ```yaml
-# AceEconomy Language File
-# Locale: 您的語系（例如 fr_FR）
-
-prefix: "<gray>AceEconomy <dark_gray>» "
-
-# 指令
-command:
-  money: "查看餘額"
-  pay: "轉帳給其他玩家"
-  baltop: "查看富豪榜"
-
-# 訊息
-messages:
-  balance: "<green>您的餘額：<yellow><amount>"
-  pay-success: "<green>已轉帳 <yellow><amount> <green>給 <aqua><player>"
-  pay-received: "<green>收到 <yellow><amount> <green>來自 <aqua><player>"
-  pay-failed: "<red>餘額不足"
-
-# 錯誤
-errors:
-  player-not-found: "<red>找不到玩家"
-  invalid-amount: "<red>金額無效"
-  same-player: "<red>無法轉帳給自己"
+economy:
+  balance-check: "Your balance: <yellow>{balance}</yellow>"
+  payment-sent: "<green>Sent <yellow>{amount}</yellow> to <aqua>{player}</aqua>!</green>"
 ```
+
+翻譯檔使用兩種不同語法：
+
+- **Key namespace：** 使用 `general.invalid-amount`、`economy.payment-sent` 這類 dotted YAML
+  路徑。請保留 namespace 與 key 名稱，只翻譯值。
+- **Typed placeholder：** 變數寫成 `{placeholder}`，例如 `{amount}`、`{player}`、`{balance}` 與
+  `{status}`。大括號與 placeholder 名稱都要保留。
+- **MiniMessage：** 使用 `<red>`、`<yellow>`、`<aqua>`、`<green>` 與 `</red>` 等標籤處理顯示
+  樣式。標籤會在變數代換後解析，不要改成舊式色碼。
+
+同一個 key 可以使用不同文案，只要契約不變：
+
+```yaml
+economy:
+  balance-check: "您的餘額：<yellow>{balance}</yellow>"
+  payment-sent: "<green>已轉帳 <yellow>{amount}</yellow> 給 <aqua>{player}</aqua>！</green>"
+```
+
+### Built-in key map
+
+The built-in resources use these namespaces:
+
+| Namespace | Use | Example keys |
+| --- | --- | --- |
+| `message` | Prefix shared by messages | `message.prefix` |
+| `general` | General errors and status | `general.no-permission`, `general.status` |
+| `economy` | Balances and payments | `economy.balance-check`, `economy.payment-received` |
+| `admin` | Administrator feedback | `admin.give` |
+
+內建語系檔使用以下 namespace：
+
+| Namespace | 用途 | key 範例 |
+| --- | --- | --- |
+| `message` | 訊息共用前綴 | `message.prefix` |
+| `general` | 一般錯誤與狀態 | `general.no-permission`、`general.status` |
+| `economy` | 餘額與轉帳訊息 | `economy.balance-check`、`economy.payment-received` |
+| `admin` | 管理員操作回饋 | `admin.give` |
+
+## Change the active language
+
+1. Open `plugins/AceEconomy/config.yml`.
+2. Set `settings.locale` to the matching locale filename, such as `en_US`, `zh_TW`, or `zh_CN`.
+3. Save the file.
+4. Run `/aceeco reload` from the server console, or restart the server.
+
+The reload reads the config and language snapshot again. A valid change becomes visible in the next
+message that uses the changed key.
+
+變更目前語言：
+
+1. 開啟 `plugins/AceEconomy/config.yml`。
+2. 將 `settings.locale` 設為對應檔名中的語系，例如 `en_US`、`zh_TW` 或 `zh_CN`。
+3. 儲存檔案。
+4. 從伺服器主控台執行 `/aceeco reload`，或重新啟動伺服器。
+
+重新載入會再次讀取設定與語系快照。修改有效後，下一次使用該 key 的訊息就會顯示新內容。
+
+## Edit a translation safely
+
+Start from the v2 file that matches the locale you want to edit. Change only the YAML values:
+
+```yaml
+general:
+  invalid-amount: "<red>Invalid amount: <white>{amount}</white></red>"
+  player-not-found: "<red>Player not found: <white>{player}</white></red>"
+```
+
+When translating:
+
+- keep indentation and YAML quoting valid;
+- keep every `{placeholder}` needed by the original message;
+- keep opening and closing MiniMessage tags paired;
+- keep key names such as `invalid-amount` in English, even when the value is translated.
+
+Keep the built-in resource shape when maintaining a locale. The built-in resource set remains the
+reference for the required namespace and placeholder names.
+
+安全修改翻譯時，請從要修改的語系對應 v2 檔案開始，只改 YAML 值：
+
+```yaml
+general:
+  invalid-amount: "<red>無效金額：<white>{amount}</white></red>"
+  player-not-found: "<red>找不到玩家：<white>{player}</white></red>"
+```
+
+翻譯時請注意：
+
+- 保留縮排，並確保 YAML 引號有效；
+- 保留原訊息需要的每一個 `{placeholder}`；
+- MiniMessage 開始與結束標籤要成對；
+- `invalid-amount` 這類 key 名稱保持英文，即使值已翻譯。
+
+維護語系時請保留內建資源的結構。內建語系檔是 namespace 與 placeholder 名稱的參考。
+
+## Reload and recovery
+
+`/aceeco reload` from the server console reloads both the v2 config and the selected language resource. If the edited YAML is
+invalid, the reload reports a failure and keeps the last valid in-memory snapshot. This means a bad
+translation should not silently replace the language currently in use.
+
+Fix the reported YAML problem, save the file, and run `/aceeco reload` again. If the file still fails,
+restore the last valid copy and check the key indentation, quotes, and MiniMessage tags.
+
+從伺服器主控台執行 `/aceeco reload` 會重新載入 v2 設定與選定的語系資源。如果修改後的 YAML 無效，重新載入會回報
+失敗，並保留記憶體中最後一份有效快照。錯誤翻譯不會悄悄取代目前使用中的語言。
+
+請修正回報的 YAML 問題、儲存檔案，再次執行 `/aceeco reload`。如果仍然失敗，請還原最後一份
+有效副本，並檢查 key 縮排、引號與 MiniMessage 標籤。
+
+## Related guides
+
+- [`config.md`](config.md) — the full `config.yml` reference.
+- [`integrations.md`](integrations.md) — Vault, PlaceholderAPI, Discord, and AceLib setup.
+- [`integration-api.md`](integration-api.md) — placeholder and currency details for plugin developers.
+
+## 相關指南
+
+- [`config.md`](config.md)：完整的 `config.yml` 參考。
+- [`integrations.md`](integrations.md)：Vault、PlaceholderAPI、Discord 與 AceLib 設定。
+- [`integration-api.md`](integration-api.md)：給插件開發者的 placeholder 與貨幣細節。

@@ -96,6 +96,13 @@ val compileV2Foundation by tasks.registering(JavaCompile::class) {
     options.encoding = "UTF-8"
     options.release.set(25)
     options.sourcepath = files("src/main/java")
+    // Custom tasks do not inherit the default compile task's toolchain wiring; pin the
+    // JDK 25 compiler explicitly so CI daemons on older JDKs still provision JDK 25 here.
+    javaCompiler.set(
+        project.javaToolchains.compilerFor {
+            languageVersion.set(JavaLanguageVersion.of(25))
+        }
+    )
 }
 
 tasks {

@@ -1,80 +1,289 @@
-# AceEconomy v2 整合模組說明（Integrations）
+# AceEconomy integrations
 
-本文件說明 v2 的四大外部整合：Vault、PlaceholderAPI、Discord、AceLib 協調器。
-所有整合都位於 `infrastructure.integration.*`，與領域層（`domain`）、應用層（`application`）完全解耦；
-領域與應用層不依賴任何外部插件。
+This guide is for server administrators who want other plugins to use AceEconomy. It covers the
+required AceLib dependency and the optional Vault, PlaceholderAPI, and Discord integrations.
+For the public surfaces available to plugin authors, see [`integration-api.md`](integration-api.md).
+For message translations, see [`localization.md`](localization.md).
 
-> 注意：本文件描述的是**模組本身**的行為契約。實際在伺服器上啟用這些模組，
-> 是由 `bootstrap` / CompositionRoot（Task 12）負責；本任務不修改插件入口。
+這份指南給需要讓其他插件使用 AceEconomy 的伺服器管理員。內容涵蓋必要的 AceLib，以及可選的
+Vault、PlaceholderAPI 與 Discord 整合。插件開發者可參考
+[`integration-api.md`](integration-api.md)；訊息翻譯請看 [`localization.md`](localization.md)。
 
----
+## Before you start
 
-## 1. Vault 經濟適配器
+AceEconomy requires:
 
-- 類別：`VaultEconomyProvider`（實作 Vault `Economy`）、`VaultEconomyLifecycle`、`VaultIntegrationModule`
-- 作用：把 v2 型別化 `EconomyApi` 對映到 Vault 的同步 `Economy` 合約，讓依賴 Vault 的插件可用 AceEconomy 當作經濟後端。
-- 貨幣：Vault 沒有「多貨幣」概念，適配器**永遠只操作註冊表預設貨幣**（`CurrencyRegistry.defaultCurrencyId()`）。
-- 失敗語意（fail-closed，絕不謊報成功）：
-  - `deposit` / `withdraw` 成功 → `EconomyResponse` 帶新餘額、`SUCCESS`。
-  - `deposit` / `withdraw` 失敗 → `EconomyResponse` 帶 `amount=0`、目前（或零）餘額、`FAILURE` 與 v2 訊息；**不重試**。
-  - 餘額 / `has` 在帳號不存在時 → `0.0` / `false`（安全預設，不拋例外）。
-  - 以玩家名稱（非 `OfflinePlayer`）呼叫的帳號方法 → 一律 `false` / `FAILURE`（v2 以 UUID 為主鍵）。
-  - 銀行功能 → `NOT_IMPLEMENTED`。
-- 生命週期：`VaultEconomyLifecycle` 擁有註冊所有權，且**冪等**——重複 `start()` 不會重複註冊；`stop()` 一定會反註冊。
-  註冊失敗（例如 Vault 不存在）時，不會留下半初始化狀態。
+- AceLib `v1.0.0` at runtime. Install it before AceEconomy. `plugin.yml` declares AceLib as a hard
+  dependency, so AceEconomy will not start without a ready AceLib service.
+- Java 25 and a Paper/Folia server matching the release baseline.
 
----
+Vault and PlaceholderAPI are optional. AceEconomy declares them as soft dependencies and skips the
+corresponding integration when the plugin is not installed or enabled. Discord does not require a
+separate server plugin; it uses the webhook configured in `config.yml`.
 
-## 2. PlaceholderAPI 命名空間 `aceeco`
+AceEconomy 需要：
 
-- 類別：`PlaceholderResolver`（純邏輯、無外部依賴）、`AceEconomyExpansion`（PAPI 生命週期適配）、`PlaceholderLifecycle`、`PlaceholderIntegrationModule`
-- 命名空間識別字：**`aceeco`**（見 `AceEconomyExpansion.IDENTIFIER`）
-- 支援的占位符（全部小寫，針對預設或具名貨幣求值）：
+- 執行時可用的 AceLib `v1.0.0`。請先安裝 AceLib，再啟動 AceEconomy。`plugin.yml` 將 AceLib
+  列為必要依賴，因此沒有可用的 AceLib 服務時，AceEconomy 不會啟動。
+- Java 25，以及符合本版本基準的 Paper/Folia 伺服器。
 
-  | 占位符 | 說明 |
-  | --- | --- |
-  | `%aceeco_balance%` | 預設貨幣餘額，原始數值（例如 `100.00`） |
-  | `%aceeco_balance_formatted%` | 預設貨幣餘額，含符號（例如 `$100.00`） |
-  | `%aceeco_balance_<currency>%` | 具名貨幣原始餘額 |
-  | `%aceeco_balance_<currency>_formatted%` | 具名貨幣餘額，含符號 |
+Vault 與 PlaceholderAPI 都是可選整合。`plugin.yml` 將它們列為軟依賴；插件未安裝或未啟用時，
+AceEconomy 會略過對應整合。Discord 不需要另外安裝伺服器插件，而是使用 `config.yml` 中設定的
+Webhook。
 
-- 失敗語意（fail-closed）：任何**未知占位符名稱、畸形貨幣 id（非 `[a-z0-9_]+`）、未知貨幣、或帳號不可用**都解析為 `null`。
-  PAPI 收到 `null` 會保留原始占位符文字，而不是顯示錯誤值。
-- 生命週期：`PlaceholderLifecycle` 擁有註冊所有權且**冪等**；`stop()` 一定反註冊。
+## AceLib
 
----
+### Install and check
 
-## 3. Discord 通知（已提交事件的盡力而為通知）
+Install the matching AceLib release, then start the server with AceEconomy. AceLib must be ready
+before AceEconomy can register its commands, messages, and integrations.
 
-- 類別：`DiscordNotifier`、`TransactionDiscordMapper`、`DiscordPayload`、`DiscordPayloadFilter`、`DiscordTransport`（介面）、`HttpDiscordTransport`（生產綁定）、`DiscordNotificationRequest`
-- 契約：呼叫 `DiscordNotifier.notify(...)` 時，**底層經濟交易已經提交**。通知器嚴格「盡力而為」：
-  - **非同步**：投遞交給注入的 `Executor`，方法立即返回，絕不因網路而阻塞。
-  - **有界**：`Executor` 由呼叫方提供（通常是固定大小執行緒池 + 有界佇列），事件爆量也不會無限成長。
-  - **盡力而為 / 不否決**：任何對映錯誤、傳輸拒絕、逾時或投遞失敗都會被吞掉。通知器不持有已提交結果的參考，也**絕不能回滾或否決**該結果。
-- 敏感資訊：`TransactionDiscordMapper` 會透過 `DiscordPayloadFilter.sanitize(value, MAX_*, secrets)` 對每個欄位做長度限制與密鑰遮蔽；**Webhook URL 永遠不會進入 payload**。
-- 生產綁定：`HttpDiscordTransport` 使用 `HttpClient.sendAsync` 發送；測試使用 `FakeDiscordTransport`（SUCCESS / FAIL / HANG 模式）驗證非否決與非阻塞行為。
+When it is working, AceEconomy enables normally and its commands are available. If AceLib is missing
+or not ready, the plugin is disabled instead of starting with partial services.
 
----
+**If it does not start:**
 
-## 4. AceLib 協調器（外部就緒門控 + 停用）
+1. Check that the AceLib JAR is installed and enabled.
+2. Check that the AceLib version is `v1.0.0` for this release.
+3. Read the first AceEconomy startup error. Fix AceLib first, then restart AceEconomy.
 
-- 類別：`ExternalIntegrationCoordinator`、`ExternalServiceReadiness`（介面）、`AceLibExternalServiceReadiness`（AceLib 實作）、`IntegrationModule`、`ModuleState`、`Readiness`
-- 作用：擁有所有 v2 整合模組的生命週期，並以外部服務就緒狀態作為閘門。
-- 契約：
-  - 模組的 `requiredExternalModule()` 非 null 時，會透過 `ExternalServiceReadiness.probe(...)` 探測；只有 `Readiness.READY` 才初始化。
-    其他任何就緒狀態都讓模組保持 `DISABLED`——不註冊任何 provider，也不留下半初始化服務。
-  - `requiredExternalModule()` 為 null 的模組（例如 Discord）一律初始化（盡力而為）。
-  - 若 `initialize()` 拋例外，協調器會對該模組呼叫 `shutdown()` 以保證無殘留，並標記為 `FAILED`；已初始化的兄弟模組不受影響。
-  - `start()` 對每個模組**冪等**（已初始化者保持不變）。
-  - `stop()` **冪等**，且對每個已初始化模組恰好拆除一次。
-- `Readiness` 取值：`READY`、`NOT_INSTALLED`、`NOT_ENABLED`、`VERSION_UNSUPPORTED`、`INIT_FAILED`、`UNAVAILABLE`。
-- `ModuleState` 取值：`NOT_STARTED`、`INITIALIZED`、`DISABLED`、`FAILED`。
-- `status()` 回傳 `Map<String, ModuleState>` 快照，可用於運行時診斷。
+### 安裝與確認
 
----
+請安裝相符的 AceLib 版本，再啟動含有 AceEconomy 的伺服器。AceLib 必須先就緒，AceEconomy
+才能註冊指令、訊息與其他整合。
 
-## 5. 運行時限制（本任務範圍外）
+正常時，AceEconomy 會完成啟動，相關指令也能使用。如果 AceLib 缺少或尚未就緒，插件會停用，
+不會以只有部分服務的狀態繼續執行。
 
-- 本任務**不**修改 `AceEconomy.java`、bootstrap / CompositionRoot、`plugin.yml`、設定檔、舊版指令 / 管理員 / hook / 服務 / 儲存層。
-- 在真實伺服器上啟用這些模組、注入 `Executor`、提供 Webhook URL、串接 AceLib 探測，都屬於 Task 12（CompositionRoot）與後續發布驗證。
-- 本任務的測試使用可控的 fake 與執行緒池，**不觸發任何真實網路或睡眠**，因此可在 CI / 離線環境重現。
+**無法啟動時：**
+
+1. 確認 AceLib JAR 已安裝並啟用。
+2. 確認本版本使用的是 AceLib `v1.0.0`。
+3. 先閱讀 AceEconomy 啟動時最早出現的錯誤。修正 AceLib 後，再重新啟動 AceEconomy。
+
+## Vault
+
+Vault lets plugins that use the standard Vault `Economy` service use AceEconomy as their economy
+provider.
+
+### Install and configure
+
+1. Install and enable Vault.
+2. Install and enable AceLib, then AceEconomy.
+3. Choose the currency with `default: true` in `config.yml`:
+
+   ```yaml
+   currencies:
+     dollar:
+       name: "Gold Coin"
+       symbol: "$"
+       scale: 2
+       default: true
+     token:
+       name: "Event Token"
+       symbol: "ⓒ"
+       scale: 0
+       default: false
+   ```
+
+Vault has one economy balance, so it always uses the configured default currency. Named currencies
+remain available through AceEconomy's own multi-currency and PlaceholderAPI surfaces; Vault does not
+select a currency per call.
+
+### What success looks like
+
+Plugins that query the Vault `Economy` service can load a provider named `AceEconomy`. A deposit or
+withdrawal reports success with the new balance. Balance checks for an existing account return the
+account balance.
+
+### Troubleshooting
+
+- **No provider is visible:** make sure Vault is enabled before checking AceEconomy. If Vault is not
+  installed or enabled, AceEconomy leaves the Vault provider disabled.
+- **A transaction reports failure:** check the player account and amount. Failed operations are not
+  reported as successful, and the operation is not retried by the Vault adapter.
+- **A missing account shows zero or false:** this is the safe result for a balance or `has` query.
+  Create the account through the normal AceEconomy flow before asking another plugin to use it.
+- **Bank features are unavailable:** the AceEconomy Vault provider does not advertise Vault bank
+  support.
+
+### Vault 整合
+
+Vault 讓使用標準 Vault `Economy` 服務的插件，把 AceEconomy 當作經濟提供者。
+
+#### 安裝與設定
+
+1. 安裝並啟用 Vault。
+2. 安裝並啟用 AceLib，再啟用 AceEconomy。
+3. 在 `config.yml` 將要給 Vault 使用的貨幣設為 `default: true`，例如上方的 `dollar`。
+
+Vault 只有單一經濟餘額，因此永遠使用設定中的預設貨幣。具名貨幣仍可透過 AceEconomy 自己的
+多貨幣功能與 PlaceholderAPI 使用；Vault 不會在每次呼叫時選擇貨幣。
+
+#### 成功現象
+
+查詢 Vault `Economy` 服務的插件可以載入名為 `AceEconomy` 的提供者。存款或提款成功時會回傳
+新的餘額；已存在帳戶的餘額查詢會回傳該帳戶餘額。
+
+#### 排錯
+
+- **看不到提供者：** 先確認 Vault 已啟用。如果 Vault 未安裝或未啟用，AceEconomy 會保持
+  Vault 提供者停用。
+- **交易回報失敗：** 檢查玩家帳戶與金額。失敗操作不會被回報為成功，Vault 適配器也不會重試。
+- **不存在的帳戶顯示零或 `false`：** 這是餘額或 `has` 查詢的安全結果。請先用 AceEconomy
+  的正常流程建立帳戶，再讓其他插件查詢。
+- **無法使用銀行功能：** AceEconomy 的 Vault 提供者不宣告 Vault bank support。
+
+## PlaceholderAPI
+
+PlaceholderAPI exposes AceEconomy values under the `aceeco` namespace. Install and enable
+PlaceholderAPI before starting AceEconomy.
+
+### Install and check
+
+1. Install and enable PlaceholderAPI.
+2. Restart or reload the server so AceEconomy can register its expansion.
+3. Put one of the placeholders from the table below into a PAPI-compatible plugin.
+
+For example:
+
+```text
+Balance: %aceeco_balance_formatted%
+Tokens: %aceeco_balance_token_formatted%
+```
+
+If the placeholder is valid and the account is available, the consuming plugin receives the balance
+value. Unknown or unusable values remain as the original placeholder text rather than being replaced
+with a misleading number.
+
+See [`integration-api.md`](integration-api.md) for the complete placeholder contract and currency ID
+rules.
+
+### Troubleshooting
+
+- **The placeholder is shown literally:** confirm PlaceholderAPI is installed and enabled, then
+  confirm that the spelling and currency ID are correct.
+- **A named currency does not resolve:** use the internal currency ID from `currencies.<id>` and keep
+  it lowercase with only `a-z`, `0-9`, and `_`.
+- **The default value works but the formatted value does not:** use the exact `_formatted` suffix;
+  the four supported forms are listed in the API guide.
+
+### PlaceholderAPI 整合
+
+PlaceholderAPI 會在 `aceeco` 命名空間提供 AceEconomy 數值。請在啟動 AceEconomy 前安裝並啟用
+PlaceholderAPI。
+
+#### 安裝與確認
+
+1. 安裝並啟用 PlaceholderAPI。
+2. 重新啟動或重新載入伺服器，讓 AceEconomy 註冊 expansion。
+3. 將下表其中一個占位符放入支援 PAPI 的插件。
+
+例如：
+
+```text
+Balance: %aceeco_balance_formatted%
+Tokens: %aceeco_balance_token_formatted%
+```
+
+占位符正確且帳戶可用時，使用中的插件會收到餘額值。未知或無法使用的值會保留原始占位符，
+不會被錯誤數字取代。
+
+完整占位符契約與貨幣 ID 規則請看 [`integration-api.md`](integration-api.md)。
+
+#### 排錯
+
+- **畫面直接顯示占位符：** 確認 PlaceholderAPI 已安裝並啟用，再檢查拼字與貨幣 ID。
+- **具名貨幣無法解析：** 使用 `currencies.<id>` 中的內部貨幣 ID，並只使用小寫 `a-z`、`0-9`
+  與 `_`。
+- **預設餘額可用，但格式化值無法用：** 確認使用正確的 `_formatted` 尾綴；四種支援形式列在
+  API 指南中。
+
+## Discord notifications
+
+Discord sends a best-effort notification after a transaction has been committed. It is useful for
+an audit-style channel, but it is not the transaction result: a Discord delivery problem does not
+roll back or veto the economy operation.
+
+### Configure it
+
+Set the two `discord` keys in `plugins/AceEconomy/config.yml`:
+
+```yaml
+discord:
+  enabled: true
+  webhook-url: "https://discord.com/api/webhooks/<WEBHOOK_ID>/<WEBHOOK_TOKEN>"
+```
+
+Replace the placeholders locally. Do not paste a real webhook URL into shared documentation,
+commits, issue reports, or support messages.
+
+After saving the file, run `/aceeco reload` from the server console or restart the server. Complete transactions should then
+produce a Discord embed containing the transaction type, sender, receiver, and amount.
+
+### Delivery behaviour
+
+- Delivery is asynchronous and does not wait on the network in the command that completed the
+  transaction.
+- A rejected request, timeout, mapping error, or transport failure is ignored by the notifier. The
+  committed economy result remains unchanged.
+- Payload fields are length-bounded and configured secrets are redacted. The webhook URL itself is
+  not placed in the payload body.
+
+### Troubleshooting
+
+- **Nothing arrives:** check `discord.enabled`, the webhook URL, and the server's network access to
+  Discord. Then make one new transaction; notifications are sent for committed events.
+- **The transaction succeeds but Discord does not:** this is expected for a best-effort delivery
+  failure. Fix the webhook or network path without treating Discord as the source of truth for the
+  balance.
+- **A secret appears in a payload field:** remove it from the transaction text and rotate the secret.
+  Webhook credentials belong only in the local configuration.
+
+### Discord 通知
+
+Discord 會在交易提交後，以盡力而為的方式發送通知。它適合用於類似審計頻道的用途，但不是
+交易結果本身：Discord 投遞失敗不會回滾或否決經濟操作。
+
+#### 設定
+
+在 `plugins/AceEconomy/config.yml` 設定 `discord` 下的兩個鍵：
+
+```yaml
+discord:
+  enabled: true
+  webhook-url: "https://discord.com/api/webhooks/<WEBHOOK_ID>/<WEBHOOK_TOKEN>"
+```
+
+只在本機將 placeholder 換成真正值。不要把真實 Webhook URL 放進共用文件、commit、issue 或求助
+訊息。
+
+儲存檔案後，從伺服器主控台執行 `/aceeco reload`，或重新啟動伺服器。之後完成的交易應在 Discord 收到包含交易
+類型、發送者、接收者與金額的 embed。
+
+#### 投遞行為
+
+- 投遞是非同步的，完成交易的指令不會等待網路回應。
+- 請求被拒絕、逾時、對映失敗或傳輸失敗時，通知器會忽略該錯誤；已提交的經濟結果不變。
+- Payload 欄位有長度限制，設定的 secrets 會被遮蔽；Webhook URL 不會放進 payload 內容。
+
+#### 排錯
+
+- **Discord 沒收到訊息：** 檢查 `discord.enabled`、Webhook URL，以及伺服器是否能連到 Discord。
+  再執行一筆新交易；通知是針對已提交事件發送。
+- **交易成功但 Discord 沒訊息：** 這符合盡力而為通知的行為。修正 Webhook 或網路路徑，不要
+  把 Discord 當成餘額的真實來源。
+- **Payload 欄位出現 secret：** 從交易文字移除該值並輪替 secret。Webhook 憑證只能放在本機設定。
+
+## Related guides
+
+- [`integration-api.md`](integration-api.md) — public Vault and PlaceholderAPI contract for plugin
+  developers.
+- [`localization.md`](localization.md) — v2 language files, keys, placeholders, and reload workflow.
+- [`config.md`](config.md) — storage, currency, and server configuration reference.
+
+## 相關指南
+
+- [`integration-api.md`](integration-api.md)：給插件開發者的 Vault 與 PlaceholderAPI 公開契約。
+- [`localization.md`](localization.md)：v2 語系檔、key、placeholder 與重新載入方式。
+- [`config.md`](config.md)：儲存、貨幣與伺服器設定參考。
