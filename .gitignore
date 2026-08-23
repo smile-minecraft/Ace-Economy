@@ -20,5 +20,13 @@ Thumbs.db
 .opencode/
 .agent/
 
+# --- Eclipse 本機專案檔 ---
+.classpath
+.project
+
+# --- 編譯輸出與執行紀錄 ---
+/bin/
+/logs/
+
 # --- Stray compile output ---
 /org/
