@@ -16,10 +16,10 @@ keep it intact until the v2 server has been accepted by the server owner.
 ## What changes / 這次升級會改變什麼
 
 The v2 runtime requires Java 25, Paper/Folia 26.1.2, and `AceLib-1.0.0.jar`. The v2 plugin is
-`AceEconomy-2.0.0.jar`. Vault and PlaceholderAPI remain optional integrations.
+`AceEconomy-2.1.0.jar`. Vault and PlaceholderAPI remain optional integrations.
 
 v2 執行環境需要 Java 25、Paper/Folia 26.1.2，以及 `AceLib-1.0.0.jar`。v2 插件檔案是
-`AceEconomy-2.0.0.jar`。Vault 和 PlaceholderAPI 仍然是選用整合。
+`AceEconomy-2.1.0.jar`。Vault 和 PlaceholderAPI 仍然是選用整合。
 
 The v2 command surface is the explicit subcommand form: `/money balance`, `/pay send`,
 `/withdraw cash`, `/baltop top`, `/bank open`, and `/aceeco` administration commands. Do not use
@@ -71,7 +71,7 @@ Place these files in the live `plugins/` directory:
 
 ```text
 AceLib-1.0.0.jar
-AceEconomy-2.0.0.jar
+AceEconomy-2.1.0.jar
 ```
 
 Add Vault and PlaceholderAPI only if the server uses those integrations. Do not add a separate
@@ -135,12 +135,12 @@ v2 JSON snapshot 有自己的 schema version。v1 資料檔不是 v2 snapshot，
 
 ### 5. Start and configure v2 / 5. 啟動並設定 v2
 
-Start the server and wait for `AceEconomy v2.0.0` to enable. Confirm that the chosen v2 storage
+Start the server and wait for `AceEconomy v2.1.0` to enable. Confirm that the chosen v2 storage
 has been opened, then edit the generated settings if needed. Use `/aceeco reload` from the console
 for configuration and language changes; use a full restart after changing the plugin files, AceLib,
 or storage connection settings.
 
-啟動伺服器並等待 `AceEconomy v2.0.0` 啟用。確認選定的 v2 儲存已開啟，再視需要修改產生的設定。
+啟動伺服器並等待 `AceEconomy v2.1.0` 啟用。確認選定的 v2 儲存已開啟，再視需要修改產生的設定。
 設定與語言檔變更可從主控台執行 `/aceeco reload`；修改插件檔案、AceLib 或儲存連線設定後，請完整
 重啟伺服器。
 
@@ -177,14 +177,14 @@ files.
 1. Stop the v2 server with `stop` and wait for saving to finish.
 2. Make a separate copy of the current v2 `plugins/AceEconomy/` directory and any v2 database
    backup. Keep it for investigation; do not overwrite the v1 backup.
-3. Move `AceEconomy-2.0.0.jar` and `AceLib-1.0.0.jar` out of the live `plugins/` directory.
+3. Move `AceEconomy-2.1.0.jar` and `AceLib-1.0.0.jar` out of the live `plugins/` directory.
 4. Restore the pre-cutover v1 JARs, v1 configuration, and v1 data from the dated backup.
 5. Start the server and confirm that the v1 data is readable before allowing players back in.
 
 1. 用 `stop` 停止 v2 伺服器，等待儲存完成。
 2. 另外複製目前 v2 的 `plugins/AceEconomy/` 資料夾與任何 v2 資料庫備份，留作調查；不要覆寫
    v1 備份。
-3. 把 `AceEconomy-2.0.0.jar` 與 `AceLib-1.0.0.jar` 移出正式 `plugins/` 目錄。
+3. 把 `AceEconomy-2.1.0.jar` 與 `AceLib-1.0.0.jar` 移出正式 `plugins/` 目錄。
 4. 從有日期的備份還原 v1 JAR、v1 設定與 v1 資料。
 5. 啟動伺服器，確認 v1 資料可讀後，才重新開放玩家。
 

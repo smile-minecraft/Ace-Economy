@@ -12,11 +12,11 @@ installation, or use [`upgrade-from-v1.md`](upgrade-from-v1.md) when replacing a
 
 Use a Java 25 server running Paper or Folia 26.1.2. AceEconomy requires
 `AceLib-1.0.0.jar`; Vault and PlaceholderAPI are optional. The SQLite and MySQL JDBC drivers
-are already included in `AceEconomy-2.0.0.jar`, so do not download separate driver JARs.
+are already included in `AceEconomy-2.1.0.jar`, so do not download separate driver JARs.
 
 伺服器需要使用 Java 25，並執行 Paper 或 Folia 26.1.2。AceEconomy 必須搭配
 `AceLib-1.0.0.jar`；Vault 和 PlaceholderAPI 都是選用整合。SQLite 與 MySQL 的 JDBC driver
-已經包含在 `AceEconomy-2.0.0.jar`，不需要另外下載 driver JAR。
+已經包含在 `AceEconomy-2.1.0.jar`，不需要另外下載 driver JAR。
 
 Prepare these two plugin files:
 
@@ -24,7 +24,7 @@ Prepare these two plugin files:
 
 ```text
 plugins/AceLib-1.0.0.jar
-plugins/AceEconomy-2.0.0.jar
+plugins/AceEconomy-2.1.0.jar
 ```
 
 Do not leave `AceLib-0.5.0-SNAPSHOT.jar` or another AceLib version in `plugins/`. Two AceLib
@@ -61,10 +61,10 @@ have a restorable copy of the server before the first production start.
 
 Remove old or duplicate AceLib files from the live `plugins/` directory, but keep them in the
 backup if they belong to the previous installation. Place exactly `AceLib-1.0.0.jar` and
-`AceEconomy-2.0.0.jar` in `plugins/`.
+`AceEconomy-2.1.0.jar` in `plugins/`.
 
 請從正式 `plugins/` 目錄移走舊版或重複的 AceLib；如果它們屬於舊安裝，仍要保留在備份裡。
-接著在 `plugins/` 放入 `AceLib-1.0.0.jar` 與 `AceEconomy-2.0.0.jar`。
+接著在 `plugins/` 放入 `AceLib-1.0.0.jar` 與 `AceEconomy-2.1.0.jar`。
 
 If you use integrations, place Vault and/or PlaceholderAPI in the same `plugins/` directory.
 AceEconomy starts without either optional plugin, so do not treat their absence as an installation
@@ -159,10 +159,10 @@ webhook URLs out of shared documents.
 ### 5. Start again and read the console / 5. 再次啟動並查看主控台
 
 Start the server after saving the configuration. Look for an enable message containing
-`AceEconomy v2.0.0`, and confirm that the server continues to its normal ready state. Also check
+`AceEconomy v2.1.0`, and confirm that the server continues to its normal ready state. Also check
 that there is only one `AceLib` version enabled.
 
-儲存設定後重新啟動伺服器。請在主控台找出包含 `AceEconomy v2.0.0` 的啟用訊息，並確認伺服器能
+儲存設定後重新啟動伺服器。請在主控台找出包含 `AceEconomy v2.1.0` 的啟用訊息，並確認伺服器能
 繼續進入平常的可服務狀態。同時確認啟用的 AceLib 只有一個版本。
 
 If AceEconomy disables itself, stop opening the server to players. Keep the first error and the
@@ -271,5 +271,5 @@ Take a copy first; deletion is a recovery decision, not a routine installation s
 - [`upgrade-from-v1.md`](upgrade-from-v1.md)：更換 v1 安裝並保留安全的回退路徑。
 - [`operations.md`](operations.md): routine backups, reloads, restarts, and integrations.
 - [`operations.md`](operations.md)：日常備份、重新載入、重啟與整合管理。
-- [`release-v2.0.0.md`](release-v2.0.0.md): version requirements and the v2 feature overview.
-- [`release-v2.0.0.md`](release-v2.0.0.md)：版本需求與 v2 功能總覽。
+- [`release-v2.1.0.md`](release-v2.1.0.md): version requirements and the v2 feature overview.
+- [`release-v2.1.0.md`](release-v2.1.0.md)：版本需求與 v2 功能總覽。

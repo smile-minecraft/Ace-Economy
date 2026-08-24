@@ -7,11 +7,11 @@ configuration change, confirm storage, and respond to a problem without deleting
 
 ## Start-of-day checks / 每次開服檢查
 
-After a normal start or restart, check the server console for `AceEconomy v2.0.0` and
+After a normal start or restart, check the server console for `AceEconomy v2.1.0` and
 `AceLib v1.0.0`. Confirm that only one AceLib version is loaded. Then use a test account to run
 `/money balance` and, when appropriate, `/baltop top`.
 
-正常啟動或重啟後，請在主控台確認 `AceEconomy v2.0.0` 與 `AceLib v1.0.0`，並確認只載入一個 AceLib
+正常啟動或重啟後，請在主控台確認 `AceEconomy v2.1.0` 與 `AceLib v1.0.0`，並確認只載入一個 AceLib
 版本。接著用測試帳號執行 `/money balance`，需要時再執行 `/baltop top`。
 
 If the server is not ready, do not open it to players. Keep the first AceEconomy, AceLib, or

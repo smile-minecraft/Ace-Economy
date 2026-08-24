@@ -10,7 +10,7 @@ import static org.mockito.Mockito.*;
 class AceEconomyExpansionTest {
 
     private final PlaceholderResolver resolver = mock(PlaceholderResolver.class);
-    private final AceEconomyExpansion expansion = new AceEconomyExpansion(resolver, "2.0.0");
+    private final AceEconomyExpansion expansion = new AceEconomyExpansion(resolver, "2.1.0");
 
     @Test
     void identifierIsAceeco() {
@@ -21,7 +21,7 @@ class AceEconomyExpansionTest {
     @Test
     void authorAndVersion() {
         assertEquals("Smile", expansion.getAuthor());
-        assertEquals("2.0.0", expansion.getVersion());
+        assertEquals("2.1.0", expansion.getVersion());
     }
 
     @Test

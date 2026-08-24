@@ -202,10 +202,10 @@ Two boundaries apply:
 此設定有兩個邊界：
 
 1. **Collision rejection.** The value must not collide with any command label the plugin already declares in `plugin.yml` (the roots `money`, `pay`, `aceeco`, `withdraw`, `baltop`, `bank` and their aliases such as `balance`, `bal`, `balancetop`, `top`, `menu`, `bankmenu`) nor with another AceEconomy command name. A collision stops the plugin at startup with a clear error instead of overriding the existing entry — `/bank` and the other shipped entries can never be taken over by this setting.
-2. **Static Bukkit labels.** The server only delivers command labels that exist in `plugin.yml`, which ships fixed with the release. A custom alias is validated and resolvable inside AceEconomy's dispatcher, but typing it in-game reaches the plugin only after the label is also declared as a root/alias in `plugin.yml`; v2.0.0 does not register new Bukkit commands at runtime. Changing the value always requires a restart, and reload never re-registers commands.
+2. **Static Bukkit labels.** The server only delivers command labels that exist in `plugin.yml`, which ships fixed with the release. A custom alias is validated and resolvable inside AceEconomy's dispatcher, but typing it in-game reaches the plugin only after the label is also declared as a root/alias in `plugin.yml`; v2.1.0 does not register new Bukkit commands at runtime. Changing the value always requires a restart, and reload never re-registers commands.
 
 1. **衝突拒絕。** 設定值不得與插件已在 `plugin.yml` 宣告的任何指令標籤（root：`money`、`pay`、`aceeco`、`withdraw`、`baltop`、`bank`；alias：如 `balance`、`bal`、`balancetop`、`top`、`menu`、`bankmenu`）或其他 AceEconomy 指令名稱衝突。衝突會讓插件在啟動時以明確錯誤停止，而不是覆蓋既有入口——這個設定永遠無法搶走 `/bank` 等既有指令。
-2. **Bukkit 標籤是靜態的。** 伺服器只會轉送 `plugin.yml` 中宣告的指令標籤，而該檔案隨版本固定發布。自訂 alias 會經過驗證並可在 AceEconomy 的 dispatcher 內解析，但要在遊戲內實際輸入該標籤抵達插件，前提是該標籤也已宣告在 `plugin.yml` 的 root/alias 中；v2.0.0 不會在 runtime 註冊新的 Bukkit 指令。修改此值一律需要重啟，reload 不會重新註冊指令。
+2. **Bukkit 標籤是靜態的。** 伺服器只會轉送 `plugin.yml` 中宣告的指令標籤，而該檔案隨版本固定發布。自訂 alias 會經過驗證並可在 AceEconomy 的 dispatcher 內解析，但要在遊戲內實際輸入該標籤抵達插件，前提是該標籤也已宣告在 `plugin.yml` 的 root/alias 中；v2.1.0 不會在 runtime 註冊新的 Bukkit 指令。修改此值一律需要重啟，reload 不會重新註冊指令。
 
 The language files are named `lang/en_US.yml`, `lang/zh_TW.yml`, and `lang/zh_CN.yml`. Do not put passwords or webhook URLs in language files.
 

@@ -29,14 +29,14 @@ AceEconomy 能讓玩家查詢餘額、互相付款、把資金提領成銀行支
 ## Quick start
 
 1. Stop the server before installing the plugins.
-2. Place `AceLib-1.0.0.jar` and `AceEconomy-2.0.0.jar` in the server's `plugins` folder.
+2. Place `AceLib-1.0.0.jar` and `AceEconomy-2.1.0.jar` in the server's `plugins` folder.
 3. Add Vault or PlaceholderAPI if you want those integrations.
 4. Start the server. AceEconomy creates its default configuration and storage on first start.
 5. Adjust `config.yml` for your storage, locale, currencies, and integrations. The [configuration guide](docs/config.md) explains each setting.
 6. Give the server a quick tour with `/money balance` and `/bank open`.
 
 1. 安裝插件前先關閉伺服器。
-2. 將 `AceLib-1.0.0.jar` 與 `AceEconomy-2.0.0.jar` 放進伺服器的 `plugins` 資料夾。
+2. 將 `AceLib-1.0.0.jar` 與 `AceEconomy-2.1.0.jar` 放進伺服器的 `plugins` 資料夾。
 3. 需要 Vault 或 PlaceholderAPI 時，再一併安裝對應插件。
 4. 啟動伺服器。第一次啟動時，AceEconomy 會建立預設設定與資料儲存。
 5. 依伺服器需求調整 `config.yml` 的儲存方式、語系、貨幣與整合功能；可參考[設定指南](docs/config.md)。

@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.smile.aceeconomy"
-version = "2.0.0"
+version = "2.1.0"
 description = "A Folia-compatible economy plugin"
 
 java {

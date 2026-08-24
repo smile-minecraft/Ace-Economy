@@ -17,8 +17,8 @@ running the required Java/Paper/Folia combination.
 
 **Check first / 先檢查：**
 
-- Confirm that `plugins/AceLib-1.0.0.jar` and `plugins/AceEconomy-2.0.0.jar` exist.
-- 確認 `plugins/AceLib-1.0.0.jar` 與 `plugins/AceEconomy-2.0.0.jar` 存在。
+- Confirm that `plugins/AceLib-1.0.0.jar` and `plugins/AceEconomy-2.1.0.jar` exist.
+- 確認 `plugins/AceLib-1.0.0.jar` 與 `plugins/AceEconomy-2.1.0.jar` 存在。
 - Remove `AceLib-0.5.0-SNAPSHOT.jar` and any duplicate AceLib JAR from the live plugin folder.
 - 從正式插件資料夾移除 `AceLib-0.5.0-SNAPSHOT.jar` 與其他重複的 AceLib JAR。
 - Check the server console for the first AceLib or Java error, not only the final disable message.

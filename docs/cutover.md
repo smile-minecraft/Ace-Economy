@@ -10,7 +10,7 @@
 
 | 項目 | 值 | 來源 |
 |---|---|---|
-| 插件版本 | `2.0.0` | `build.gradle.kts` `version = "2.0.0"` |
+| 插件版本 | `2.1.0` | `build.gradle.kts` `version = "2.1.0"` |
 | Java | 25（toolchain `JavaLanguageVersion.of(25)`；`compileJava` 與 `compileV2Foundation` 皆 `options.release.set(25)`） | `build.gradle.kts` |
 | Paper/Folia | 26.1.2（paperweight dev bundle `26.1.2.build.74-stable`；`plugin.yml` `api-version: 1.26`、`folia-supported: true`） | `build.gradle.kts`、`plugin.yml` |
 | AceLib | `com.github.smile-minecraft:AceLib:v1.0.0`（`compileOnly`，runtime 由外部 JAR 提供，**禁止 shade**） | `build.gradle.kts` |
@@ -125,14 +125,14 @@ public final class AceEconomy extends JavaPlugin {
   - `mergeServiceFiles()`（SLF4J 2.x relocate 後需要合併 provider service files）。
   - `minimize { }` 排除 HikariCP、slf4j-nop、slf4j-api 不被移除。
   - 排除 `META-INF/*.SF`、`*.DSA`、`*.RSA` 簽章 metadata。
-- **產物**：`jar` task 設 classifier `slim`；`shadowJar` 設 classifier `""`（取代預設 jar）；`assemble` 依賴 `shadowJar`。交付物為 `build/libs/AceEconomy-2.0.0.jar`。
+- **產物**：`jar` task 設 classifier `slim`；`shadowJar` 設 classifier `""`（取代預設 jar）；`assemble` 依賴 `shadowJar`。交付物為 `build/libs/AceEconomy-2.1.0.jar`。
 
 ### 3.2 目前 inspection 方式
 
 - 驗收條件（計畫 §7）：**consumer JAR 不包含 `com/smile/acelib/**`**。
 - 目前 repo **沒有**已提交的自動化 inspection 測試或 script（`src/test` 與 CI 中皆無）；現行方式為手動 CLI 檢查：
   1. `./gradlew shadowJar`
-  2. `jar tf build/libs/AceEconomy-2.0.0.jar`（或 `unzip -l`）
+  2. `jar tf build/libs/AceEconomy-2.1.0.jar`（或 `unzip -l`）
   3. 確認**沒有** `com/smile/acelib/**` entry（AceLib 未被打包）；
   4. 確認**有** relocate 後的 `com/smile/aceeconomy/libs/hikari/**` 與 `com/smile/aceeconomy/libs/slf4j/**`（HikariCP/SLF4J 已打包）。
 - 本次已執行 `clean build` 與 `shadowJar`，兩者皆成功；並以產出的 JAR 完成上述 inspection。
@@ -185,7 +185,7 @@ v2 是**同 repository 的 clean-slate 重寫**（計畫 §1），v1 原始碼�
 ### 6.1 全新安裝（fresh install）
 
 1. 伺服器需為 **Java 25** 的 Paper/Folia **26.1.2**（`api-version 1.26`、`folia-supported: true`）。
-2. 放置 `AceLib-1.0.0.jar` 與 `AceEconomy-2.0.0.jar` 到 `plugins/`。**AceLib 是 hard dependency**，缺它插件不會啟用。
+2. 放置 `AceLib-1.0.0.jar` 與 `AceEconomy-2.1.0.jar` 到 `plugins/`。**AceLib 是 hard dependency**，缺它插件不會啟用。
 3. （選用）Vault 或 VaultUnlocked、PlaceholderAPI；未安裝時對應整合自動略過。
 4. 重啟伺服器（**不要用 Bukkit `/reload` 驗證生命週期**；計畫明確不使用 `/reload`，AceLib facade 每次重新解析）。
 5. 首次啟動會建立 `config.yml`、`lang/<locale>.yml` 與 `data-v2.json`。
