@@ -65,6 +65,12 @@ admin:
   
   admin-action-failed: "<red>操作失敗！</red>"
   admin-taking-failed: "<red>操作失敗！可能餘額不足。</red>"
+
+  backup-success: "<green>備份已建立：<white><backup_id></white>（v2 邏輯快照）</green>"
+  backup-failed: "<red>備份失敗：<white><reason></white></red>"
+  restore-success: "<green>已還原備份 <white><backup_id></white>。安全備份：<white><safety_id></white>。讓玩家進入前請先重啟伺服器！</green>"
+  restore-confirm-required: "<red>還原是破壞性操作。請完全依照此格式重新執行：<white>/aceeco restore <backup_id> confirm</white></red>"
+  restore-failed: "<red>還原失敗：<white><reason></white></red>"
   
   # Help messages
   help-header: "<yellow>--- AceEconomy 指令幫助 ---</yellow>"

@@ -32,6 +32,22 @@ public final class BanknoteValidator {
     }
 
     public ValidationResult validate(BanknoteClaim claim) {
+        ValidationResult structural = validateStructure(claim);
+        if (structural.rejected()) {
+            return structural;
+        }
+        if (!idempotency.consume(structural.claim().nonce())) {
+            return ValidationResult.rejected("replay.detected");
+        }
+        return structural;
+    }
+
+    /**
+     * Run every structural check of {@link #validate} WITHOUT consuming the nonce. Use this when
+     * the nonce is consumed later by an atomic storage operation (e.g. a redemption store that
+     * commits the nonce and the credit together); consuming here as well would double-claim.
+     */
+    public ValidationResult validateStructure(BanknoteClaim claim) {
         Objects.requireNonNull(claim, "claim");
 
         ItemIdentity identity = claim.identity();
@@ -58,9 +74,6 @@ public final class BanknoteValidator {
         UUID nonce = claim.nonce();
         if (nonce == null) {
             return ValidationResult.rejected("nonce.missing");
-        }
-        if (!idempotency.consume(nonce)) {
-            return ValidationResult.rejected("replay.detected");
         }
         return ValidationResult.success(claim);
     }

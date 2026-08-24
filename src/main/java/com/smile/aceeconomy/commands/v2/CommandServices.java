@@ -1,10 +1,13 @@
 package com.smile.aceeconomy.commands.v2;
 
 import com.smile.aceeconomy.commands.v2.ports.AdminCommandService;
+import com.smile.aceeconomy.commands.v2.ports.BackupCommandService;
 import com.smile.aceeconomy.commands.v2.ports.BankCommandService;
 import com.smile.aceeconomy.commands.v2.ports.EconomyCommandService;
+import com.smile.aceeconomy.commands.v2.ports.HistoryQueryService;
 import com.smile.aceeconomy.commands.v2.ports.LeaderboardQueryService;
 import com.smile.aceeconomy.commands.v2.ports.PlayerLookupService;
+import com.smile.aceeconomy.commands.v2.ports.RollbackCommandService;
 import com.smile.aceeconomy.commands.v2.ports.WithdrawCommandService;
 
 import java.util.Objects;
@@ -16,7 +19,10 @@ public record CommandServices(
         WithdrawCommandService withdrawals,
         LeaderboardQueryService leaderboard,
         BankCommandService bank,
-        AdminCommandService admin) {
+        AdminCommandService admin,
+        HistoryQueryService history,
+        RollbackCommandService rollback,
+        BackupCommandService backupRestore) {
 
     public CommandServices {
         Objects.requireNonNull(economy, "economy");
@@ -25,5 +31,8 @@ public record CommandServices(
         Objects.requireNonNull(leaderboard, "leaderboard");
         Objects.requireNonNull(bank, "bank");
         Objects.requireNonNull(admin, "admin");
+        Objects.requireNonNull(history, "history");
+        Objects.requireNonNull(rollback, "rollback");
+        Objects.requireNonNull(backupRestore, "backupRestore");
     }
 }

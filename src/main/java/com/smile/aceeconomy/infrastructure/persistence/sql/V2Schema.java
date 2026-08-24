@@ -16,6 +16,11 @@ import java.util.List;
  *   <li>Amounts and balances are stored as exact decimal strings (no float drift).</li>
  *   <li>The version row is written with {@code INSERT OR IGNORE}/{@code INSERT IGNORE} so re-running
  *       initialization never duplicates it.</li>
+ *   <li>The durable nonce table is ADDITIVE: it is created with {@code IF NOT EXISTS} by the same
+ *       idempotent bootstrap, so databases initialized by older builds gain the table on the next
+ *       start without a version bump, and newer databases are ignored harmlessly by older builds.
+ *       A version bump would force strict-equality recreation and destroy live data, so additive
+ *       DDL is the forward-safe evolution path here.</li>
  * </ul>
  */
 public final class V2Schema {
@@ -24,6 +29,7 @@ public final class V2Schema {
     public static final String ACCOUNTS_TABLE = "ace_v2_accounts";
     public static final String BALANCES_TABLE = "ace_v2_balances";
     public static final String TRANSACTIONS_TABLE = "ace_v2_transactions";
+    public static final String NONCES_TABLE = "ace_v2_nonces";
 
     private V2Schema() {
     }
@@ -68,6 +74,12 @@ public final class V2Schema {
                         INDEX idx_tx_reverted (reverted)
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                     """.formatted(TRANSACTIONS_TABLE));
+            stmts.add("""
+                    CREATE TABLE IF NOT EXISTS %s (
+                        nonce VARCHAR(36) PRIMARY KEY,
+                        consumed_at VARCHAR(64) NOT NULL
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                    """.formatted(NONCES_TABLE));
         } else {
             stmts.add("""
                     CREATE TABLE IF NOT EXISTS %s (
@@ -104,6 +116,12 @@ public final class V2Schema {
                         reverted INTEGER NOT NULL DEFAULT 0
                     )
                     """.formatted(TRANSACTIONS_TABLE));
+            stmts.add("""
+                    CREATE TABLE IF NOT EXISTS %s (
+                        nonce TEXT PRIMARY KEY,
+                        consumed_at TEXT NOT NULL
+                    )
+                    """.formatted(NONCES_TABLE));
         }
         return stmts;
     }
@@ -111,6 +129,14 @@ public final class V2Schema {
     /** Version-row insert with an idempotent ignore modifier and a {@code ?} placeholder for the timestamp. */
     public static String versionInsertSql(SqlDialect d) {
         return d.insertIgnore() + " INTO " + SCHEMA_TABLE + " (version, updated_at) VALUES (1, ?)";
+    }
+
+    /**
+     * Nonce-row insert with an idempotent ignore modifier; the affected-row count decides
+     * first-writer-wins (1 = first consumption, 0 = already consumed).
+     */
+    public static String nonceInsertSql(SqlDialect d) {
+        return d.insertIgnore() + " INTO " + NONCES_TABLE + " (nonce, consumed_at) VALUES (?, ?)";
     }
 
     public static String schemaTable() {
@@ -127,5 +153,9 @@ public final class V2Schema {
 
     public static String transactionsTable() {
         return TRANSACTIONS_TABLE;
+    }
+
+    public static String noncesTable() {
+        return NONCES_TABLE;
     }
 }

@@ -2,12 +2,17 @@ package com.smile.aceeconomy.infrastructure.persistence.sql;
 
 import com.smile.aceeconomy.domain.Account;
 import com.smile.aceeconomy.domain.Amount;
+import com.smile.aceeconomy.domain.Currency;
 import com.smile.aceeconomy.domain.Transaction;
 import com.smile.aceeconomy.domain.TransactionType;
 import com.smile.aceeconomy.infrastructure.persistence.json.JsonModel;
 import com.smile.aceeconomy.ports.AccountRepository;
+import com.smile.aceeconomy.ports.persistence.AtomicRedemptionStore;
+import com.smile.aceeconomy.ports.persistence.AtomicReversalStore;
+import com.smile.aceeconomy.ports.persistence.NonceStore;
 import com.smile.aceeconomy.ports.persistence.PersistenceException;
 import com.smile.aceeconomy.ports.persistence.PersistenceLifecycle;
+import com.smile.aceeconomy.ports.persistence.RedemptionResult;
 import com.smile.aceeconomy.ports.persistence.TransactionRepository;
 
 import java.io.IOException;
@@ -56,7 +61,8 @@ import java.util.UUID;
  * <p>Only {@code java.sql} is used here; no vendor driver types leak into the port boundary.</p>
  */
 public final class SqlBackend
-        implements AccountRepository, TransactionRepository, PersistenceLifecycle {
+        implements AccountRepository, TransactionRepository, PersistenceLifecycle,
+        AtomicReversalStore, AtomicRedemptionStore, NonceStore {
 
     private final Connection connection;
     private final SqlDialect dialect;
@@ -118,7 +124,8 @@ public final class SqlBackend
                 // Fresh only if no v2 table exists at all; otherwise a partial init left tables behind.
                 return tableExists(V2Schema.accountsTable())
                         || tableExists(V2Schema.balancesTable())
-                        || tableExists(V2Schema.transactionsTable());
+                        || tableExists(V2Schema.transactionsTable())
+                        || tableExists(V2Schema.noncesTable());
             }
             int v = schemaVersion();
             return !SchemaVersion.isCompatible(v);
@@ -160,6 +167,7 @@ public final class SqlBackend
                 st.executeUpdate("DELETE FROM " + V2Schema.transactionsTable());
                 st.executeUpdate("DELETE FROM " + V2Schema.balancesTable());
                 st.executeUpdate("DELETE FROM " + V2Schema.accountsTable());
+                st.executeUpdate("DELETE FROM " + V2Schema.noncesTable());
             }
             for (JsonModel.JsonAccount a : candidate.accounts.values()) {
                 insertAccount(a);
@@ -167,21 +175,60 @@ public final class SqlBackend
             for (JsonModel.JsonTransaction t : candidate.transactions) {
                 insertTransaction(t);
             }
+            insertNonces(candidate);
             connection.commit();
         } catch (SQLException e) {
+            // A failed restore may leave part of the transaction applied. If the rollback
+            // also fails, this connection must never return to auto-commit reuse: that
+            // would implicitly commit the partial restore. Fail closed instead — close the
+            // connection and surface both causes on the typed exception.
             try {
                 connection.rollback();
-            } catch (SQLException ignore) {
-                // best-effort
-            }
-            throw new PersistenceException("Failed to restore from backup", e);
-        } finally {
-            try {
                 connection.setAutoCommit(true);
-            } catch (SQLException ignore) {
-                // best-effort
+                throw new PersistenceException("Failed to restore from backup", e);
+            } catch (SQLException cleanupFailure) {
+                e.addSuppressed(cleanupFailure);
+                closeConnectionQuietly();
+                throw new PersistenceException(
+                        "Restore failed and its rollback did not complete cleanly; the SQL "
+                                + "connection has been closed so a partially applied restore "
+                                + "can never be committed implicitly", e);
             }
         }
+        // Success path: the data is committed. Return the shared connection to autocommit
+        // so ordinary repository writes do not stay inside a manual transaction. If that
+        // state restore fails, the connection is closed (fail closed) and the typed
+        // failure says honestly that the data IS committed — it is not a rollback.
+        try {
+            connection.setAutoCommit(true);
+        } catch (SQLException e) {
+            closeConnectionQuietly();
+            throw new PersistenceException(
+                    "Restore committed successfully, but restoring auto-commit on the SQL "
+                            + "connection failed; the connection has been closed. The data "
+                            + "is committed — do not treat this as a rollback.", e);
+        }
+    }
+
+    /** Best-effort close of an unsafe connection; used only on the fail-closed path. */
+    private void closeConnectionQuietly() {
+        try {
+            connection.close();
+        } catch (SQLException ignore) {
+            // best-effort: the connection is being abandoned precisely because it is unsafe
+        }
+    }
+
+    /**
+     * Holds the SAME instance monitor that every synchronized repository method uses while
+     * the composed operation runs, so ordinary writes cannot interleave inside an exclusive
+     * window (for example a safety backup followed by a restore). Reentrant by construction:
+     * operations inside the window may call backup()/restore() on this same instance.
+     */
+    @Override
+    public synchronized <R> R runExclusive(ExclusiveOperation<R> operation)
+            throws PersistenceException, IOException {
+        return operation.run();
     }
 
     // ---------------- account repository ----------------
@@ -238,28 +285,7 @@ public final class SqlBackend
     public synchronized void save(Account account) {
         try {
             connection.setAutoCommit(false);
-            try (PreparedStatement del = connection.prepareStatement(
-                    "DELETE FROM " + V2Schema.balancesTable() + " WHERE owner = ?")) {
-                del.setString(1, account.owner().toString());
-                del.executeUpdate();
-            }
-            try (PreparedStatement ins = connection.prepareStatement(
-                    "REPLACE INTO " + V2Schema.accountsTable() + " (owner, owner_name) VALUES (?, ?)")) {
-                ins.setString(1, account.owner().toString());
-                ins.setString(2, account.ownerName());
-                ins.executeUpdate();
-            }
-            try (PreparedStatement bal = connection.prepareStatement(
-                    "REPLACE INTO " + V2Schema.balancesTable()
-                            + " (owner, currency_id, amount) VALUES (?, ?, ?)")) {
-                for (Map.Entry<String, Amount> e : account.balances().entrySet()) {
-                    bal.setString(1, account.owner().toString());
-                    bal.setString(2, e.getKey());
-                    bal.setString(3, amountToString(e.getValue()));
-                    bal.addBatch();
-                }
-                bal.executeBatch();
-            }
+            saveAccountRows(account);
             connection.commit();
         } catch (SQLException e) {
             try {
@@ -274,6 +300,36 @@ public final class SqlBackend
             } catch (SQLException ignore) {
                 // best-effort
             }
+        }
+    }
+
+    /**
+     * Persist one account's rows assuming an OPEN transaction (no commit / no autocommit
+     * handling). Shared by {@link #save} and the atomic reversal path so both write exactly
+     * the same rows in exactly the same order.
+     */
+    private void saveAccountRows(Account account) throws SQLException {
+        try (PreparedStatement del = connection.prepareStatement(
+                "DELETE FROM " + V2Schema.balancesTable() + " WHERE owner = ?")) {
+            del.setString(1, account.owner().toString());
+            del.executeUpdate();
+        }
+        try (PreparedStatement ins = connection.prepareStatement(
+                "REPLACE INTO " + V2Schema.accountsTable() + " (owner, owner_name) VALUES (?, ?)")) {
+            ins.setString(1, account.owner().toString());
+            ins.setString(2, account.ownerName());
+            ins.executeUpdate();
+        }
+        try (PreparedStatement bal = connection.prepareStatement(
+                "REPLACE INTO " + V2Schema.balancesTable()
+                        + " (owner, currency_id, amount) VALUES (?, ?, ?)")) {
+            for (Map.Entry<String, Amount> e : account.balances().entrySet()) {
+                bal.setString(1, account.owner().toString());
+                bal.setString(2, e.getKey());
+                bal.setString(3, amountToString(e.getValue()));
+                bal.addBatch();
+            }
+            bal.executeBatch();
         }
     }
 
@@ -327,18 +383,25 @@ public final class SqlBackend
     @Override
     public synchronized void markReverted(UUID transactionId) throws PersistenceException {
         try {
-            try (PreparedStatement ps = connection.prepareStatement(
-                    "UPDATE " + V2Schema.transactionsTable() + " SET reverted = ? WHERE id = ?")) {
-                ps.setBoolean(1, true);
-                ps.setString(2, transactionId.toString());
-                int updated = ps.executeUpdate();
-                if (updated == 0) {
-                    throw new PersistenceException(
-                            "Cannot mark unknown transaction reverted: " + transactionId);
-                }
+            if (markRevertedRow(transactionId) == 0) {
+                throw new PersistenceException(
+                        "Cannot mark unknown transaction reverted: " + transactionId);
             }
         } catch (SQLException e) {
             throw new PersistenceException("Failed to mark transaction reverted " + transactionId, e);
+        }
+    }
+
+    /**
+     * Set the reverted flag on one row assuming an OPEN transaction. Returns the affected
+     * row count so callers can distinguish an unknown id from a successful (idempotent) mark.
+     */
+    private int markRevertedRow(UUID transactionId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "UPDATE " + V2Schema.transactionsTable() + " SET reverted = ? WHERE id = ?")) {
+            ps.setBoolean(1, true);
+            ps.setString(2, transactionId.toString());
+            return ps.executeUpdate();
         }
     }
 
@@ -377,6 +440,156 @@ public final class SqlBackend
         }
     }
 
+    // ---------------- atomic reversal store ----------------
+
+    @Override
+    public synchronized void applyReversal(List<Account> updatedAccounts,
+                                           List<Transaction> reversalRecords,
+                                           List<UUID> revertMarkerIds) throws PersistenceException {
+        // One JDBC transaction carries balances + reversal records + markers: any failure
+        // rolls back every statement, so no half-applied reversal is ever committed.
+        try {
+            connection.setAutoCommit(false);
+            try {
+                for (Account a : updatedAccounts) {
+                    saveAccountRows(a);
+                }
+                for (Transaction t : reversalRecords) {
+                    insertTransactionRow(t, false);
+                }
+                for (UUID markerId : revertMarkerIds) {
+                    if (markRevertedRow(markerId) == 0) {
+                        throw new SQLException(
+                                "unknown transaction for revert marker: " + markerId);
+                    }
+                }
+                connection.commit();
+            } catch (SQLException e) {
+                connection.rollback();
+                throw e;
+            } finally {
+                connection.setAutoCommit(true);
+            }
+        } catch (SQLException e) {
+            throw new PersistenceException("Failed to apply reversal atomically", e);
+        }
+    }
+
+    // ---------------- nonce store ----------------
+
+    @Override
+    public synchronized boolean consume(UUID nonce) throws PersistenceException {
+        // INSERT IGNORE / INSERT OR IGNORE against the primary key makes the decision
+        // atomic at the storage level: affected rows 1 = first writer, 0 = already consumed.
+        try (PreparedStatement ps = connection.prepareStatement(V2Schema.nonceInsertSql(dialect))) {
+            ps.setString(1, nonce.toString());
+            ps.setString(2, Instant.now().toString());
+            return ps.executeUpdate() == 1;
+        } catch (SQLException e) {
+            throw new PersistenceException("Failed to consume nonce " + nonce, e);
+        }
+    }
+
+    @Override
+    public synchronized boolean isConsumed(UUID nonce) throws PersistenceException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT nonce FROM " + V2Schema.noncesTable() + " WHERE nonce = ?")) {
+            ps.setString(1, nonce.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        } catch (SQLException e) {
+            throw new PersistenceException("Failed to read nonce " + nonce, e);
+        }
+    }
+
+    // ---------------- atomic redemption ----------------
+
+    @Override
+    public synchronized RedemptionResult redeemPrepared(UUID nonce, Account account, Transaction transaction)
+            throws PersistenceException {
+        try {
+            // Unknown account must not consume the nonce; the application has already validated
+            // existence, but a race deletion between validation and commit still yields
+            // ACCOUNT_MISSING without burning the note.
+            if (!exists(transaction.accountId())) {
+                return RedemptionResult.accountMissing();
+            }
+            connection.setAutoCommit(false);
+            try {
+                saveAccountRows(account);
+                insertTransactionRow(transaction, false);
+                try (PreparedStatement ps = connection.prepareStatement(
+                        V2Schema.nonceInsertSql(dialect))) {
+                    ps.setString(1, nonce.toString());
+                    ps.setString(2, Instant.now().toString());
+                    if (ps.executeUpdate() != 1) {
+                        connection.rollback();
+                        return RedemptionResult.replay();
+                    }
+                }
+                connection.commit();
+            } catch (SQLException e) {
+                connection.rollback();
+                throw e;
+            } finally {
+                connection.setAutoCommit(true);
+            }
+            return RedemptionResult.committed(transaction.balanceBefore(), transaction.balanceAfter(),
+                    transaction.id());
+        } catch (SQLException e) {
+            throw new PersistenceException("Failed to redeem banknote " + nonce, e);
+        }
+    }
+
+    @Override
+    public synchronized RedemptionResult redeem(UUID nonce, UUID accountId, String currencyId,
+                                                Amount amount) throws PersistenceException {
+        try {
+            // Load before any write: an unknown account must not consume the nonce.
+            Optional<Account> existing = load(accountId);
+            if (existing.isEmpty()) {
+                return RedemptionResult.accountMissing();
+            }
+            Amount current = existing.get().balanceOf(currencyId);
+            Amount before = current == null ? Amount.zero(amount.scale()) : current;
+            Account updated = existing.get().deposit(currencyId, amount);
+            Amount after = updated.balanceOf(currencyId);
+            Transaction credit = new Transaction(UUID.randomUUID(), accountId, null,
+                    Currency.normalizeId(currencyId), amount, TransactionType.DEPOSIT,
+                    before, after, Instant.now(), "banknote-deposit");
+
+            // One JDBC transaction carries the balance update, the audit record and the nonce
+            // insert. The nonce insert uses INSERT IGNORE / INSERT OR IGNORE against the primary
+            // key, so first-writer-wins is decided at the storage level even across processes:
+            // 0 affected rows means another writer consumed the nonce first and the whole
+            // transaction rolls back with nothing credited.
+            connection.setAutoCommit(false);
+            try {
+                saveAccountRows(updated);
+                insertTransactionRow(credit, false);
+                try (PreparedStatement ps = connection.prepareStatement(
+                        V2Schema.nonceInsertSql(dialect))) {
+                    ps.setString(1, nonce.toString());
+                    ps.setString(2, Instant.now().toString());
+                    if (ps.executeUpdate() != 1) {
+                        connection.rollback();
+                        return RedemptionResult.replay();
+                    }
+                }
+                connection.commit();
+            } catch (SQLException e) {
+                connection.rollback();
+                throw e;
+            } finally {
+                connection.setAutoCommit(true);
+            }
+            return RedemptionResult.committed(before, after, credit.id());
+        } catch (SQLException e) {
+            throw new PersistenceException("Failed to redeem banknote " + nonce, e);
+        }
+    }
+
     // ---------------- internals ----------------
 
     private void createSchema() throws SQLException {
@@ -406,6 +619,7 @@ public final class SqlBackend
             st.executeUpdate("DROP TABLE IF EXISTS " + V2Schema.transactionsTable());
             st.executeUpdate("DROP TABLE IF EXISTS " + V2Schema.balancesTable());
             st.executeUpdate("DROP TABLE IF EXISTS " + V2Schema.accountsTable());
+            st.executeUpdate("DROP TABLE IF EXISTS " + V2Schema.noncesTable());
             st.executeUpdate("DROP TABLE IF EXISTS " + V2Schema.schemaTable());
             connection.commit();
         } catch (SQLException e) {
@@ -454,6 +668,19 @@ public final class SqlBackend
         try (PreparedStatement ps = connection.prepareStatement(transactionInsertSql())) {
             bindTransaction(ps, t, t.reverted);
             ps.executeUpdate();
+        }
+    }
+
+    /** Reinsert the snapshot's consumed nonces, assuming an OPEN transaction. */
+    private void insertNonces(JsonModel candidate) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "REPLACE INTO " + V2Schema.noncesTable() + " (nonce, consumed_at) VALUES (?, ?)")) {
+            for (Map.Entry<String, String> e : candidate.nonces.entrySet()) {
+                ps.setString(1, e.getKey());
+                ps.setString(2, e.getValue());
+                ps.addBatch();
+            }
+            ps.executeBatch();
         }
     }
 
@@ -567,6 +794,15 @@ public final class SqlBackend
             }
         } catch (SQLException e) {
             throw new PersistenceException("Failed to read transactions for backup", e);
+        }
+        try (PreparedStatement nc = connection.prepareStatement(
+                "SELECT nonce, consumed_at FROM " + V2Schema.noncesTable());
+             ResultSet nrs = nc.executeQuery()) {
+            while (nrs.next()) {
+                model.nonces.put(nrs.getString(1), nrs.getString(2));
+            }
+        } catch (SQLException e) {
+            throw new PersistenceException("Failed to read nonces for backup", e);
         }
         return model;
     }

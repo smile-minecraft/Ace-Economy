@@ -37,4 +37,30 @@ public interface PersistenceLifecycle {
     void backup(OutputStream out) throws PersistenceException, IOException;
 
     void restore(InputStream in) throws PersistenceException, IOException;
+
+    /**
+     * Checked operation for {@link #runExclusive}: may touch persistence state and throw the
+     * lifecycle's checked exceptions.
+     *
+     * @param <R> operation result type
+     */
+    @FunctionalInterface
+    interface ExclusiveOperation<R> {
+        R run() throws PersistenceException, IOException;
+    }
+
+    /**
+     * Runs {@code operation} while holding THIS lifecycle instance's persistence boundary
+     * exclusively, so ordinary repository writes on the same backend cannot interleave
+     * between the operations composed inside it (for example a safety backup followed by a
+     * restore). Implementations must reuse the same reentrant lock / monitor that guards the
+     * regular repository methods — never a second lock — so nesting stays safe and writes
+     * from other threads simply wait for the window to close.
+     *
+     * <p>Deliberately abstract with no default: running the operation without the backend's
+     * own persistence boundary would silently break the exclusivity guarantee, so every
+     * implementation is forced to provide a real one at compile time.</p>
+     */
+    <R> R runExclusive(ExclusiveOperation<R> operation)
+            throws PersistenceException, IOException;
 }

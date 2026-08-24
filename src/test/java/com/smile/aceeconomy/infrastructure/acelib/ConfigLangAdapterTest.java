@@ -20,6 +20,7 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -115,6 +116,8 @@ class ConfigLangAdapterTest {
                 "last valid config snapshot must be preserved");
         assertEquals(1000.0, adapter.getConfig("start-balance"),
                 "last valid nested value must be preserved");
+        assertEquals(2, adapter.getConfig("currencies.dollar.scale"),
+                "last valid currencies snapshot must be preserved");
 
         // Corrupt the on-disk lang file; reload must fail but keep the old snapshot.
         Files.writeString(tempDir.resolve("lang").resolve("en_US.yml"),
@@ -133,6 +136,19 @@ class ConfigLangAdapterTest {
         assertEquals("en_US.yml", ConfigLangAdapter.localeToFileName(Locale.US));
         assertEquals("zh_TW.yml", ConfigLangAdapter.localeToFileName(Locale.TRADITIONAL_CHINESE));
         assertEquals("zh_CN.yml", ConfigLangAdapter.localeToFileName(Locale.SIMPLIFIED_CHINESE));
+    }
+
+    @Test
+    void loadDoesNotFabricateACurrenciesSection() throws IOException {
+        // The currency map is operator-owned: a config without a currencies block must stay
+        // empty so the startup parser fail-fasts instead of silently reviving pinned
+        // dollar/token defaults (which would also collide with an operator-defined default).
+        Files.writeString(tempDir.resolve("config.yml"), "version: \"2.0\"\n");
+        ConfigLangAdapter adapter = new ConfigLangAdapter(plugin, Locale.US);
+        adapter.load();
+        assertTrue(adapter.isConfigReady(), "config itself must still load");
+        assertNull(adapter.getConfig("currencies"),
+                "schema must not fabricate currency entries the operator did not define");
     }
 
     private enum Status {

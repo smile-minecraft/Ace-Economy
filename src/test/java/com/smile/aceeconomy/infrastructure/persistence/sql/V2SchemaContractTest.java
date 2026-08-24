@@ -19,7 +19,7 @@ final class V2SchemaContractTest {
     @Test
     void sqliteDdlUsesTextStorageAndNoEngineClause() {
         List<String> ddl = V2Schema.ddlStatements(new SqliteDialect());
-        assertEquals(4, ddl.size());
+        assertEquals(5, ddl.size());
         for (String stmt : ddl) {
             assertTrue(stmt.contains("CREATE TABLE IF NOT EXISTS"),
                     "SQLite DDL must be idempotent (IF NOT EXISTS): " + stmt);
@@ -28,12 +28,17 @@ final class V2SchemaContractTest {
         assertTrue(schemaTable.contains("INTEGER PRIMARY KEY"), "SQLite schema table uses INTEGER: " + schemaTable);
         assertTrue(schemaTable.contains("TEXT NOT NULL"), "SQLite uses TEXT columns: " + schemaTable);
         assertFalse(containsAnyEngineClause(ddl), "SQLite DDL must not contain MySQL ENGINE/CHARSET clauses");
+        String nonceTable = ddl.get(4);
+        assertTrue(nonceTable.contains(V2Schema.noncesTable()),
+                "SQLite DDL must create the durable nonce table: " + nonceTable);
+        assertTrue(nonceTable.contains("nonce TEXT PRIMARY KEY"),
+                "SQLite nonce table keys on the nonce itself: " + nonceTable);
     }
 
     @Test
     void mysqlDdlUsesInnoDBAndVarcharBoolean() {
         List<String> ddl = V2Schema.ddlStatements(new MySqlDialect());
-        assertEquals(4, ddl.size());
+        assertEquals(5, ddl.size());
         for (String stmt : ddl) {
             assertTrue(stmt.contains("CREATE TABLE IF NOT EXISTS"),
                     "MySQL DDL must be idempotent (IF NOT EXISTS): " + stmt);
@@ -44,6 +49,11 @@ final class V2SchemaContractTest {
         assertTrue(txTable.contains("VARCHAR(36)"), "MySQL transaction id is VARCHAR(36): " + txTable);
         assertTrue(txTable.contains("BOOLEAN NOT NULL DEFAULT FALSE"), "MySQL reverted flag is BOOLEAN: " + txTable);
         assertFalse(txTable.contains("TEXT PRIMARY KEY"), "MySQL must not use SQLite TEXT primary keys");
+        String nonceTable = ddl.get(4);
+        assertTrue(nonceTable.contains(V2Schema.noncesTable()),
+                "MySQL DDL must create the durable nonce table: " + nonceTable);
+        assertTrue(nonceTable.contains("nonce VARCHAR(36) PRIMARY KEY"),
+                "MySQL nonce table keys on the nonce itself: " + nonceTable);
     }
 
     @Test
@@ -60,6 +70,17 @@ final class V2SchemaContractTest {
                 "MySQL version insert must use INSERT IGNORE");
         assertNotEquals(V2Schema.versionInsertSql(new SqliteDialect()),
                 V2Schema.versionInsertSql(new MySqlDialect()));
+    }
+
+    @Test
+    void nonceInsertSqlIsDialectSpecificAndIdempotent() {
+        String sqlite = V2Schema.nonceInsertSql(new SqliteDialect());
+        String mysql = V2Schema.nonceInsertSql(new MySqlDialect());
+        assertTrue(sqlite.contains("INSERT OR IGNORE INTO " + V2Schema.noncesTable()),
+                "SQLite nonce insert must be first-writer-wins via INSERT OR IGNORE: " + sqlite);
+        assertTrue(mysql.contains("INSERT IGNORE INTO " + V2Schema.noncesTable()),
+                "MySQL nonce insert must be first-writer-wins via INSERT IGNORE: " + mysql);
+        assertNotEquals(sqlite, mysql);
     }
 
     @Test

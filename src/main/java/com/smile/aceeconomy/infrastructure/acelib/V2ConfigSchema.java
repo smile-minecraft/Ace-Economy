@@ -10,14 +10,21 @@ import java.util.List;
  * v2 config schema (clean-slate, AceLib public API only).
  *
  * <p>Declares the v2 config contract: {@code version: "2.0"} plus the retained
- * product capabilities (multi-currency, debt policy, start balance, locales,
- * Discord, storage) expressed as nested paths with safe defaults. The schema is
+ * product capabilities (debt policy, start balance, locales, Discord, storage,
+ * leaderboard) expressed as nested paths with safe defaults. The schema is
  * intentionally independent of the v1 {@code config-version} surface; the v2
  * adapter never reads or migrates v1 config.</p>
  *
+ * <p>The {@code currencies} section is deliberately NOT declared here: it is an
+ * operator-owned dynamic map (any number of currencies, each with name/symbol/
+ * scale/default). Fabricating pinned dollar/token entries would both block an
+ * arbitrary valid map and silently revive a default currency the operator removed.
+ * The section is validated as a whole at startup by {@link CurrencyConfigParser},
+ * which fail-fasts on missing/empty/malformed input instead of applying defaults.</p>
+ *
  * <p>Field defaults are applied by {@code ConfigManager.load()}/{@code reload()}
  * when a key is absent, so a partial on-disk config still yields a complete,
- * valid in-memory snapshot.</p>
+ * valid in-memory snapshot for every declared field.</p>
  */
 public final class V2ConfigSchema {
 
@@ -52,17 +59,11 @@ public final class V2ConfigSchema {
                 // discord
                 new FieldSpec("discord.enabled", false, false),
                 new FieldSpec("discord.webhook-url", "", false),
-                // currencies (retained multi-currency capability)
-                new FieldSpec("currencies.dollar.default", true, false),
-                new FieldSpec("currencies.dollar.name", "金幣", false),
-                new FieldSpec("currencies.dollar.symbol", "$", false),
-                new FieldSpec("currencies.dollar.scale", 2, false),
-                new FieldSpec("currencies.token.default", false, false),
-                new FieldSpec("currencies.token.name", "活動代幣", false),
-                new FieldSpec("currencies.token.symbol", "ⓒ", false),
-                new FieldSpec("currencies.token.scale", 0, false),
-                // leaderboard
+                // leaderboard — the enabled flag gates the executable baltop v2 spec at
+                // startup; cache/page-size tune the query service. Startup-only wiring:
+                // a restart is required for structural changes to take effect.
                 new FieldSpec("leaderboard.enabled", true, false),
+                new FieldSpec("leaderboard.cache-time-seconds", 300, false),
                 new FieldSpec("leaderboard.page-size", 10, false)
         ));
     }

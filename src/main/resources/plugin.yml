@@ -21,7 +21,7 @@ commands:
     usage: /<command> <玩家> <金額>
   aceeco:
     description: AceEconomy 管理指令
-    usage: /<command> <give|take|set> <玩家> <金額>
+    usage: /<command> <give|take|set|history|reload|rollback|backup|restore>
   withdraw:
     description: 提領銀行支票
     usage: /<command> <金額>
@@ -46,7 +46,11 @@ permissions:
       aceeconomy.admin.give: true
       aceeconomy.admin.take: true
       aceeconomy.admin.set: true
+      aceeconomy.admin.history: true
       aceeconomy.admin.reload: true
+      aceeconomy.admin.rollback: true
+      aceeconomy.admin.backup: true
+      aceeconomy.admin.restore: true
       aceeconomy.bypass.debt: true
       aceeconomy.command.bank: true
   aceeconomy.command.pay:
@@ -70,8 +74,20 @@ permissions:
   aceeconomy.admin.set:
     description: Allow use of /aceeco set
     default: op
+  aceeconomy.admin.history:
+    description: Allow use of /aceeco history
+    default: op
   aceeconomy.admin.reload:
     description: Allow use of /aceeco reload
+    default: op
+  aceeconomy.admin.rollback:
+    description: Allow use of /aceeco rollback (console only)
+    default: op
+  aceeconomy.admin.backup:
+    description: Allow use of /aceeco backup
+    default: op
+  aceeconomy.admin.restore:
+    description: Allow use of /aceeco restore (console only, destructive)
     default: op
   aceeconomy.bypass.debt:
     description: Allow player to bypass debt limits

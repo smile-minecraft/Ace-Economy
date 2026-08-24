@@ -13,12 +13,14 @@ import com.smile.aceeconomy.api.v2.EconomyApiImpl;
 import com.smile.aceeconomy.api.v2.InMemoryTransactionEventPublisher;
 import com.smile.aceeconomy.application.EconomyService;
 import com.smile.aceeconomy.commands.v2.CommandServices;
+import com.smile.aceeconomy.commands.v2.MainCommandAliasPolicy;
 import com.smile.aceeconomy.commands.v2.V2CommandRegistry;
 import com.smile.aceeconomy.domain.Amount;
 import com.smile.aceeconomy.domain.Currency;
 import com.smile.aceeconomy.domain.CurrencyRegistry;
 import com.smile.aceeconomy.domain.DebtPolicy;
 import com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter;
+import com.smile.aceeconomy.infrastructure.acelib.CurrencyConfigParser;
 import com.smile.aceeconomy.infrastructure.acelib.SafeSchedulerFoliaContext;
 import com.smile.aceeconomy.infrastructure.integration.acelib.AceLibExternalServiceReadiness;
 import com.smile.aceeconomy.infrastructure.integration.acelib.ExternalIntegrationCoordinator;
@@ -32,21 +34,30 @@ import com.smile.aceeconomy.infrastructure.integration.vault.BukkitVaultRegistra
 import com.smile.aceeconomy.infrastructure.integration.vault.VaultEconomyLifecycle;
 import com.smile.aceeconomy.infrastructure.integration.vault.VaultEconomyProvider;
 import com.smile.aceeconomy.infrastructure.integration.vault.VaultIntegrationModule;
+import com.smile.aceeconomy.infrastructure.item.BanknoteValidator;
 import com.smile.aceeconomy.infrastructure.item.V2BanknoteFactory;
 import com.smile.aceeconomy.infrastructure.operations.LeaderboardCache;
+import com.smile.aceeconomy.infrastructure.operations.StorageReversalExecutor;
 import com.smile.aceeconomy.infrastructure.persistence.PersistenceBackendFactory;
 import com.smile.aceeconomy.infrastructure.persistence.PersistentAuditSink;
+import com.smile.aceeconomy.infrastructure.persistence.PersistentIdempotencyGuard;
 import com.smile.aceeconomy.infrastructure.persistence.StorageConfig;
 import com.smile.aceeconomy.infrastructure.persistence.StorageConfigParser;
 import com.smile.aceeconomy.infrastructure.session.AsyncAccountSessionStore;
 import com.smile.aceeconomy.infrastructure.session.PlayerSessionManager;
 import com.smile.aceeconomy.gui.v2.BankGuiAction;
 import com.smile.aceeconomy.gui.v2.V2BankGuiSession;
+import com.smile.aceeconomy.operations.HistoryService;
+import com.smile.aceeconomy.operations.BackupRestoreService;
 import com.smile.aceeconomy.operations.LeaderboardService;
+import com.smile.aceeconomy.operations.RollbackService;
 import com.smile.aceeconomy.ports.AccountRepository;
 import com.smile.aceeconomy.ports.Clock;
 import com.smile.aceeconomy.ports.FoliaContextExecutor;
 import com.smile.aceeconomy.ports.TransactionEventPublisher;
+import com.smile.aceeconomy.ports.persistence.AtomicRedemptionStore;
+import com.smile.aceeconomy.ports.persistence.AtomicReversalStore;
+import com.smile.aceeconomy.ports.persistence.NonceStore;
 import com.smile.aceeconomy.ports.persistence.PersistenceLifecycle;
 import com.smile.aceeconomy.ports.persistence.TransactionRepository;
 import org.bukkit.Bukkit;
@@ -64,6 +75,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -83,6 +95,9 @@ public final class CompositionRoot {
     private PersistenceLifecycle persistence;
     private AccountRepository accounts;
     private TransactionRepository transactions;
+    private AtomicReversalStore reversals;
+    private AtomicRedemptionStore redemptions;
+    private NonceStore nonces;
     private CurrencyRegistry currencies;
     private EconomyService economy;
     private EconomyApiImpl api;
@@ -95,6 +110,8 @@ public final class CompositionRoot {
     private CommandRegistryImpl commandRegistry;
     private ExternalIntegrationCoordinator integrations;
     private V2BanknoteFactory banknotes;
+    private RollbackService rollbacks;
+    private BanknoteValidator banknoteValidator;
 
     public CompositionRoot(JavaPlugin plugin) {
         this.plugin = java.util.Objects.requireNonNull(plugin, "plugin");
@@ -153,6 +170,13 @@ public final class CompositionRoot {
         persistence = wiring.lifecycle();
         accounts = wiring.accounts();
         transactions = wiring.transactions();
+        // The atomic reversal store, the atomic redemption store and the durable nonce store
+        // are the SAME backend instance (enforced by WiringResult), so rollback mutations,
+        // banknote redemptions and nonce consumption share one storage transaction boundary
+        // with ordinary reads and writes.
+        reversals = wiring.reversals();
+        redemptions = wiring.redemptions();
+        nonces = wiring.nonces();
     }
 
     private void stopPersistence() {
@@ -173,6 +197,14 @@ public final class CompositionRoot {
         economy = new EconomyService(currencies, debt, startBalance, accounts,
                 new PersistentAuditSink(transactions), clock, publisher);
         api = new EconomyApiImpl(economy, publisher);
+
+        // Production rollback boundary and banknote replay guard. Both are bound to the
+        // durable persistence capabilities acquired above; the command surface binds its
+        // entry points to them in its own slice. The in-memory executor / guard classes
+        // are replacement stubs for verification only and never appear in this graph.
+        rollbacks = new RollbackService(transactions,
+                new StorageReversalExecutor(accounts, reversals, clock));
+        banknoteValidator = new BanknoteValidator(new PersistentIdempotencyGuard(nonces));
     }
 
     private void startSessions(ResourceOwner resources) {
@@ -192,10 +224,15 @@ public final class CompositionRoot {
 
     private void startPresentation(ResourceOwner resources) {
         banknotes = new V2BanknoteFactory();
+        // The bank GUI use case binds to the SAME durable validator / redemption store and the
+        // application economy service (lock, pre-commit, debt policy) so every redeem goes
+        // through the prepared atomic path; no in-memory guard appears in this graph.
         ProductionAdapters.BankUseCase bankUseCase =
-                new ProductionAdapters.BankUseCase(api, currencies, banknotes);
+                new ProductionAdapters.BankUseCase(api, economy, currencies, banknotes,
+                        banknoteValidator, redemptions);
         GuiService guiService = requireApi().getGuiService();
         bankGui = new V2BankGuiSession(guiService, folia, bankUseCase, slot -> switch (slot) {
+            case 4 -> BankGuiAction.deposit();
             case 11 -> BankGuiAction.withdraw(100L);
             case 13 -> BankGuiAction.withdraw(500L);
             case 15 -> BankGuiAction.close();
@@ -206,16 +243,52 @@ public final class CompositionRoot {
                 new ProductionAdapters.Economy(api, currencies, ioExecutor);
         ProductionAdapters.Withdrawals withdrawalCommands =
                 new ProductionAdapters.Withdrawals(api, currencies, banknotes, ioExecutor);
+        // Hoisted so the backup/restore service can invalidate the SAME leaderboard cache
+        // after a successful restore (single instance, single invalidation boundary).
+        LeaderboardService leaderboardService = new LeaderboardService(
+                new ProductionAdapters.RepositoryLeaderboardSource(accounts),
+                () -> Instant.now(), new LeaderboardCache(),
+                Duration.ofSeconds(integer("leaderboard.cache-time-seconds", 300)));
         ProductionAdapters.Leaderboards leaderboards = new ProductionAdapters.Leaderboards(
-                new LeaderboardService(new ProductionAdapters.RepositoryLeaderboardSource(accounts),
-                        () -> Instant.now(), new LeaderboardCache(), Duration.ofSeconds(integer("leaderboard.cache-time-seconds", 300))),
+                leaderboardService,
                 integer("leaderboard.page-size", 10), ioExecutor);
         ProductionAdapters.Bank bankCommands = new ProductionAdapters.Bank(bankGui, ioExecutor);
         ProductionAdapters.Admin adminCommands = new ProductionAdapters.Admin(api, ioExecutor,
                 () -> config.reload().success());
+        ProductionAdapters.History historyCommands = new ProductionAdapters.History(
+                new HistoryService(transactions), ioExecutor);
+        // The rollback command surface binds to the SAME RollbackService created in the
+        // application slice (atomic StorageReversalExecutor + durable marker ownership);
+        // the adapter only moves the blocking call onto the IO executor.
+        ProductionAdapters.Rollback rollbackCommands =
+                new ProductionAdapters.Rollback(rollbacks, ioExecutor);
+        // The backup/restore command surface binds to the SAME PersistenceLifecycle acquired
+        // in the persistence slice. Snapshots live under <dataFolder>/backups; restore is
+        // gated on no online players plus a pre-restore safety snapshot, and a success clears
+        // the shared leaderboard cache before the operator restarts the server.
+        BackupRestoreService backupRestoreService = new BackupRestoreService(
+                persistence,
+                plugin.getDataFolder().toPath(),
+                () -> !Bukkit.getOnlinePlayers().isEmpty(),
+                () -> Set.copyOf(currencies.all().stream().map(Currency::id).toList()),
+                leaderboardService::invalidateAll);
+        ProductionAdapters.BackupRestore backupCommands =
+                new ProductionAdapters.BackupRestore(backupRestoreService, ioExecutor);
         CommandServices services = new CommandServices(economyCommands,
-                new ProductionAdapters.Players(ioExecutor), withdrawalCommands, leaderboards, bankCommands, adminCommands);
-        V2CommandRegistry v2Commands = V2CommandRegistry.create(services);
+                new ProductionAdapters.Players(ioExecutor), withdrawalCommands, leaderboards, bankCommands,
+                adminCommands, historyCommands, rollbackCommands, backupCommands);
+        // Command-surface flags are startup-only wiring: the leaderboard toggle decides whether
+        // an executable baltop spec exists at all, and the main-command alias is validated
+        // against every label plugin.yml declares plus the sibling v2 specs. Bukkit only routes
+        // statically declared labels and AceLib bridges attach to those roots, so changing
+        // either value requires a restart; reload never re-registers commands.
+        boolean leaderboardEnabled = bool("leaderboard.enabled", true);
+        String configuredAlias = string("settings.main-command-alias", "aceeco");
+        Map<String, Map<String, Object>> declaredCommands = plugin.getDescription().getCommands();
+        V2CommandRegistry v2Commands = V2CommandRegistry.create(services, configuredAlias,
+                leaderboardEnabled,
+                MainCommandAliasPolicy.declaredBukkitLabels(declaredCommands),
+                MainCommandAliasPolicy.declaredAliasesByRoot(declaredCommands));
         commandRegistry = new CommandRegistryImpl(new BukkitReplySink(plugin));
         v2Commands.register(commandRegistry);
         for (var spec : v2Commands.specs()) {
@@ -262,13 +335,10 @@ public final class CompositionRoot {
     }
 
     private CurrencyRegistry buildCurrencies() {
-        return CurrencyRegistry.of(List.of(
-                Currency.define("dollar", string("currencies.dollar.name", "金幣"),
-                        string("currencies.dollar.symbol", "$"), integer("currencies.dollar.scale", 2),
-                        bool("currencies.dollar.default", true)),
-                Currency.define("token", string("currencies.token.name", "活動代幣"),
-                        string("currencies.token.symbol", "ⓒ"), integer("currencies.token.scale", 0),
-                        bool("currencies.token.default", false))));
+        // The currencies section is operator-owned: any legal currency map loads, and the
+        // parser validates the whole section before constructing a registry, so a malformed
+        // config aborts startup instead of leaving a partially applied economy behind.
+        return CurrencyConfigParser.parse(value("currencies"));
     }
 
     private Object value(String path) {

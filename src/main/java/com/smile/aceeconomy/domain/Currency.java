@@ -9,6 +9,9 @@ import java.util.Objects;
  */
 public final class Currency {
 
+    /** Config-facing ids are restricted to this alphabet after normalization. */
+    private static final String VALID_ID_REGEX = "[a-z0-9_]+";
+
     private final String id;          // normalized (trimmed + lower-cased)
     private final String displayName;
     private final String symbol;
@@ -27,6 +30,10 @@ public final class Currency {
         String normalized = normalizeId(id);
         if (normalized.isEmpty()) {
             throw new IllegalArgumentException("currency id must not be blank");
+        }
+        if (!normalized.matches(VALID_ID_REGEX)) {
+            throw new IllegalArgumentException(
+                    "currency id must match " + VALID_ID_REGEX + " after normalization: " + id);
         }
         if (scale < 0) {
             throw new IllegalArgumentException("currency scale must be >= 0");

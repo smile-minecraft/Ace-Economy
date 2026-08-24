@@ -29,7 +29,7 @@ import static org.mockito.Mockito.when;
  * <p>Covers the supported consumer branches (missing provider, registered-but-not-ready facade,
  * ready facade) and the public SafeScheduler API surface. Full server-region scheduling behaviour
  * is intentionally NOT asserted here; it requires a live server runtime and is deferred to
- * Task 3 / Task 13 runtime validation.
+ * live server runtime validation.
  */
 class AceLibConsumerContractTest {
 
@@ -115,7 +115,7 @@ class AceLibConsumerContractTest {
     void safeSchedulerCreateIsCallable() {
         // Full region scheduling requires a live server runtime. This test only proves the public
         // SafeScheduler API surface is callable from the consumer. A server-absent runtime failure
-        // is expected and deferred to Task 3 / Task 13 runtime validation; an API-surface mismatch
+        // is expected and deferred to live server runtime validation; an API-surface mismatch
         // (linkage error) would be a real failure.
         AceLibApi api = readyApi();
         JavaPlugin plugin = mock(JavaPlugin.class);

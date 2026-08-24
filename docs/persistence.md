@@ -84,22 +84,99 @@ For MariaDB, keep `type: mysql` and provide the MariaDB host, port, database, ac
 - Marking a transaction as reverted is safe to repeat for an existing record. / 將既有交易標記為 reverted 可以重複執行。
 - A process restart reopens the same store; it does not select a different backend or migrate data. / 程序重啟會重新開啟同一個儲存位置，不會改選 backend 或搬移資料。
 
-### Backup routine / 備份流程
+### Managed backup / 受管理備份
 
-1. Stop the server before copying a JSON or SQLite file. / 複製 JSON 或 SQLite 檔案前先停止伺服器。
-2. For MySQL or MariaDB, use the database service's normal logical or physical backup process instead of copying a live database file. / 使用 MySQL 或 MariaDB 時，請使用資料庫服務本身的邏輯或實體備份流程，不要複製運作中的資料庫檔案。
-3. Store the backup separately from the live plugin data and protect credentials in the backup location. / 將備份和正式插件資料分開存放，並保護備份位置中的憑證。
-4. Record the backend type, database/file name, and backup time. / 記錄 backend 類型、資料庫或檔案名稱，以及備份時間。
+Use the canonical command to create a logical snapshot while the server is running:
 
-### Restore routine / 還原流程
+```text
+/aceeco backup [label]
+```
 
-For file backends, stop the server, replace the configured file with the selected backup, and start the server. For MySQL or MariaDB, restore the selected database backup through the database service, keep the same connection settings, and then start the server.
+The command writes a v2 JSON snapshot only under the plugin-controlled
+`<plugin data folder>/backups` directory. The optional label is restricted to safe filename
+characters. It creates `<backup-id>.json` with a verified directory handle and `CREATE_NEW`, forces
+the complete snapshot, and then creates `<backup-id>.ready` with `CREATE_NEW`. The ready marker
+contains a SHA-256 digest and is the application-level logical commit point; restore requires the
+marker and a matching, fully validated snapshot. Existing target or marker files are never
+replaced. The snapshot contains the logical accounts, balances, transactions, reverted markers,
+and consumed nonces; it does not contain database passwords or webhook URLs. Keep the `.json` and
+matching `.ready` files together when moving a snapshot; a bare JSON file is not committed.
 
-檔案型 backend 的還原方式是停止伺服器、用選定備份替換設定的檔案，再啟動伺服器。MySQL 或 MariaDB 則透過資料庫服務還原選定的資料庫備份，保留相同的連線設定後再啟動伺服器。
+使用以下 canonical 指令，在伺服器運作中建立邏輯 snapshot：
 
-The persistence layer also accepts a v2 JSON snapshot for backup and restore. It parses the snapshot and checks its schema version before replacing live rows. Invalid JSON or an incompatible snapshot leaves the current store untouched. A snapshot can move the logical v2 model between JSON and SQL backends; it is not a converter for the old v1 model.
+```text
+/aceeco backup [label]
+```
 
-持久化層也支援以 v2 JSON snapshot 進行備份與還原。系統會先解析 snapshot 並檢查 schema 版本，再替換正式資料；JSON 無效或版本不相容時，現有儲存內容不會被碰觸。snapshot 可以在 JSON 與 SQL backend 之間搬移 v2 邏輯模型，但不是舊版 v1 模型的轉換器。
+指令只會在插件控制的 `<plugin data folder>/backups` 下寫出 v2 JSON snapshot。選用的 label 只能使用安全的
+檔名字元；服務會以已驗證的 directory handle 和 `CREATE_NEW` 建立 `<backup-id>.json`，完整寫入並 force，
+再以 `CREATE_NEW` 建立 `<backup-id>.ready`。ready marker 包含 SHA-256 digest，是 application-level logical
+commit point；還原時必須有 marker，且 snapshot 完整驗證並與 digest 相符。既有 target 或 marker 不會被覆寫。
+snapshot 包含邏輯上的帳戶、餘額、交易、reverted marker 與已消耗 nonce，不包含資料庫密碼或 webhook URL。
+搬移 snapshot 時必須保留配對的 `.json` 與 `.ready`；只有 JSON 不是已提交的備份。
+
+There are no separate `/backup` or `/restore` root commands. These operations exist as `/aceeco`
+admin subcommands. The command details and permissions are listed in [Commands and permissions](commands.md).
+
+沒有獨立的 `/backup` 或 `/restore` 根指令；這兩個操作只以 `/aceeco` 管理子指令存在。指令與權限見
+[指令與權限](commands.md)。
+
+### Restore sequence / 還原流程
+
+Restore is destructive and must use the exact command below from the console:
+
+```text
+/aceeco restore <backup-id> confirm
+```
+
+The command requires `aceconomy.admin` and `aceconomy.admin.restore`, rejects any online player, and
+accepts only lowercase `confirm`. Before live data is touched, the service performs a read-only
+preflight for JSON shape, schema version, account and transaction records, duplicate transaction
+IDs, amounts and timestamps, and compatibility with the configured currencies. It then creates a
+safety backup of the current state. If the safety backup fails, the restore stops and live state is
+left untouched.
+
+還原是破壞性操作，必須從主控台執行以下精確指令：
+
+```text
+/aceeco restore <backup-id> confirm
+```
+
+指令需要 `aceconomy.admin` 與 `aceconomy.admin.restore`，有任何玩家在線時會拒絕，而且只接受小寫
+`confirm`。動到正式資料前，服務會先以唯讀方式檢查 JSON 結構、schema 版本、帳戶與交易紀錄、重複交易 ID、
+金額與時間，以及目前設定的貨幣是否相容；接著建立目前狀態的 safety backup。安全備份失敗時會中止還原，
+正式資料保持不變。
+
+After preflight and the safety backup pass, JSON restore reads the already committed marker/target
+pair through a secure directory handle; the marker protocol is not an OS atomic rename or hard-link
+claim. SQLite/MySQL restore runs as one JDBC transaction. A backend failure is reported without
+claiming unchanged live state. On success, the leaderboard cache is cleared, but sessions and GUIs
+are not hot-refreshed; restart the server before players return.
+
+Preflight 與 safety backup 都成功後，JSON 還原會透過 secure directory handle 讀取已提交的 marker／target
+組合；這套 marker protocol 不宣稱 OS atomic rename 或 hard-link 保證。SQLite/MySQL 還原使用單一 JDBC
+transaction；backend 失敗時不會宣稱正式資料已保持不變。成功後會清除排行榜快取，但不會熱刷新 session 或
+GUI；讓玩家回來前必須重啟伺服器。
+
+### Logical backend boundary / 邏輯備份的 backend 邊界
+
+The same v2 JSON model is used for logical backup and restore across JSON, SQLite, and MySQL. This
+supports logical moves such as JSON→JSON, SQLite→JSON→SQLite, and the corresponding MySQL logical
+path. It is not a MySQL server-native dump: it does not replace `mysqldump`, `mariadb-dump`, or a
+database administrator's physical/disaster-recovery process.
+
+JSON、SQLite 與 MySQL 的邏輯備份／還原共用同一套 v2 JSON model，因此可做 JSON→JSON、SQLite→JSON→SQLite，
+以及對應的 MySQL 邏輯 round-trip。這不是 MySQL server-native dump，不能取代 `mysqldump`、`mariadb-dump` 或
+資料庫管理員的實體／災難復原流程。
+
+The automated round-trip coverage confirms JSON→JSON and SQLite→JSON→SQLite, including accounts,
+balances, transactions, reverted markers, and consumed nonces, plus backend rollback on restore
+failure. No live MySQL connection or live Folia backup/restore proof has been completed; those remain
+operational validation items rather than claims made by this document.
+
+目前自動化 round-trip 覆蓋 JSON→JSON 與 SQLite→JSON→SQLite，並確認帳戶、餘額、交易、reverted marker、已消耗
+nonce，以及還原失敗時 backend rollback。尚未完成 live MySQL 連線或 live Folia 備份／還原驗證；這些仍是待做的
+操作驗證，不是本文已宣稱的結果。
 
 ## When startup fails / 啟動失敗時
 

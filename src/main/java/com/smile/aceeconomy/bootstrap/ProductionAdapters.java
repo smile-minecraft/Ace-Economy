@@ -5,9 +5,12 @@ import com.smile.aceeconomy.commands.v2.CommandModels;
 import com.smile.aceeconomy.commands.v2.ports.AdminCommandService;
 import com.smile.aceeconomy.commands.v2.ports.BankCommandService;
 import com.smile.aceeconomy.commands.v2.ports.EconomyCommandService;
+import com.smile.aceeconomy.commands.v2.ports.HistoryQueryService;
 import com.smile.aceeconomy.commands.v2.ports.LeaderboardQueryService;
 import com.smile.aceeconomy.commands.v2.ports.PlayerLookupService;
+import com.smile.aceeconomy.commands.v2.ports.RollbackCommandService;
 import com.smile.aceeconomy.commands.v2.ports.WithdrawCommandService;
+import com.smile.aceeconomy.application.EconomyService;
 import com.smile.aceeconomy.domain.Account;
 import com.smile.aceeconomy.domain.AccountSnapshot;
 import com.smile.aceeconomy.domain.Amount;
@@ -16,14 +19,24 @@ import com.smile.aceeconomy.domain.CurrencyRegistry;
 import com.smile.aceeconomy.domain.EconomyError;
 import com.smile.aceeconomy.domain.EconomyResult;
 import com.smile.aceeconomy.gui.v2.V2BankGuiSession;
+import com.smile.aceeconomy.infrastructure.item.BanknoteValidator;
+import com.smile.aceeconomy.infrastructure.item.ValidationResult;
 import com.smile.aceeconomy.infrastructure.operations.LeaderboardCache;
+import com.smile.aceeconomy.operations.AuditPage;
+import com.smile.aceeconomy.operations.AuditQuery;
+import com.smile.aceeconomy.operations.HistoryService;
 import com.smile.aceeconomy.operations.LeaderboardPage;
 import com.smile.aceeconomy.operations.LeaderboardService;
+import com.smile.aceeconomy.operations.RollbackResult;
+import com.smile.aceeconomy.operations.RollbackService;
 import com.smile.aceeconomy.ports.AccountRepository;
 import com.smile.aceeconomy.ports.BankGuiUseCase;
 import com.smile.aceeconomy.ports.BanknoteClaim;
 import com.smile.aceeconomy.ports.BanknoteFactory;
+import com.smile.aceeconomy.ports.DepositResult;
 import com.smile.aceeconomy.ports.WithdrawResult;
+import com.smile.aceeconomy.ports.persistence.AtomicRedemptionStore;
+import com.smile.aceeconomy.ports.persistence.RedemptionResult;
 import com.smile.aceeconomy.ports.operations.LeaderboardRow;
 import com.smile.aceeconomy.ports.operations.LeaderboardSource;
 import org.bukkit.Bukkit;
@@ -135,6 +148,49 @@ final class ProductionAdapters {
         public int pageSize() { return pageSize; }
     }
 
+    static final class History implements HistoryQueryService {
+        private final HistoryService service; private final Executor executor;
+        History(HistoryService service, Executor executor) {
+            this.service = service; this.executor = executor;
+        }
+        public CompletableFuture<AuditPage> query(AuditQuery query) {
+            return CompletableFuture.supplyAsync(() -> service.query(query), executor);
+        }
+    }
+
+    static final class Rollback implements RollbackCommandService {
+        private final RollbackService service; private final Executor executor;
+        Rollback(RollbackService service, Executor executor) {
+            this.service = service; this.executor = executor;
+        }
+        public CompletableFuture<RollbackResult> rollback(UUID transactionId) {
+            return CompletableFuture.supplyAsync(() -> service.rollback(transactionId), executor);
+        }
+    }
+
+    /**
+     * Backup/restore command boundary: moves the blocking, safety-gated service calls onto
+     * the IO executor. The controlled backup directory, preflight, online-player gate,
+     * safety snapshot and the publish protocol all stay inside {@code BackupRestoreService}:
+     * the snapshot target is created handle-relative with {@code CREATE_NEW}, written
+     * completely and forced, then a handle-relative {@code .ready} marker is created with
+     * {@code CREATE_NEW} as an application-level logical commit — not an operating-system
+     * atomic rename. This adapter adds no policy of its own.
+     */
+    static final class BackupRestore implements com.smile.aceeconomy.commands.v2.ports.BackupCommandService {
+        private final com.smile.aceeconomy.operations.BackupRestoreService service;
+        private final Executor executor;
+        BackupRestore(com.smile.aceeconomy.operations.BackupRestoreService service, Executor executor) {
+            this.service = service; this.executor = executor;
+        }
+        public CompletableFuture<com.smile.aceeconomy.operations.BackupResult> createBackup(String label) {
+            return CompletableFuture.supplyAsync(() -> service.createBackup(label), executor);
+        }
+        public CompletableFuture<com.smile.aceeconomy.operations.RestoreResult> restore(String backupId) {
+            return CompletableFuture.supplyAsync(() -> service.restore(backupId), executor);
+        }
+    }
+
     static final class Bank implements BankCommandService {
         private final V2BankGuiSession gui; private final Executor executor;
         Bank(V2BankGuiSession gui, Executor executor) { this.gui = gui; this.executor = executor; }
@@ -145,9 +201,19 @@ final class ProductionAdapters {
     }
 
     static final class BankUseCase implements BankGuiUseCase {
-        private final EconomyApi api; private final CurrencyRegistry currencies; private final BanknoteFactory banknotes;
-        BankUseCase(EconomyApi api, CurrencyRegistry currencies, BanknoteFactory banknotes) {
-            this.api = api; this.currencies = currencies; this.banknotes = banknotes;
+        private final EconomyApi api; private final EconomyService economy; private final CurrencyRegistry currencies;
+        private final BanknoteFactory banknotes; private final BanknoteValidator validator;
+        private final AtomicRedemptionStore redemptions;
+        BankUseCase(EconomyApi api, EconomyService economy, CurrencyRegistry currencies,
+                    BanknoteFactory banknotes, BanknoteValidator validator,
+                    AtomicRedemptionStore redemptions) {
+            this.api = api; this.economy = economy; this.currencies = currencies; this.banknotes = banknotes;
+            this.validator = validator; this.redemptions = redemptions;
+        }
+        /** Backward-compatible constructor for offline tests that bypass the economy lock/validation. */
+        BankUseCase(EconomyApi api, CurrencyRegistry currencies, BanknoteFactory banknotes,
+                    BanknoteValidator validator, AtomicRedemptionStore redemptions) {
+            this(api, null, currencies, banknotes, validator, redemptions);
         }
         public WithdrawResult withdraw(UUID id, long value) {
             Currency c = currencies.get(currencies.defaultCurrencyId());
@@ -155,6 +221,74 @@ final class ProductionAdapters {
             if (result.isFailure()) return WithdrawResult.rejected(result.message());
             BanknoteClaim claim = claim(id, c, value);
             return banknotes.mint(claim).map(WithdrawResult::success).orElseGet(() -> WithdrawResult.rejected("banknote could not be created"));
+        }
+
+        /**
+         * Redeem the held item: decode → structural validation → currency check → durable
+         * atomic redemption via the application service (lock, pre-commit event, debt policy
+         * and all-or-none balance/audit/nonce). Every rejection leaves the physical item
+         * untouched; only a committed redemption lets the caller remove it. Storage failures
+         * are mapped to the stable {@code credit.failed} reason instead of throwing into the
+         * scheduler dispatch, where they would surface as an indistinguishable accepted click.
+         */
+        public DepositResult deposit(UUID id, ItemStack heldItem) {
+            Optional<BanknoteClaim> decoded = banknotes.decode(heldItem);
+            if (decoded.isEmpty()) {
+                return DepositResult.rejected("banknote.invalid");
+            }
+            ValidationResult structural = validator.validateStructure(decoded.get());
+            if (structural.rejected()) {
+                return DepositResult.rejected(structural.reasonCode());
+            }
+            BanknoteClaim claim = structural.claim();
+            if (!currencies.contains(claim.currency())) {
+                return DepositResult.rejected("currency.unknown");
+            }
+            Currency c = currencies.get(claim.currency());
+            Amount amount;
+            try {
+                amount = Amount.of(claim.value(), c.scale());
+            } catch (IllegalArgumentException e) {
+                return DepositResult.rejected("value.nonpositive");
+            }
+            // Production path preserves the full EconomyService contract (lock, pre-commit,
+            // debt, audit semantics) and delegates durability to the prepared atomic store.
+            if (economy != null) {
+                EconomyResult<Amount> r = economy.redeemBanknote(claim.nonce(), id, c.id(), amount, redemptions);
+                if (r.isSuccess()) {
+                    return DepositResult.success(claim.value(), c.id());
+                }
+                EconomyError err = r.error();
+                if (err == EconomyError.REPLAY_DETECTED) {
+                    return DepositResult.rejected("replay.detected");
+                }
+                if (err == EconomyError.ACCOUNT_NOT_FOUND) {
+                    return DepositResult.rejected("credit.account-missing");
+                }
+                if (err == EconomyError.CURRENCY_NOT_FOUND) {
+                    return DepositResult.rejected("currency.unknown");
+                }
+                if (err == EconomyError.TRANSACTION_CANCELLED) {
+                    return DepositResult.rejected("transaction.cancelled");
+                }
+                if (err == EconomyError.INVALID_AMOUNT) {
+                    return DepositResult.rejected("value.nonpositive");
+                }
+                return DepositResult.rejected("credit.failed");
+            }
+            // Legacy fallback for offline unit tests that inject only the raw store.
+            try {
+                RedemptionResult r = redemptions.redeem(claim.nonce(), id, c.id(), amount);
+                if (r.isCommitted()) {
+                    return DepositResult.success(claim.value(), c.id());
+                }
+                if (r.isReplay()) {
+                    return DepositResult.rejected("replay.detected");
+                }
+                return DepositResult.rejected("credit.account-missing");
+            } catch (com.smile.aceeconomy.ports.persistence.PersistenceException e) {
+                return DepositResult.rejected("credit.failed");
+            }
         }
     }
 

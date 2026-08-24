@@ -5,6 +5,9 @@ import com.smile.aceeconomy.infrastructure.persistence.sql.MySqlDialect;
 import com.smile.aceeconomy.infrastructure.persistence.sql.SqlBackend;
 import com.smile.aceeconomy.infrastructure.persistence.sql.SqliteDialect;
 import com.smile.aceeconomy.ports.AccountRepository;
+import com.smile.aceeconomy.ports.persistence.AtomicRedemptionStore;
+import com.smile.aceeconomy.ports.persistence.AtomicReversalStore;
+import com.smile.aceeconomy.ports.persistence.NonceStore;
 import com.smile.aceeconomy.ports.persistence.PersistenceLifecycle;
 import com.smile.aceeconomy.ports.persistence.TransactionRepository;
 
@@ -66,16 +69,31 @@ public final class PersistenceBackendFactory {
     }
 
     /**
-     * Bundle of the three ports exposed by a v2.0.0 backend. All three are the SAME
+     * Bundle of the ports exposed by a v2.0.0 backend. All six are the SAME
      * instance — the wiring contract is that a single backend object simultaneously
-     * satisfies {@link AccountRepository}, {@link TransactionRepository} and
-     * {@link PersistenceLifecycle}, so reads via the repository ports always observe
-     * the same persisted state as writes via the lifecycle port.
+     * satisfies {@link AccountRepository}, {@link TransactionRepository},
+     * {@link PersistenceLifecycle}, {@link AtomicReversalStore},
+     * {@link AtomicRedemptionStore} and {@link NonceStore},
+     * so reads via the repository ports always observe the same persisted state as writes
+     * via the lifecycle port, and rollback / redemption / nonce operations share one storage
+     * transaction boundary with ordinary reads and writes.
      */
     public record WiringResult(
             AccountRepository accounts,
             TransactionRepository transactions,
-            PersistenceLifecycle lifecycle) {
+            PersistenceLifecycle lifecycle,
+            AtomicReversalStore reversals,
+            AtomicRedemptionStore redemptions,
+            NonceStore nonces) {
+
+        public WiringResult {
+            if (accounts != transactions || transactions != lifecycle
+                    || lifecycle != reversals || reversals != redemptions
+                    || redemptions != nonces) {
+                throw new IllegalArgumentException(
+                        "wiring contract requires one shared backend instance for all ports");
+            }
+        }
     }
 
     private PersistenceBackendFactory() {
@@ -130,7 +148,7 @@ public final class PersistenceBackendFactory {
         JsonPersistenceBackend backend = new JsonPersistenceBackend(json.dataFile());
         backend.initialize();
         resources.register(backend::close);
-        return new WiringResult(backend, backend, backend);
+        return new WiringResult(backend, backend, backend, backend, backend, backend);
     }
 
     private static WiringResult createSqlite(
@@ -153,7 +171,7 @@ public final class PersistenceBackendFactory {
                 backend.close();
                 closeQuietly(connRef[0]);
             });
-            return new WiringResult(backend, backend, backend);
+            return new WiringResult(backend, backend, backend, backend, backend, backend);
         } catch (RuntimeException | SQLException e) {
             // open() or initialize() failed: release whatever we managed to acquire so no
             // JDBC connection leaks.
@@ -184,7 +202,7 @@ public final class PersistenceBackendFactory {
                 closeQuietly(connRef[0]); // defensive (idempotent if already closed)
                 closeDataSource(dsRef[0]); // closes the Hikari pool / DataSource
             });
-            return new WiringResult(backend, backend, backend);
+            return new WiringResult(backend, backend, backend, backend, backend, backend);
         } catch (RuntimeException | SQLException e) {
             // Failed at any step: release the connection (if borrowed) and the DataSource
             // (if built). Both are best-effort and idempotent.

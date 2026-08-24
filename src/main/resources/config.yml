@@ -38,7 +38,10 @@ settings:
   locale: zh_TW
 
   # 主指令別名 (預設: aceeco)
-  # 若設定為 "bank"，則可以使用 /bank 來執行 /aceeco 指令
+  # 啟動時掛為 /aceeco 管理指令的額外別名；空白則維持預設入口。
+  # 不得與 plugin.yml 已宣告的 root/alias 或其他 AceEconomy 指令衝突，
+  # 衝突會讓插件啟動失敗而不是覆蓋既有入口。
+  # 只在啟動時生效：Bukkit 只轉送 plugin.yml 宣告的標籤，修改後需重啟。
   main-command-alias: "aceeco"
 
 # 經濟系統設定
@@ -49,6 +52,16 @@ economy:
   default-debt-limit: 0.0
 
 # 貨幣設定 (Multi-Currency System)
+# 此區塊由管理者自行定義，可新增任意數量的貨幣（如下方註解的 gem 範例）。
+# 每筆貨幣必須齊備四個欄位：
+#   name   文字；顯示名稱
+#   symbol 文字；顯示符號
+#   scale  非負整數；小數位數
+#   default 布林；整個區塊必須恰好一筆 true
+# ID 是本層的 key，去除前後空白並轉小寫後只能使用 a-z、0-9 與 _；
+# 僅大小寫或空白差異的 ID 視為重複。任何缺欄位、型別錯誤、重複、
+# 空區塊或預設貨幣數量不為一，都會讓插件啟動失敗且不半套用。
+# 貨幣組合只在啟動時讀取一次；reload 不會重建 registry，修改後請重啟。
 currencies:
   dollar: # 內部 ID
     name: "金幣"
@@ -60,6 +73,11 @@ currencies:
     symbol: "ⓒ"
     scale: 0
     default: false
+  # gem:
+  #   name: "寶石"
+  #   symbol: "*"
+  #   scale: 1
+  #   default: false
 
 # 玩家新建帳戶時的預設餘額
 start-balance: 1000.0
@@ -74,6 +92,8 @@ discord:
 # 排行榜設定
 leaderboard:
   # 是否啟用排行榜
+  # false 時插件不會建立/掛上可執行的 /baltop 指令處理器（啟動時生效）。
+  # plugin.yml 仍宣告靜態的 baltop 標籤，伺服器只會回應 usage 說明；修改後請重啟。
   enabled: true
   # 快取更新時間 (秒)，預設 5 分鐘
   cache-time-seconds: 300

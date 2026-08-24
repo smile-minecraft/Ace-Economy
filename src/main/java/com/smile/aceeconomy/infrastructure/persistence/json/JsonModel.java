@@ -27,6 +27,8 @@ public final class JsonModel {
     public int schemaVersion = SCHEMA_VERSION;
     public final Map<String, JsonAccount> accounts = new LinkedHashMap<>();
     public final List<JsonTransaction> transactions = new ArrayList<>();
+    /** Consumed single-use keys (nonce -> ISO-8601 consumption timestamp). Optional when reading. */
+    public final Map<String, String> nonces = new LinkedHashMap<>();
 
     // ---------------- (de)serialization ----------------
 
@@ -51,6 +53,21 @@ public final class JsonModel {
                 model.transactions.add(JsonTransaction.fromJson(o));
             }
         }
+        // Nonces are an optional additive section: files written before durable replay
+        // protection simply load with an empty set. Keys must be well-formed UUIDs — a
+        // malformed record means the file was corrupted or hand-edited, so fail fast
+        // instead of silently dropping the replay guard.
+        Object nonceObj = obj.get("nonces");
+        if (nonceObj instanceof Map) {
+            for (Map.Entry<String, Object> e : ((Map<String, Object>) nonceObj).entrySet()) {
+                try {
+                    UUID.fromString(e.getKey());
+                } catch (IllegalArgumentException ex) {
+                    throw new PersistenceException("Invalid nonce record in JSON model: " + e.getKey());
+                }
+                model.nonces.put(e.getKey(), e.getValue() == null ? "" : e.getValue().toString());
+            }
+        }
         return model;
     }
 
@@ -67,6 +84,7 @@ public final class JsonModel {
             tx.add(t.toJsonObject());
         }
         root.put("transactions", tx);
+        root.put("nonces", new LinkedHashMap<>(nonces));
         return root;
     }
 

@@ -16,6 +16,9 @@ import com.smile.aceeconomy.ports.AuditException;
 import com.smile.aceeconomy.ports.AuditSink;
 import com.smile.aceeconomy.ports.Clock;
 import com.smile.aceeconomy.ports.TransactionEventPublisher;
+import com.smile.aceeconomy.ports.persistence.AtomicRedemptionStore;
+import com.smile.aceeconomy.ports.persistence.PersistenceException;
+import com.smile.aceeconomy.ports.persistence.RedemptionResult;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -132,6 +135,67 @@ public final class EconomyService {
             Amount after = updated.balanceOf(currencyId);
             return commitAudit(new Transaction(newId(), uuid, null, norm(currencyId), amount,
                     TransactionType.DEPOSIT, before, after, now(), "deposit"), after);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    // ---------- banknote redeem (durable atomic with nonce) ----------
+
+    /**
+     * Redeem a banknote atomically: validates amount/currency, acquires the per-account lock,
+     * fires the pre-commit event and, only if not cancelled, persists the credited balance, audit
+     * record and consumed nonce together through {@code redemptionStore}. This preserves the full
+     * deposit contract (lock, pre-commit cancellation, debt policy, audit semantics) while gaining
+     * durable all-or-none and first-writer-wins on the nonce.
+     */
+    public EconomyResult<Amount> redeemBanknote(UUID nonce, UUID accountId, String currencyId, Amount amount,
+                                                AtomicRedemptionStore redemptionStore) {
+        if (nonce == null) {
+            return EconomyResult.failure(EconomyError.INVALID_AMOUNT, "nonce null");
+        }
+        EconomyResult<Void> v = validateAmountPositive(amount);
+        if (v.isFailure()) {
+            return EconomyResult.failure(v.error(), v.message());
+        }
+        if (!currencies.contains(currencyId)) {
+            return EconomyResult.failure(EconomyError.CURRENCY_NOT_FOUND, currencyId);
+        }
+        if (redemptionStore == null) {
+            return EconomyResult.failure(EconomyError.AUDIT_FAILURE, "redemption store missing");
+        }
+        ReentrantLock lock = locks.lockFor(accountId);
+        lock.lock();
+        try {
+            Optional<Account> acc = accounts.load(accountId);
+            if (acc.isEmpty()) {
+                return EconomyResult.failure(EconomyError.ACCOUNT_NOT_FOUND, "no account for " + accountId);
+            }
+            Amount before = orZero(acc.get().balanceOf(currencyId), amount);
+            TransactionEvent event = new TransactionEvent(accountId, amount, TransactionType.DEPOSIT, before);
+            events.publishPreCommit(event);
+            if (event.isCancelled()) {
+                return EconomyResult.failure(EconomyError.TRANSACTION_CANCELLED, "deposit cancelled");
+            }
+            Account updated = acc.get().deposit(currencyId, amount);
+            Amount after = updated.balanceOf(currencyId);
+            if (!debtPolicy.allows(after)) {
+                return EconomyResult.failure(EconomyError.DEBT_LIMIT_EXCEEDED, "debt limit exceeded");
+            }
+            Transaction tx = new Transaction(newId(), accountId, null, norm(currencyId), amount,
+                    TransactionType.DEPOSIT, before, after, now(), "banknote-deposit");
+            try {
+                RedemptionResult r = redemptionStore.redeemPrepared(nonce, updated, tx);
+                if (r.isCommitted()) {
+                    return EconomyResult.success(after);
+                }
+                if (r.isReplay()) {
+                    return EconomyResult.failure(EconomyError.REPLAY_DETECTED, "replay.detected");
+                }
+                return EconomyResult.failure(EconomyError.ACCOUNT_NOT_FOUND, "account missing at commit");
+            } catch (PersistenceException e) {
+                return EconomyResult.failure(EconomyError.AUDIT_FAILURE, e.getMessage());
+            }
         } finally {
             lock.unlock();
         }

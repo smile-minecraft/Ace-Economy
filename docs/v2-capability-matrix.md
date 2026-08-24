@@ -35,8 +35,8 @@
 | 7 | SQLite 儲存 | RETAIN | `storage/implementation/SQLiteImplementation.java` | ConfigCapabilityTest.storage；v2.0.0 已接線（`storage.type: sqlite` → `SqlBackend + SqliteDialect`，檔案位於 plugin data folder；路徑越界會被 `StorageConfigParser` 拒絕） |
 | 8 | MySQL 儲存 | RETAIN | `storage/implementation/MySQLImplementation.java` | ConfigCapabilityTest.storage；v2.0.0 已接線（`storage.type: mysql` → `SqlBackend + MySqlDialect` + HikariCP，JDBC driver 已 shade；連線／pool 來自 `storage.mysql.*`）；live MySQL 連線尚未驗證（v2.0.0 release gate） |
 | 9 | JSON 儲存 | RETAIN | `storage/JsonStorageHandler.java` | 計畫列為保留；config 未預設啟用，v2 決定是否預設 |
-| 10 | 交易紀錄 / 審計 | RETAIN | `LogManager`、`listeners/EconomyLogListener`、`AuditListener` | 契約預留（見風險 R4）；v2.0.0 已有 `PersistentAuditSink` 寫入（透過 `TransactionRepository.append`／`appendBatch`），audit **查詢**（`HistoryService`）為 **v2.1** |
-| 11 | Rollback | RETAIN | `commands/RollbackCommand.java`；權限 `aceeconomy.admin.rollback` | CommandSurfaceCapabilityTest；**v2.1**（production wiring、指令/API 與 transactional rollback executor 未接入 v2.0） |
+| 10 | 交易紀錄 / 審計 | RETAIN | `LogManager`、`listeners/EconomyLogListener`、`AuditListener` | 契約預留（見風險 R4）；v2.0.0 已有 `PersistentAuditSink` 寫入（透過 `TransactionRepository.append`／`appendBatch`）；audit **查詢**已接線為唯讀 `/aceeco history [player] [currency] [page]`（`HistoryService` 經 `ProductionAdapters.History`，權限 `aceeconomy.admin.history`），live server 驗證仍待完成 |
+| 11 | Rollback | RETAIN | `commands/RollbackCommand.java`；權限 `aceeconomy.admin.rollback` | CommandSurfaceCapabilityTest；v2 已接線：`RollbackService` 經 `ProductionAdapters.Rollback` 接入 `/aceeco rollback <transaction-id>`（console-only，root `aceeconomy.admin` + child `aceeconomy.admin.rollback`，atomic `StorageReversalExecutor`），live server 驗證仍待完成 |
 | 12 | Banknote（支票） | RESET | `BanknoteInputListener`、`listeners/BanknoteListener` | 權限/指令表面保留；schema 可破壞 |
 | 13 | 銀行 GUI | RETAIN | `gui/BankMenu.java`、`gui/GUIListener.java`；`/bank` | CommandSurfaceCapabilityTest |
 | 14 | 排行榜 | RETAIN | `LeaderboardManager.java`、`BaltopCommand`；`/baltop` | CommandSurfaceCapabilityTest |
@@ -76,14 +76,16 @@
 
 - **v2.0.0 已接線**：
   - **Persistence（JSON 預設 / SQLite / MySQL）**：`CompositionRoot` 透過 `StorageConfigParser` → `PersistenceBackendFactory` 依 `config.storage.type` 選擇 backend。預設 `json`（`JsonPersistenceBackend`，`data-v2.json`）；`sqlite` 為 `SqlBackend + SqliteDialect`（檔案路徑必須位於 plugin data folder 內，越界會被 parser 拒絕）；`mysql` 為 `SqlBackend + MySqlDialect` + HikariCP（連線與 pool 設定全部來自 `storage.mysql.*`，JDBC driver 已 shade，service files 已 `mergeServiceFiles()`）。`JsonPersistenceBackend` 與 `SqlBackend` 共用 `AccountRepository`／`TransactionRepository`／`PersistenceLifecycle` 三個 port。
-  - `EconomyService`／`EconomyApiImpl`、`PersistentAuditSink`（交易紀錄寫入，透過 `TransactionRepository.append`／`appendBatch`）、`LeaderboardService`（`/baltop`，由 `RepositoryLeaderboardSource` 接線 `AccountRepository.listAll()`）、banknote（`/withdraw cash`）、bank GUI（`/bank`）、Vault/PAPI 整合（皆 optional，`plugin.yml` `softdepend`）。
-  - `V2CommandRegistry` 註冊 `money`、`pay`、`withdraw`、`baltop`、`bank`、`aceeco` 六指令。
-- **v2.1 follow-up（刻意 deferred，v2.0.0 不宣稱可用）**：
-  - `HistoryService`（audit 查詢）、`RollbackService` 的 production wiring、command/API surface 與真實環境驗證。
-  - transactional rollback executor（目前僅 `InMemoryReversalExecutor` 測試替身，未接入 `CompositionRoot`）。
-  - persistent `IdempotencyGuard`（production 尚無持久化實作）。
+  - **Bank GUI deposit/redeem**：production durable binding 為 `CompositionRoot` → `BankUseCase` → `EconomyService.redeemBanknote`（per-account lock、pre-commit event、currency/amount/debt 驗證）→ `AtomicRedemptionStore.redeemPrepared`（由 application 準備的 `Account`/`Transaction`/`nonce` 做 balance/audit/nonce all-or-none）；JSON 為同 backend instance 的 `ReentrantLock` + copy-on-write + atomic rename（同 JVM 有效，無 OS file lock，故不宣稱跨進程），SQLite/MySQL 以同一 JDBC transaction + nonce 主鍵 `INSERT OR IGNORE`/`INSERT IGNORE` 達成跨進程 first-writer-wins；live 跨進程與 live MySQL 皆未驗證（release gate）。JSON／SQLite contract tests 已覆蓋 prepared 流程的 commit/replay/account-missing/restart。
+  - `EconomyService`／`EconomyApiImpl`、`PersistentAuditSink`（交易紀錄寫入，透過 `TransactionRepository.append`／`appendBatch`）、`HistoryService`（唯讀 audit 查詢，經 `ProductionAdapters.History` 接入 `/aceeco history`，權限 `aceeconomy.admin.history`）、`RollbackService`（交易回滾，經 `ProductionAdapters.Rollback` 接入 `/aceeco rollback <transaction-id>`：console-only、root+child 權限、UUID 前置驗證、typed success/already-reverted/failure 回覆、atomic `StorageReversalExecutor` 保證 marker ownership）、`LeaderboardService`（`/baltop`，由 `RepositoryLeaderboardSource` 接線 `AccountRepository.listAll()`）、banknote（`/withdraw cash`）、bank GUI（`/bank`）、Vault/PAPI 整合（皆 optional，`plugin.yml` `softdepend`）。
+  - `V2CommandRegistry` 註冊 `money`、`pay`、`withdraw`、`baltop`、`bank`、`aceeco` 六指令；`aceeco` 現含 `give`、`take`、`set`、`history`、`reload`、`rollback`、`backup`、`restore` 八個子指令。`backup` 可由授權玩家或主控台執行；`restore` 為 console-only destructive 操作。
+- **已接線但仍待實機驗證**：
+  - `/aceeco history` 與 `/aceeco rollback` 的 live server 實機驗證（unit/contract 測試已完成）。
+  - **Backup / restore 管理操作**：canonical 指令為 `/aceeco backup [label]` 與 `/aceeco restore <backup-id> confirm`，沒有 `/backup` 或 `/restore` root command。`backup` 需要 `aceconomy.admin` 與 `aceconomy.admin.backup`；`restore` 需要 `aceconomy.admin` 與 `aceconomy.admin.restore`，只能由主控台執行，只接受精確小寫 `confirm`，且有玩家在線時會拒絕。restore 會先做 JSON/schema/records/currency preflight，再建立 safety backup；成功後清除 leaderboard cache，但不熱刷新 session/GUI，讓玩家回來前必須重啟伺服器。
+  - JSON、SQLite、MySQL 共用 v2 logical JSON snapshot；MySQL 是 logical snapshot，不是 native dump，不能取代 `mysqldump`、`mariadb-dump` 或資料庫維運備份。
 - **Essentials / CMI import 已從本 Plan 移除**：依使用者決策，Essentials/CMI balance import 不屬於 v2.0.0，也不再列入本 Plan 的 v2.1 follow-up；不引入 vendor parser、import command/API 或 v1 → v2 migration 相容層。`ImportService` 若保留於 source 只代表一般化的 service/unit contract，不代表 Essentials/CMI 產品功能。
 - **未驗證事項**：
-  - 真實 Folia 驗證（Folia 26.1.2 fresh-install、RCON/遊戲內驗證、故障演練、backup/restore 實測）屬 **v2.0.0 release gate**，未通過則 v2.0.0 不視為已驗證可發布。
-  - live MySQL 連線尚未執行；目前只有 offline contract tests（`SqlBackendContractTest`、`SqlBackendConcurrencyTest`、`V2SchemaContractTest`、`PersistenceBackendFactoryTest`、`StorageConfigParserTest`）。
+  - live Folia/Bukkit 驗證（Folia 26.1.2 fresh-install、RCON/遊戲內驗證、故障演練、backup/restore 實測）屬 **v2.0.0 release gate**，未通過則 v2.0.0 不視為已驗證可發布。
+  - live MySQL 連線尚未執行；目前只有 offline contract tests（`SqlBackendContractTest`、`SqlBackendConcurrencyTest`、`V2SchemaContractTest`、`PersistenceBackendFactoryTest`、`StorageConfigParserTest`），屬 **v2.0.0 release gate**。
+  - 跨 process smoke 尚未驗證，屬 **v2.0.0 release gate**。
 - **unit tests / dead language keys 不代表可用性**：`src/test` 的 service contract tests 與 `lang/messages_*.yml`（v1 殘留、v2 未引用）不得視為 v2.0 production availability；v2 語系以 `lang/<locale>.yml` 為準。

@@ -36,6 +36,15 @@ public final class FakeBanknoteFactory implements BanknoteFactory {
         return Optional.ofNullable(store.get(stack));
     }
 
+    /**
+     * Plant an arbitrary claim for {@code stack} so tests can feed malformed or hostile claims
+     * (wrong namespace, stale schema, missing nonce, ...) through {@link #decode} exactly like
+     * a crafted item would arrive in production.
+     */
+    public void register(@NotNull ItemStack stack, @NotNull BanknoteClaim claim) {
+        store.put(stack, claim);
+    }
+
     public boolean wasMinted(@NotNull ItemStack stack) {
         return store.containsKey(stack);
     }

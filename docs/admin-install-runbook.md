@@ -185,8 +185,30 @@ player-only commands. The explicit subcommand forms below are the v2 command sur
 /aceeco give <player> <amount> [currency]
 /aceeco take <player> <amount> [currency]
 /aceeco set <player> <amount> [currency]
+/aceeco history [player] [currency] [page]
 /aceeco reload
 ```
+
+`/aceeco rollback` is deliberately not part of the routine checklist above. It is a destructive,
+console-only administrative action: run it only with both `aceeconomy.admin` and
+`aceeconomy.admin.rollback`, a valid transaction UUID, and explicit human approval or a dedicated
+drill — never as an automated or casual smoke check.
+
+`/aceeco rollback` 刻意不列入上方的例行檢查清單。它是具破壞性、僅限主控台的管理操作：必須同時
+具備 `aceeconomy.admin` 與 `aceeconomy.admin.rollback`、持有有效的交易 UUID，並經人工核准或
+專門演練才能執行；不得當成自動化或隨手的 smoke check。
+
+`/aceeco rollback <transaction-id>` is also available from the console. It is a destructive
+administrative action that reverses a recorded transaction, so do not run it as part of routine
+installation checks; keep it for incident handling. It requires both `aceeconomy.admin` and
+`aceeconomy.admin.rollback`, rejects players and invalid UUIDs up front, reports the reversal
+audit record ids on success, treats an already reverted transaction as an explicit no-op, and
+reports a marker persist failure as needing manual reconciliation.
+
+`/aceeco rollback <transaction-id>` 也可從主控台執行。它是具破壞性的管理操作，會復原一筆已記錄的
+交易，因此不要拿來做例行安裝檢查，留給事故處理使用。它需要同時擁有 `aceeconomy.admin` 與
+`aceeconomy.admin.rollback`，會事先拒絕玩家與無效 UUID；成功時回報 reversal 稽核紀錄 ID，
+已回滾的交易視為明確 no-op，marker 寫入失敗則要求先人工核對。
 
 With a test player, also check:
 

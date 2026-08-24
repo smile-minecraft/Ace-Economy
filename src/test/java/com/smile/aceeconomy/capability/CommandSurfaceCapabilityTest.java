@@ -51,6 +51,7 @@ class CommandSurfaceCapabilityTest {
                 "aceeconomy.admin", "aceeconomy.command.pay", "aceeconomy.command.money",
                 "aceeconomy.command.baltop", "aceeconomy.command.withdraw",
                 "aceeconomy.admin.give", "aceeconomy.admin.take", "aceeconomy.admin.set",
+                "aceeconomy.admin.history", "aceeconomy.admin.rollback",
                 "aceeconomy.bypass.debt", "aceeconomy.command.bank")) {
             assertTrue(perms.containsKey(p), "必須保留權限 " + p);
         }

@@ -130,16 +130,16 @@ start-balance: 1000.0
 
 ## Currencies / 貨幣
 
-The current configuration defines `dollar` and `token`. Each entry gives the application a stable ID, a display name, a symbol, and a decimal scale. Exactly one entry must have `default: true`; that entry supplies the default currency used by the general economy flow and Vault integration.
+The `currencies` section is an operator-owned map. The shipped file defines `dollar` and `token`, and any additional currency can be added the same way — the plugin loads whatever legal map the section contains. Each entry gives the application a stable ID, a display name, a symbol, and a decimal scale. Exactly one entry must have `default: true`; that entry supplies the default currency used by the general economy flow and Vault integration.
 
-目前設定檔定義 `dollar` 與 `token`。每個項目提供穩定的 ID、顯示名稱、符號與小數位數。必須且只能有一個項目使用 `default: true`；該項目是一般經濟流程與 Vault 整合使用的預設貨幣。
+`currencies` 區塊由伺服器管理者自行定義。隨附檔案定義了 `dollar` 與 `token`，並可用同樣方式新增其他貨幣——插件會載入區塊中任何合法的組合。每個項目提供穩定的 ID、顯示名稱、符號與小數位數。必須且只能有一個項目使用 `default: true`；該項目是一般經濟流程與 Vault 整合使用的預設貨幣。
 
 | Purpose / 用途 | Key / 設定鍵 | Default and format / 預設與格式 | Notes / 注意 |
 | --- | --- | --- | --- |
-| Human-readable name. / 給玩家看的名稱。 | `currencies.<id>.name` | `金幣` for `dollar`, `活動代幣` for `token`; text. / `dollar` 預設 `金幣`，`token` 預設 `活動代幣`；文字。 | The ID is the key below `currencies`; keep it stable once data exists. / ID 是 `currencies` 下的鍵，已有資料後請保持穩定。 |
-| Display symbol. / 顯示符號。 | `currencies.<id>.symbol` | `$` for `dollar`, `ⓒ` for `token`; text. / `dollar` 預設 `$`，`token` 預設 `ⓒ`；文字。 | Used beside amounts in user-facing output. / 顯示金額時會放在數值旁。 |
-| Number of fractional digits. / 小數位數。 | `currencies.<id>.scale` | `2` for `dollar`, `0` for `token`; non-negative integer. / `dollar` 預設 `2`，`token` 預設 `0`；非負整數。 | Amounts with more fractional digits are not implicitly rounded. / 超過位數的金額不會被自動四捨五入。 |
-| Select the default currency. / 指定預設貨幣。 | `currencies.<id>.default` | `true` for `dollar`, `false` for `token`; boolean. / `dollar` 預設 `true`，`token` 預設 `false`；布林值。 | Keep exactly one default. / 必須維持一個預設貨幣。 |
+| Human-readable name. / 給玩家看的名稱。 | `currencies.<id>.name` | Text; required for every currency. / 文字；每個貨幣必填。 | The ID is the key below `currencies`; keep it stable once data exists. / ID 是 `currencies` 下的鍵，已有資料後請保持穩定。 |
+| Display symbol. / 顯示符號。 | `currencies.<id>.symbol` | Text; required for every currency. / 文字；每個貨幣必填。 | Used beside amounts in user-facing output. / 顯示金額時會放在數值旁。 |
+| Number of fractional digits. / 小數位數。 | `currencies.<id>.scale` | Non-negative integer; required for every currency. / 非負整數；每個貨幣必填。 | Amounts with more fractional digits are not implicitly rounded. / 超過位數的金額不會被自動四捨五入。 |
+| Select the default currency. / 指定預設貨幣。 | `currencies.<id>.default` | Boolean; exactly one `true` across the section. / 布林值；整個區塊只能有一個 `true`。 | Keep exactly one default. / 必須維持一個預設貨幣。 |
 
 ```yaml
 currencies:
@@ -153,18 +153,39 @@ currencies:
     symbol: "ⓒ"
     scale: 0
     default: false
+  gem:
+    name: "Gem"
+    symbol: "*"
+    scale: 1
+    default: false
 ```
 
-Changing a name or symbol affects presentation. Changing an ID, scale, or default currency affects how later operations interpret amounts, so make a backup and plan the change before applying it to a live economy.
+Validation rules that apply to every entry:
 
-修改名稱或符號會影響顯示。修改 ID、小數位數或預設貨幣會影響後續操作如何解讀金額；套用到正式經濟系統前，請先備份並安排變更。
+每個項目都適用以下驗證規則：
+
+- The currency ID is the key under `currencies`. After trimming surrounding spaces and converting to lower case it must consist only of `a-z`, `0-9`, and `_`. IDs that differ only in case or spacing (for example `Dollar` and `dollar`) count as the same currency and are rejected as duplicates.
+- Every entry must define all four fields with the declared types; missing fields or values of the wrong type (a quoted number for `scale`, a quoted boolean for `default`) are rejected.
+- The section must contain at least one currency and exactly one default.
+
+- 貨幣 ID 是 `currencies` 下的鍵。去除前後空白並轉為小寫後，只能使用 `a-z`、`0-9` 與 `_`。只有大小寫或空白差異的 ID（例如 `Dollar` 與 `dollar`）視為同一貨幣，會以重複為由拒絕。
+- 每個項目都必須以正確型別定義四個欄位；缺欄位或型別錯誤（例如 `scale` 寫成加引號的文字、`default` 寫成 `"true"`）都會被拒絕。
+- 區塊至少要有一個貨幣，且恰好一個預設貨幣。
+
+A config that violates these rules stops the plugin at startup with an error naming the problem; nothing is partially applied. Changing a name or symbol affects presentation. Changing an ID, scale, or default currency affects how later operations interpret amounts, so make a backup and plan the change before applying it to a live economy.
+
+違反這些規則的設定會讓插件在啟動時停止，並留下指出問題的錯誤訊息；不會有半套用的狀態。修改名稱或符號會影響顯示。修改 ID、小數位數或預設貨幣會影響後續操作如何解讀金額；套用到正式經濟系統前，請先備份並安排變更。
+
+The currency set is read once at startup. The administrative reload action refreshes the configuration snapshot but does not rebuild the running registry, commands, Vault bridge, or placeholder expansion; adding, removing, or editing currencies takes effect after a restart.
+
+貨幣組合只在啟動時讀取一次。管理員 reload 操作會更新設定快照，但不會重建運行中的 registry、指令、Vault 橋接或 placeholder 擴充；新增、移除或修改貨幣請重啟後才會生效。
 
 ## Locale and retained command setting / 語系與保留的指令設定
 
 | Purpose / 用途 | Key / 設定鍵 | Default and format / 預設與格式 | Takes effect / 生效時機 |
 | --- | --- | --- | --- |
 | Select message language. / 選擇訊息語系。 | `settings.locale` | `zh_TW`; one of `en_US`, `zh_TW`, `zh_CN`. / 預設 `zh_TW`；可用 `en_US`、`zh_TW`、`zh_CN`。 | On language load or reload. / 語言載入或 reload 時。 |
-| Preserve the command setting used by the configuration format. / 保留設定格式中的指令設定。 | `settings.main-command-alias` | `aceeco`; text. / 預設 `aceeco`；文字。 | The formal root command is `/aceeco`. Changing this value does not rename or re-register that command. / 正式 root command 是 `/aceeco`；修改此值不會重新命名或註冊該指令。 |
+| Additional label for the admin command. / 管理指令的額外標籤。 | `settings.main-command-alias` | `aceeco`; text matching `a-z`, `0-9`, `-`, `_`. / 預設 `aceeco`；文字，限 `a-z`、`0-9`、`-`、`_`。 | At startup only; restart after changing it. / 只在啟動時生效；修改後請重啟。 |
 
 ```yaml
 settings:
@@ -172,15 +193,29 @@ settings:
   main-command-alias: "aceeco"
 ```
 
-Use `/aceeco` as the root command in server instructions and command examples. Keep `main-command-alias: "aceeco"` when the key is present; changing the value does not change the documented command usage. The language files are named `lang/en_US.yml`, `lang/zh_TW.yml`, and `lang/zh_CN.yml`. Do not put passwords or webhook URLs in language files.
+The formal root command is `/aceeco`. Setting `main-command-alias` to another value attaches that label as an additional alias of the same admin command inside AceEconomy's command registry at startup. An empty or blank value keeps the default entry point.
 
-伺服器操作說明與指令範例請使用 `/aceeco` 作為 root command。若檔案中保留這個設定鍵，請維持 `main-command-alias: "aceeco"`；修改該值不會改變文件中的正式指令用法。語言檔名稱為 `lang/en_US.yml`、`lang/zh_TW.yml` 與 `lang/zh_CN.yml`。請不要把密碼或 webhook URL 放進語言檔。
+正式 root command 是 `/aceeco`。把 `main-command-alias` 設成其他值時，插件會在啟動時把該標籤掛為同一個管理指令在 AceEconomy 指令 registry 內的額外別名。空值或空白會維持預設入口。
+
+Two boundaries apply:
+
+此設定有兩個邊界：
+
+1. **Collision rejection.** The value must not collide with any command label the plugin already declares in `plugin.yml` (the roots `money`, `pay`, `aceeco`, `withdraw`, `baltop`, `bank` and their aliases such as `balance`, `bal`, `balancetop`, `top`, `menu`, `bankmenu`) nor with another AceEconomy command name. A collision stops the plugin at startup with a clear error instead of overriding the existing entry — `/bank` and the other shipped entries can never be taken over by this setting.
+2. **Static Bukkit labels.** The server only delivers command labels that exist in `plugin.yml`, which ships fixed with the release. A custom alias is validated and resolvable inside AceEconomy's dispatcher, but typing it in-game reaches the plugin only after the label is also declared as a root/alias in `plugin.yml`; v2.0.0 does not register new Bukkit commands at runtime. Changing the value always requires a restart, and reload never re-registers commands.
+
+1. **衝突拒絕。** 設定值不得與插件已在 `plugin.yml` 宣告的任何指令標籤（root：`money`、`pay`、`aceeco`、`withdraw`、`baltop`、`bank`；alias：如 `balance`、`bal`、`balancetop`、`top`、`menu`、`bankmenu`）或其他 AceEconomy 指令名稱衝突。衝突會讓插件在啟動時以明確錯誤停止，而不是覆蓋既有入口——這個設定永遠無法搶走 `/bank` 等既有指令。
+2. **Bukkit 標籤是靜態的。** 伺服器只會轉送 `plugin.yml` 中宣告的指令標籤，而該檔案隨版本固定發布。自訂 alias 會經過驗證並可在 AceEconomy 的 dispatcher 內解析，但要在遊戲內實際輸入該標籤抵達插件，前提是該標籤也已宣告在 `plugin.yml` 的 root/alias 中；v2.0.0 不會在 runtime 註冊新的 Bukkit 指令。修改此值一律需要重啟，reload 不會重新註冊指令。
+
+The language files are named `lang/en_US.yml`, `lang/zh_TW.yml`, and `lang/zh_CN.yml`. Do not put passwords or webhook URLs in language files.
+
+語言檔名稱為 `lang/en_US.yml`、`lang/zh_TW.yml` 與 `lang/zh_CN.yml`。請不要把密碼或 webhook URL 放進語言檔。
 
 ## Leaderboard / 排行榜
 
 | Purpose / 用途 | Key / 設定鍵 | Default and format / 預設與格式 | Notes / 注意 |
 | --- | --- | --- | --- |
-| Make leaderboard features available. / 啟用排行榜功能。 | `leaderboard.enabled` | `true`; boolean. / 預設 `true`；布林值。 | Use with the selected storage backend and the server's leaderboard commands. / 請和所選儲存 backend 及伺服器上的排行榜指令一起規劃。 |
+| Make leaderboard features available. / 啟用排行榜功能。 | `leaderboard.enabled` | `true`; boolean. / 預設 `true`；布林值。 | `false` removes the executable `/baltop` handler at startup; the label itself is static in `plugin.yml`. Restart after changing it. / `false` 會在啟動時移除可執行的 `/baltop` 處理器；指令標籤本身仍靜態存在於 `plugin.yml`。修改後請重啟。 |
 | Control how long a cached result is reused. / 控制排行榜快取重用時間。 | `leaderboard.cache-time-seconds` | `300`; integer seconds. / 預設 `300`；整數秒。 | A shorter value refreshes more often; a longer value reduces refresh work. / 值較小會更常更新，值較大會減少更新次數。 |
 | Set entries per page. / 設定每頁筆數。 | `leaderboard.page-size` | `10`; integer. / 預設 `10`；整數。 | This controls the page size, not the number of stored accounts. / 這只控制每頁顯示數量，不會限制帳戶數。 |
 
@@ -190,6 +225,10 @@ leaderboard:
   cache-time-seconds: 300
   page-size: 10
 ```
+
+With `enabled: false` the plugin does not build or attach the baltop command spec in its registry, so no economy code runs for it. Because `plugin.yml` still declares the static `baltop` label, the server answers with the plain usage line instead; fully removing the label requires a release that changes `plugin.yml`. The toggle is read once at startup — restart after changing it.
+
+設定 `enabled: false` 時，插件不會在其 registry 建立或掛上 baltop 指令 spec，因此不會執行任何經濟程式碼。由於 `plugin.yml` 仍宣告靜態的 `baltop` 標籤，伺服器只會回應單純的 usage 說明；要完全移除該標籤需要變更 `plugin.yml` 的新版本。此開關只在啟動時讀取——修改後請重啟。
 
 ## Discord and secret boundaries / Discord 與秘密邊界
 
@@ -215,6 +254,6 @@ Never publish a real webhook URL, database password, or connection details with 
 3. Edit `config.yml` without changing the YAML structure. / 編輯 `config.yml`，不要改變 YAML 結構。
 4. Start the server and check the startup log for configuration or connection errors. / 啟動伺服器，查看啟動日誌是否有設定或連線錯誤。
 
-The administrative reload action reloads the configuration and language snapshots. It does not move data between backends or reopen the storage backend; use a restart for storage changes and for settings that are captured while services are created.
+The administrative reload action reloads the configuration and language snapshots. It does not move data between backends or reopen the storage backend. Settings that are captured while services are created — storage selection, currencies, `settings.main-command-alias`, and `leaderboard.enabled` — keep their startup values until the next restart; a reload never rebuilds the currency registry, re-registers commands, or rewires Vault and placeholder integrations.
 
-管理員 reload 操作會重新載入設定與語言快照，但不會在 backend 之間搬移資料，也不會重新開啟儲存 backend。修改儲存設定，以及在服務建立時讀取的設定，請使用重啟。
+管理員 reload 操作會重新載入設定與語言快照，但不會在 backend 之間搬移資料，也不會重新開啟儲存 backend。在服務建立時讀取的設定——儲存方式、貨幣、`settings.main-command-alias`、`leaderboard.enabled`——會維持啟動時的值直到下次重啟；reload 不會重建貨幣 registry、不會重新註冊指令，也不會重接 Vault 與 placeholder 整合。

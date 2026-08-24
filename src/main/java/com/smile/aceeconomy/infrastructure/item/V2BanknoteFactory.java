@@ -19,9 +19,9 @@ import java.util.UUID;
  * v2 identity, schema, and typed gameplay tags (value / issuer / nonce / currency).
  *
  * <p>Construction calls {@link AceItemFactory#create(String)}, which requires a live server to
- * initialise AceLib's identity keys; this class is therefore instantiated by the CompositionRoot
- * (Task 12) at server start, not in offline unit tests. Offline tests use a deterministic fake that
- * implements the same {@link BanknoteFactory} contract.
+ * initialise AceLib's identity keys; this class is therefore instantiated by the production
+ * composition root at server start, not in offline unit tests. Offline tests use a deterministic
+ * fake that implements the same {@link BanknoteFactory} contract.
  */
 public final class V2BanknoteFactory implements BanknoteFactory {
 

@@ -205,14 +205,15 @@ v2 是**同 repository 的 clean-slate 重寫**（計畫 §1），v1 原始碼�
 
 **v2.0.0 已接線（production 可用）**：
 
-- **Persistence**：JSON（預設）、SQLite、MySQL 三種 backend 皆已透過 `StorageConfigParser` + `PersistenceBackendFactory` 接入 `CompositionRoot`，由 `config.storage.type` 選擇；`EconomyService`、`EconomyApiImpl`、`PersistentAuditSink`（交易紀錄寫入）、`LeaderboardService`（`/baltop`）、banknote（`/withdraw cash`）、bank GUI（`/bank`）與 Vault/PAPI 整合皆已接入 entrypoint。
-- `V2CommandRegistry` 註冊 `money`、`pay`、`withdraw`、`baltop`、`bank`、`aceeco` 六個指令，對應 `plugin.yml` commands/permissions。
+- **Persistence**：JSON（預設）、SQLite、MySQL 三種 backend 皆已透過 `StorageConfigParser` + `PersistenceBackendFactory` 接入 `CompositionRoot`，由 `config.storage.type` 選擇（JSON 為單 backend instance / 單 JVM `ReentrantLock` + copy-on-write + atomic rename，不宣稱跨進程 first-writer-wins；SQLite/MySQL 以同一 JDBC transaction + nonce 主鍵 `INSERT OR IGNORE` 達成跨進程 first-writer-wins，JSON 跨進程需 OS file lock/CAS，列 release gate）；`EconomyService`、`EconomyApiImpl`、`PersistentAuditSink`（交易紀錄寫入）、`HistoryService`（唯讀 audit 查詢，經 `ProductionAdapters.History` 接入 `/aceeco history`）、`RollbackService`（交易回滾，經 `ProductionAdapters.Rollback` 接入 `/aceeco rollback <transaction-id>`，底層為 atomic `StorageReversalExecutor`）、`LeaderboardService`（`/baltop`）、banknote（`/withdraw cash`）、bank GUI（`/bank`）與 Vault/PAPI 整合皆已接入 entrypoint。
+- `V2CommandRegistry` 註冊 `money`、`pay`、`withdraw`、`baltop`、`bank`、`aceeco` 六個指令，對應 `plugin.yml` commands/permissions；`aceeco` 現含 `give`、`take`、`set`、`history`、`reload`、`rollback`、`backup`、`restore` 八個子指令。`rollback` 與 `restore` 為 console-only destructive 操作，`backup` 可由授權玩家或主控台執行；三者分別使用 root `aceconomy.admin` 與 child `aceeconomy.admin.rollback`、`aceeconomy.admin.backup`、`aceeconomy.admin.restore`。
 
-**v2.1 follow-up（刻意 deferred，v2.0.0 不宣稱可用）**：
+**仍待補驗（不把測試契約當成實機證據）**：
 
-- `HistoryService`（audit 查詢）、`RollbackService` 的 **production wiring、command/API surface 與真實環境驗證**皆屬 v2.1；v2.0.0 **沒有** history／rollback 指令或 API。`operations` 層的 service 類別與 unit tests 存在於 source，但不等於 v2.0 production 可用。
-- **transactional rollback executor**：目前唯一實作 `InMemoryReversalExecutor` 是 in-memory 測試替身，未接入 `CompositionRoot`；把餘額變更與 audit record append 包進單一 storage transaction 的 production executor 屬 v2.1。
-- **persistent `IdempotencyGuard`**：`ports.IdempotencyGuard` 是 interface，production 尚無持久化實作（測試用 `InMemoryIdempotencyGuard`）；persistent binding 屬 v2.1。
+- `/aceeco history` 與 `/aceeco rollback` 的 unit/contract 測試已完成，但**尚未在 live server 實機驗證**（見 §7）；rollback 的 live 驗證需含 player sender 拒絕、invalid UUID、already-reverted no-op 與 marker failure 路徑。
+- **Backup / restore 管理操作**：canonical 指令是 `/aceeco backup [label]` 與 `/aceeco restore <backup-id> confirm`，沒有獨立的 `/backup` 或 `/restore` 根指令。`backup` 需要 `aceconomy.admin` 與 `aceconomy.admin.backup`；`restore` 需要 `aceconomy.admin` 與 `aceconomy.admin.restore`，且只能由主控台執行。`restore` 只接受精確小寫 `confirm`，有玩家在線時會拒絕；還原前會完成 JSON/schema/records/currency preflight，再建立 safety backup，任一 gate 失敗都不觸碰 live state。成功後會清除 leaderboard cache，但不會熱刷新 session/GUI；讓玩家回來前必須重啟伺服器。
+- **MySQL 限制**：JSON、SQLite、MySQL 共用 v2 logical JSON snapshot；MySQL 使用 logical snapshot，不是 native dump，不能取代 `mysqldump`、`mariadb-dump` 或資料庫維運的實體／災難復原備份。live MySQL、live Folia 與真實伺服器 backup/restore proof 尚未完成。
+- **persistent `IdempotencyGuard`**：`ports.IdempotencyGuard` 是 interface，production 已有 `PersistentIdempotencyGuard` binding 用於 banknote replay guard；更廣泛的 idempotency 應用範圍擴充屬後續工作。
 - **unit tests 與 dead language keys 不代表可用性**：`src/test` 的 service contract tests 與 `lang/messages_*.yml`（v1 殘留、v2 未引用）不得視為 v2.0 production availability；v2 語系以 `lang/<locale>.yml`（`en_US`／`zh_TW`／`zh_CN`）為準。
 
 **Essentials / CMI import 已從本 Plan 移除**：依使用者決策，Essentials/CMI balance import 不屬於 v2.0.0，也不再列入本 Plan 的 v2.1 follow-up；不引入 vendor parser、import command/API 或 v1 → v2 migration 相容層。`ImportService` 若保留於 source 只代表一般化的 service/unit contract，不代表 Essentials/CMI 產品功能；後續可另行刪除或重新規劃，不阻擋本 Plan。
@@ -271,4 +272,4 @@ v2 是**同 repository 的 clean-slate 重寫**（計畫 §1），v1 原始碼�
 - **failure injection**：backup/restore、DB failure、AceLib non-ready、external integration failure、shutdown in-flight 都已有 unit/contract tests，但尚未在真實伺服器做 failure injection；這兩類證據不能混寫。
 - **backup/restore 實機操作**：備份、清除後 restore 的真實伺服器流程尚未完成；現有測試不代表已做 live 演練。
 - **Vault 依賴語意分歧**：目前 `plugin.yml` 使用 `softdepend`；文件其他位置若仍寫成 hard dependency，應以實際 source 為準另行校正。
-- **v2.0.0 邊界**：Essentials/CMI、History、Rollback、Import 的 production wiring 不屬於 v2.0.0；source 中保留的 service 或 contract tests 不代表這些功能已交付。
+- **v2.0.0 邊界**：Essentials/CMI import 的 production wiring 不屬於 v2.0.0；source 中保留的 service 或 contract tests 不代表這些功能已交付。History 與 Rollback 已接入 production composition（`/aceeco history`、`/aceeco rollback <transaction-id>`，見 §6.4），但尚未做 live server／Bukkit bridge 驗證。

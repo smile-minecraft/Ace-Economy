@@ -29,8 +29,11 @@ import java.util.UUID;
  *       {@link RollbackResult#alreadyReverted()} no-op without re-executing the reversal, so a
  *       re-run never produces duplicate effects.</li>
  *   <li><b>Failure policy</b> — an executor failure yields a typed {@link RollbackError#EXECUTION_FAILED}
- *       and the marker is NOT written, leaving the item retryable. Marker-persistence
- *       ({@code markReverted}) is kept separate from reversal execution (the injected executor).</li>
+ *       and the marker is NOT written, leaving the item retryable. Marker ownership follows the
+ *       executor: one that persists markers inside its own atomic commit
+ *       ({@link ReversalExecutor#ownsMarkerPersistence()}) is never handed a second marker write;
+ *       legacy executors keep the service-owned idempotent {@code markReverted} pass, whose
+ *       failure yields {@link RollbackError#MARK_FAILED}.</li>
  * </ul>
  */
 public final class RollbackService {
@@ -87,15 +90,23 @@ public final class RollbackService {
             return RollbackResult.failure(RollbackError.EXECUTION_FAILED, outcome.message());
         }
 
-        try {
-            for (UUID markerId : plan.markerIds()) {
-                transactions.markReverted(markerId);
+        // Marker ownership follows the executor. An atomic executor that already committed
+        // the markers inside its storage transaction must never receive a second, separate
+        // marker write: such a write failing after a durable reversal would report a false
+        // MARK_FAILED for an operation that is fully committed and safely retryable as
+        // ALREADY_REVERTED. Legacy (marker-unaware) executors keep the service-owned
+        // idempotent mark pass below.
+        if (!executor.ownsMarkerPersistence()) {
+            try {
+                for (UUID markerId : plan.markerIds()) {
+                    transactions.markReverted(markerId);
+                }
+            } catch (PersistenceException e) {
+                // Reversal already applied but the marker could not be persisted. Surface as MARK_FAILED
+                // so operators know the effect occurred without durable bookkeeping.
+                return RollbackResult.failure(RollbackError.MARK_FAILED,
+                        "reversal applied but marker persist failed: " + e.getMessage());
             }
-        } catch (PersistenceException e) {
-            // Reversal already applied but the marker could not be persisted. Surface as MARK_FAILED
-            // so operators know the effect occurred without durable bookkeeping.
-            return RollbackResult.failure(RollbackError.MARK_FAILED,
-                    "reversal applied but marker persist failed: " + e.getMessage());
         }
 
         return RollbackResult.success(outcome.reversalTransactionIds());

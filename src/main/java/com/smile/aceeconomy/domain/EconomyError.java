@@ -10,5 +10,6 @@ public enum EconomyError {
     DEBT_DISABLED,         // negative balance not allowed by policy
     SAME_ACCOUNT,
     TRANSACTION_CANCELLED, // pre-commit event cancelled the mutation
-    AUDIT_FAILURE
+    AUDIT_FAILURE,
+    REPLAY_DETECTED       // banknote nonce already consumed
 }

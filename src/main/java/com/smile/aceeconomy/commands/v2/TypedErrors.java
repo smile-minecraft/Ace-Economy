@@ -27,6 +27,7 @@ public final class TypedErrors {
             case SAME_ACCOUNT -> "ACELIB-CMD-SAME-ACCOUNT";
             case TRANSACTION_CANCELLED -> "ACELIB-CMD-TRANSACTION-CANCELLED";
             case AUDIT_FAILURE -> "ACELIB-CMD-AUDIT-FAILURE";
+            case REPLAY_DETECTED -> "ACELIB-CMD-REPLAY-DETECTED";
         };
         return CommandException.custom(code, result.message());
     }

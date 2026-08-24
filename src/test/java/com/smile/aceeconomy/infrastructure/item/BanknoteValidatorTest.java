@@ -95,4 +95,29 @@ class BanknoteValidatorTest {
         assertFalse(second.success(), "second validation of same nonce is a replay");
         assertEquals("replay.detected", second.reasonCode());
     }
+
+    @Test
+    void validateStructureAcceptsWithoutConsumingTheNonce() {
+        BanknoteClaim c = validClaim();
+        InMemoryIdempotencyGuard guard = new InMemoryIdempotencyGuard();
+        BanknoteValidator v = new BanknoteValidator(guard);
+
+        ValidationResult structural = v.validateStructure(c);
+
+        assertTrue(structural.success(), "structural checks must accept a valid claim");
+        assertFalse(guard.isConsumed(c.nonce()),
+                "structure-only validation must leave the nonce unconsumed");
+        // The full validate() still consumes, so the two entry points compose correctly.
+        assertTrue(v.validate(c).success());
+        assertTrue(guard.isConsumed(c.nonce()));
+    }
+
+    @Test
+    void validateStructureReturnsSameReasonCodesAsValidate() {
+        BanknoteClaim c = validClaim();
+        BanknoteClaim wrong = new BanknoteClaim(c.identity(), new ItemSchemaVersion(1, 0),
+                100L, c.issuer(), c.nonce(), "USD");
+        BanknoteValidator v = new BanknoteValidator(new InMemoryIdempotencyGuard());
+        assertEquals("schema.version", v.validateStructure(wrong).reasonCode());
+    }
 }

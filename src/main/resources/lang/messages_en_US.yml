@@ -63,6 +63,12 @@ admin:
   
   admin-action-failed: "<red>Action failed!</red>"
   admin-taking-failed: "<red>Action failed! Insufficient funds likely.</red>"
+
+  backup-success: "<green>Backup created: <white><backup_id></white> (logical v2 snapshot)</green>"
+  backup-failed: "<red>Backup failed: <white><reason></white></red>"
+  restore-success: "<green>Restored backup <white><backup_id></white>. Safety backup: <white><safety_id></white>. Restart the server before players join!</green>"
+  restore-confirm-required: "<red>Restore is destructive. Re-run exactly as: <white>/aceeco restore <backup_id> confirm</white></red>"
+  restore-failed: "<red>Restore failed: <white><reason></white></red>"
   
   # Help messages
   help-header: "<yellow>--- AceEconomy Commands ---</yellow>"

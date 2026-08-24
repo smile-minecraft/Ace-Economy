@@ -146,7 +146,9 @@ AceEconomy removes the amount from your balance and gives you a physical banknot
 
 ### Redeem a banknote
 
-Right-click the banknote to redeem it into your account. A banknote can be redeemed only once. If the item is damaged, invalid, or already used, keep it and ask a server administrator to help rather than trying to duplicate the transaction.
+Open the bank dashboard with `/bank open`, hold the banknote in your main hand, and click the deposit button (the top-middle slot). The amount is credited to your account and the banknote disappears from your hand. A banknote can be redeemed only once — the server remembers every redeemed note even after a restart. If the deposit is refused (invalid, already used, or unknown currency), the banknote stays in your hand; keep it and ask a server administrator for help rather than trying to duplicate the transaction.
+
+Right-clicking a banknote to redeem it is not implemented yet; the bank dashboard deposit button is the only redemption path.
 
 ### 我想把錢變成可以攜帶的物品
 
@@ -168,7 +170,9 @@ AceEconomy 會從你的餘額扣除指定金額，並給你一張實體銀行支
 
 #### 兌回銀行支票
 
-手持銀行支票按右鍵，就會把金額存回你的帳戶。每張支票只能兌回一次；如果物品損壞、無效或已經使用過，請保留物品並找管理員處理，不要嘗試複製交易。
+用 `/bank open` 開啟銀行面板，手持銀行支票並點擊存款按鈕（上方中間那一格），金額就會存入你的帳戶，支票也會從手中消失。每張支票只能兌回一次，伺服器會永久記住已兌換過的支票。如果存款被拒絕（物品無效、已經使用過或貨幣不明），支票會留在你手上；請保留物品並找管理員處理，不要嘗試複製交易。
+
+目前尚未支援「對支票按右鍵兌回」；銀行面板的存款按鈕是唯一的兌回方式。
 
 ## I want to see the richest players
 

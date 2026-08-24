@@ -311,10 +311,11 @@ final class PersistenceBackendFactoryTest {
     // ---------- API surface sanity ----------
 
     @Test
-    void wiringResultExposesTheSameBackendAsAllThreePorts() throws Exception {
-        // JsonPersistenceBackend and SqlBackend both implement the three ports; the
+    void wiringResultExposesTheSameBackendAsAllFivePorts() throws Exception {
+        // JsonPersistenceBackend and SqlBackend both implement the five ports; the
         // factory returns the same instance cast to each. This guarantees no behaviour
-        // drift between AccountRepository and TransactionRepository reads.
+        // drift between AccountRepository and TransactionRepository reads and keeps the
+        // rollback / nonce operations on the same storage boundary as ordinary reads.
         StorageConfig.Json cfg = new StorageConfig.Json(dataFolder.resolve("triple.json"));
         RecordingResources resources = new RecordingResources();
         var result = PersistenceBackendFactory.create(cfg, resources);
@@ -322,6 +323,24 @@ final class PersistenceBackendFactoryTest {
         TransactionRepository transactions = result.transactions();
         PersistenceLifecycle lifecycle = result.lifecycle();
         assertTrue(accounts == transactions && transactions == lifecycle,
-                "all three ports must be the same backend instance");
+                "all ports must be the same backend instance");
+        assertTrue(result.reversals() == accounts,
+                "the atomic reversal store must be the same backend instance");
+        assertTrue(result.nonces() == accounts,
+                "the durable nonce store must be the same backend instance");
+    }
+
+    @Test
+    void sqliteWiringExposesTheSameBackendAsAllFivePorts() throws Exception {
+        StorageConfig.Sqlite cfg = new StorageConfig.Sqlite(dataFolder.resolve("five.sqlite"));
+        RecordingResources resources = new RecordingResources();
+        var result = PersistenceBackendFactory.create(cfg, resources,
+                file -> DriverManager.getConnection("jdbc:sqlite:" + file.toAbsolutePath()),
+                null);
+        assertTrue(result.reversals() == result.accounts(),
+                "SQLite atomic reversal store must be the same backend instance");
+        assertTrue(result.nonces() == result.accounts(),
+                "SQLite durable nonce store must be the same backend instance");
+        resources.runAllInReverse();
     }
 }

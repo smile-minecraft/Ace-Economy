@@ -94,4 +94,30 @@ class PlaceholderResolverTest {
         UUID uuid = accountWith(0);
         assertNull(resolver.resolve(player(uuid, "A"), null));
     }
+
+    @Test
+    void namedPlaceholderWorksForArbitraryConfiguredCurrency() {
+        // A registry shaped like CurrencyConfigParser output (config-defined third currency)
+        // must drive the named placeholder path without any hardcoded dollar/token assumption.
+        com.smile.aceeconomy.domain.CurrencyRegistry currencies =
+                com.smile.aceeconomy.domain.CurrencyRegistry.of(java.util.List.of(
+                        com.smile.aceeconomy.domain.Currency.define("dollar", "Dollar", "$", 2, true),
+                        com.smile.aceeconomy.domain.Currency.define("gem", "Gem", "*", 1, false)));
+        com.smile.aceeconomy.application.EconomyService service =
+                new com.smile.aceeconomy.application.EconomyService(currencies, DebtPolicy.disabled(),
+                        com.smile.aceeconomy.domain.Amount.zero(2),
+                        new com.smile.aceeconomy.ports.inmemory.InMemoryAccountRepository(),
+                        new com.smile.aceeconomy.ports.inmemory.RecordingAuditSink(),
+                        new com.smile.aceeconomy.ports.inmemory.FixedClock(),
+                        new com.smile.aceeconomy.api.v2.InMemoryTransactionEventPublisher());
+        EconomyApi gemApi = new EconomyApiImpl(service, new com.smile.aceeconomy.api.v2.InMemoryTransactionEventPublisher());
+        PlaceholderResolver gemResolver = new PlaceholderResolver(gemApi, currencies);
+
+        UUID uuid = UUID.randomUUID();
+        gemApi.createAccount(uuid, "acc");
+        gemApi.deposit(uuid, "gem", currencies.get("gem").amountOf(new java.math.BigDecimal("1.5")));
+
+        assertEquals("1.5", gemResolver.resolve(player(uuid, "A"), "balance_gem"));
+        assertEquals("*1.5", gemResolver.resolve(player(uuid, "A"), "balance_gem_formatted"));
+    }
 }

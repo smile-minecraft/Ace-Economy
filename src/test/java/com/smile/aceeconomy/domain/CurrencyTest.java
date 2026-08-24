@@ -56,4 +56,21 @@ class CurrencyTest {
         assertThrows(IllegalArgumentException.class, () -> CurrencyRegistry.of(java.util.List.of(dollar, token)));
         assertEquals("dollar", CurrencyRegistry.of(java.util.List.of(dollar)).getDefault().id());
     }
+
+    @Test
+    @DisplayName("define rejects ids outside [a-z0-9_] after normalization; trim/mixed case still fine")
+    void rejectsInvalidIdCharacters() {
+        assertThrows(IllegalArgumentException.class, () -> Currency.define("gold coin", "G", "G", 0, true));
+        assertThrows(IllegalArgumentException.class, () -> Currency.define("金幣", "G", "G", 0, true));
+        assertThrows(IllegalArgumentException.class, () -> Currency.define("dollar!", "G", "G", 0, true));
+        assertEquals("do_lar", Currency.define(" Do_LaR ", "G", "G", 0, true).id());
+    }
+
+    @Test
+    @DisplayName("registry rejects duplicated normalized ids instead of silently overwriting")
+    void registryRejectsDuplicateNormalizedIds() {
+        assertThrows(IllegalArgumentException.class, () -> CurrencyRegistry.of(java.util.List.of(
+                Currency.define("Dollar", "First", "$", 2, true),
+                Currency.define(" dollar ", "Second", "$", 2, false))));
+    }
 }

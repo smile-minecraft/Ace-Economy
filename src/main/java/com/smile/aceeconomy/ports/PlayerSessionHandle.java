@@ -9,8 +9,9 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * Read-only view of a player session handed back to callers (listeners, Task 12 wiring). The lifecycle
- * manager keeps the mutable {@code PlayerSession} internal; this handle is the stable, public contract.
+ * Read-only view of a player session handed back to callers (listeners and composition wiring).
+ * The lifecycle manager keeps the mutable {@code PlayerSession} internal; this handle is the stable,
+ * public contract.
  */
 public interface PlayerSessionHandle {
 

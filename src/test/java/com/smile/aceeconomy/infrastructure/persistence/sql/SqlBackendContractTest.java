@@ -6,6 +6,7 @@ import com.smile.aceeconomy.domain.Transaction;
 import com.smile.aceeconomy.domain.TransactionType;
 import com.smile.aceeconomy.infrastructure.persistence.Fixtures;
 import com.smile.aceeconomy.ports.persistence.PersistenceException;
+import com.smile.aceeconomy.ports.persistence.RedemptionResult;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -17,9 +18,14 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -277,6 +283,339 @@ final class SqlBackendContractTest {
         backend.truncateAndRecreate();
         assertTrue(backend.loadAll().isEmpty());
         assertEquals(1, backend.schemaVersion());
+        backend.close();
+    }
+
+    // ---------------- atomic reversal ----------------
+
+    @Test
+    void applyReversalPersistsBalancesRecordsAndMarkersAndSurvivesRestart() throws Exception {
+        Path db = dir.resolve("reversal.db");
+        SqlBackend backend = backendFor(db);
+        backend.initialize();
+        UUID owner = UUID.randomUUID();
+        backend.create(owner, "alice", Map.of("dollar", Fixtures.amt("100.00")));
+        UUID originalId = UUID.randomUUID();
+        backend.append(sampleTx(originalId, owner, "dollar", "100.00",
+                TransactionType.DEPOSIT, "0.00", "100.00"));
+
+        Account reversed = backend.load(owner).orElseThrow()
+                .withdraw("dollar", Fixtures.amt("100.00"));
+        Transaction reversalRecord = Fixtures.tx(UUID.randomUUID(), owner, null, "dollar",
+                Fixtures.amt("100.00"), TransactionType.WITHDRAW,
+                Fixtures.amt("100.00"), Fixtures.amt("0.00"));
+
+        backend.applyReversal(List.of(reversed), List.of(reversalRecord), List.of(originalId));
+
+        assertEquals(0, Fixtures.amt("0.00")
+                .compareTo(backend.load(owner).orElseThrow().balances().get("dollar")));
+        assertEquals(2, backend.loadAll().size());
+        assertTrue(backend.isReverted(originalId));
+        backend.close();
+
+        // Reopen the same file: every effect must have been committed together.
+        SqlBackend reopened = backendFor(db);
+        reopened.initialize();
+        assertEquals(0, Fixtures.amt("0.00")
+                .compareTo(reopened.load(owner).orElseThrow().balances().get("dollar")));
+        assertEquals(2, reopened.loadAll().size());
+        assertTrue(reopened.isReverted(originalId));
+        reopened.close();
+    }
+
+    @Test
+    void applyReversalWithUnknownMarkerRollsBackEverything() throws Exception {
+        SqlBackend backend = backendFor(dir.resolve("reversalfail.db"));
+        backend.initialize();
+        UUID owner = UUID.randomUUID();
+        backend.create(owner, "alice", Map.of("dollar", Fixtures.amt("100.00")));
+        UUID originalId = UUID.randomUUID();
+        backend.append(sampleTx(originalId, owner, "dollar", "100.00",
+                TransactionType.DEPOSIT, "0.00", "100.00"));
+
+        Account reversed = backend.load(owner).orElseThrow()
+                .withdraw("dollar", Fixtures.amt("100.00"));
+        Transaction reversalRecord = Fixtures.tx(UUID.randomUUID(), owner, null, "dollar",
+                Fixtures.amt("100.00"), TransactionType.WITHDRAW,
+                Fixtures.amt("100.00"), Fixtures.amt("0.00"));
+
+        assertThrows(PersistenceException.class, () -> backend.applyReversal(
+                List.of(reversed), List.of(reversalRecord), List.of(UUID.randomUUID())));
+
+        // The JDBC transaction rolled back: no balance change, no record, no marker.
+        assertEquals(0, Fixtures.amt("100.00")
+                .compareTo(backend.load(owner).orElseThrow().balances().get("dollar")));
+        assertEquals(1, backend.loadAll().size());
+        assertFalse(backend.isReverted(originalId));
+
+        // Backend remains usable after the rollback.
+        backend.append(sampleTx(UUID.randomUUID(), owner, "dollar", "1.00",
+                TransactionType.DEPOSIT, "100.00", "101.00"));
+        assertEquals(2, backend.loadAll().size());
+        backend.close();
+    }
+
+    @Test
+    void applyReversalWithDuplicateReversalIdRollsBackEverything() throws Exception {
+        SqlBackend backend = backendFor(dir.resolve("reversaldup.db"));
+        backend.initialize();
+        UUID owner = UUID.randomUUID();
+        backend.create(owner, "alice", Map.of("dollar", Fixtures.amt("100.00")));
+        UUID originalId = UUID.randomUUID();
+        backend.append(sampleTx(originalId, owner, "dollar", "100.00",
+                TransactionType.DEPOSIT, "0.00", "100.00"));
+
+        Account reversed = backend.load(owner).orElseThrow()
+                .withdraw("dollar", Fixtures.amt("100.00"));
+        Transaction duplicate = sampleTx(originalId, owner, "dollar", "100.00",
+                TransactionType.WITHDRAW, "100.00", "0.00");
+
+        assertThrows(PersistenceException.class, () -> backend.applyReversal(
+                List.of(reversed), List.of(duplicate), List.of(originalId)));
+
+        assertEquals(0, Fixtures.amt("100.00")
+                .compareTo(backend.load(owner).orElseThrow().balances().get("dollar")));
+        assertEquals(1, backend.loadAll().size());
+        assertFalse(backend.isReverted(originalId));
+        backend.close();
+    }
+
+    // ---------------- durable nonce store ----------------
+
+    @Test
+    void nonceConsumeIsFirstWriterWinsAndSurvivesRestart() throws Exception {
+        Path db = dir.resolve("nonce.db");
+        SqlBackend backend = backendFor(db);
+        backend.initialize();
+        UUID nonce = UUID.randomUUID();
+        assertTrue(backend.consume(nonce), "first consume must win");
+        assertFalse(backend.consume(nonce), "second consume of the same nonce is a replay");
+        assertTrue(backend.isConsumed(nonce));
+        backend.close();
+
+        SqlBackend reopened = backendFor(db);
+        reopened.initialize();
+        assertTrue(reopened.isConsumed(nonce), "consumed nonce must survive a restart");
+        assertFalse(reopened.consume(nonce), "replay after restart must still be rejected");
+        assertTrue(reopened.consume(UUID.randomUUID()), "a fresh nonce is accepted after restart");
+        reopened.close();
+    }
+
+    @Test
+    void concurrentNonceConsumeHasExactlyOneWinner() throws Exception {
+        SqlBackend backend = backendFor(dir.resolve("nonceconc.db"));
+        backend.initialize();
+        UUID nonce = UUID.randomUUID();
+        int threads = 8;
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        List<Future<Boolean>> futures = new ArrayList<>();
+        for (int t = 0; t < threads; t++) {
+            futures.add(pool.submit(() -> backend.consume(nonce)));
+        }
+        int winners = 0;
+        for (Future<Boolean> f : futures) {
+            if (f.get(10, TimeUnit.SECONDS)) {
+                winners++;
+            }
+        }
+        pool.shutdown();
+        assertTrue(pool.awaitTermination(5, TimeUnit.SECONDS));
+
+        assertEquals(1, winners, "exactly one concurrent consumer may win");
+        assertTrue(backend.isConsumed(nonce));
+        backend.close();
+    }
+
+    @Test
+    void backupRestoreCarriesConsumedNonces() throws Exception {
+        SqlBackend backend = backendFor(dir.resolve("noncebackup.db"));
+        backend.initialize();
+        UUID consumed = UUID.randomUUID();
+        assertTrue(backend.consume(consumed));
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        backend.backup(out);
+
+        UUID extra = UUID.randomUUID();
+        assertTrue(backend.consume(extra));
+
+        backend.restore(new ByteArrayInputStream(out.toByteArray()));
+        assertTrue(backend.isConsumed(consumed), "restored snapshot keeps earlier consumptions");
+        assertFalse(backend.isConsumed(extra), "consumption after the snapshot must not survive restore");
+        backend.close();
+    }
+
+    // ---------------- atomic redemption ----------------
+
+    @Test
+    void redeemCommitsBalanceRecordAndNonceAndSurvivesRestart() throws Exception {
+        Path db = dir.resolve("redeem.db");
+        SqlBackend backend = backendFor(db);
+        backend.initialize();
+        UUID owner = UUID.randomUUID();
+        backend.create(owner, "alice", Map.of("dollar", Fixtures.amt("100.00")));
+        UUID nonce = UUID.randomUUID();
+
+        RedemptionResult result =
+                backend.redeem(nonce, owner, "dollar", Fixtures.amt("50.00"));
+
+        assertTrue(result.isCommitted(), "a fresh nonce with an existing account must commit");
+        assertEquals(0, Fixtures.amt("100.00").compareTo(result.balanceBefore()));
+        assertEquals(0, Fixtures.amt("150.00").compareTo(result.balanceAfter()));
+        assertTrue(backend.isConsumed(nonce));
+        backend.close();
+
+        // Reopen: balance, audit record and nonce must all have been committed together.
+        SqlBackend reopened = backendFor(db);
+        reopened.initialize();
+        assertEquals(0, Fixtures.amt("150.00")
+                .compareTo(reopened.load(owner).orElseThrow().balances().get("dollar")));
+        List<Transaction> records = reopened.loadByAccount(owner);
+        assertEquals(1, records.size());
+        assertEquals(TransactionType.DEPOSIT, records.get(0).type());
+        assertEquals("banknote-deposit", records.get(0).reason());
+        assertEquals(0, Fixtures.amt("50.00").compareTo(records.get(0).amount()));
+        assertTrue(reopened.isConsumed(nonce), "consumed redemption nonce must survive a restart");
+        reopened.close();
+    }
+
+    @Test
+    void redeemDuplicateNonceIsReplayWithoutDoubleCredit() throws Exception {
+        SqlBackend backend = backendFor(dir.resolve("redeemdup.db"));
+        backend.initialize();
+        UUID owner = UUID.randomUUID();
+        backend.create(owner, "alice", Map.of("dollar", Fixtures.amt("0.00")));
+        UUID nonce = UUID.randomUUID();
+        assertTrue(backend.redeem(nonce, owner, "dollar", Fixtures.amt("25.00")).isCommitted());
+
+        RedemptionResult second =
+                backend.redeem(nonce, owner, "dollar", Fixtures.amt("25.00"));
+
+        assertTrue(second.isReplay(), "the same nonce must never credit twice");
+        assertEquals(0, Fixtures.amt("25.00")
+                .compareTo(backend.load(owner).orElseThrow().balances().get("dollar")));
+        assertEquals(1, backend.loadAll().size(), "no duplicate audit record may appear");
+        backend.close();
+    }
+
+    @Test
+    void redeemUnknownAccountLeavesNonceUsable() throws Exception {
+        SqlBackend backend = backendFor(dir.resolve("redeemmissing.db"));
+        backend.initialize();
+        UUID stranger = UUID.randomUUID();
+        UUID nonce = UUID.randomUUID();
+
+        RedemptionResult result =
+                backend.redeem(nonce, stranger, "dollar", Fixtures.amt("10.00"));
+
+        assertTrue(result.isAccountMissing());
+        assertFalse(backend.isConsumed(nonce),
+                "an unknown account must not burn the note's nonce");
+
+        // Once the account exists the same note redeems normally.
+        backend.create(stranger, "late", Map.of());
+        assertTrue(backend.redeem(nonce, stranger, "dollar", Fixtures.amt("10.00")).isCommitted());
+        assertTrue(backend.isConsumed(nonce));
+        backend.close();
+    }
+
+    @Test
+    void concurrentRedeemSameNonceHasExactlyOneCommit() throws Exception {
+        SqlBackend backend = backendFor(dir.resolve("redeemconc.db"));
+        backend.initialize();
+        UUID owner = UUID.randomUUID();
+        backend.create(owner, "alice", Map.of("dollar", Fixtures.amt("0.00")));
+        UUID nonce = UUID.randomUUID();
+        int threads = 8;
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        List<Future<RedemptionResult>> futures = new ArrayList<>();
+        for (int t = 0; t < threads; t++) {
+            futures.add(pool.submit(() ->
+                    backend.redeem(nonce, owner, "dollar", Fixtures.amt("10.00"))));
+        }
+        int commits = 0;
+        for (Future<RedemptionResult> f : futures) {
+            if (f.get(10, TimeUnit.SECONDS).isCommitted()) {
+                commits++;
+            }
+        }
+        pool.shutdown();
+        assertTrue(pool.awaitTermination(5, TimeUnit.SECONDS));
+
+        assertEquals(1, commits, "exactly one concurrent redemption may commit");
+        assertEquals(0, Fixtures.amt("10.00")
+                .compareTo(backend.load(owner).orElseThrow().balances().get("dollar")));
+        assertEquals(1, backend.loadAll().size());
+        backend.close();
+    }
+
+    // ---------------- prepared atomic redemption ----------------
+
+    @Test
+    void redeemPreparedCommitsAndSurvivesRestart() throws Exception {
+        Path db = dir.resolve("prepared.db");
+        SqlBackend backend = backendFor(db);
+        backend.initialize();
+        UUID owner = UUID.randomUUID();
+        backend.create(owner, "alice", Map.of("dollar", Fixtures.amt("100.00")));
+        Account base = backend.load(owner).orElseThrow();
+        Account updated = base.deposit("dollar", Fixtures.amt("40.00"));
+        Transaction tx = new Transaction(UUID.randomUUID(), owner, null, "dollar",
+                Fixtures.amt("40.00"), TransactionType.DEPOSIT,
+                Fixtures.amt("100.00"), Fixtures.amt("140.00"), java.time.Instant.now(), "banknote-deposit");
+        UUID nonce = UUID.randomUUID();
+
+        RedemptionResult r = backend.redeemPrepared(nonce, updated, tx);
+        assertTrue(r.isCommitted());
+        assertEquals(0, Fixtures.amt("140.00").compareTo(backend.load(owner).orElseThrow().balances().get("dollar")));
+        assertTrue(backend.isConsumed(nonce));
+        backend.close();
+
+        SqlBackend reopened = backendFor(db);
+        reopened.initialize();
+        assertEquals(0, Fixtures.amt("140.00").compareTo(reopened.load(owner).orElseThrow().balances().get("dollar")));
+        assertTrue(reopened.isConsumed(nonce));
+        reopened.close();
+    }
+
+    @Test
+    void redeemPreparedReplayDoesNotDoubleCredit() throws Exception {
+        SqlBackend backend = backendFor(dir.resolve("preparedReplay.db"));
+        backend.initialize();
+        UUID owner = UUID.randomUUID();
+        backend.create(owner, "alice", Map.of("dollar", Fixtures.amt("0.00")));
+        Account base = backend.load(owner).orElseThrow();
+        Account upd1 = base.deposit("dollar", Fixtures.amt("10.00"));
+        Transaction tx1 = new Transaction(UUID.randomUUID(), owner, null, "dollar",
+                Fixtures.amt("10.00"), TransactionType.DEPOSIT,
+                Fixtures.amt("0.00"), Fixtures.amt("10.00"), java.time.Instant.now(), "banknote-deposit");
+        UUID nonce = UUID.randomUUID();
+        assertTrue(backend.redeemPrepared(nonce, upd1, tx1).isCommitted());
+
+        Account upd2 = backend.load(owner).orElseThrow().deposit("dollar", Fixtures.amt("10.00"));
+        Transaction tx2 = new Transaction(UUID.randomUUID(), owner, null, "dollar",
+                Fixtures.amt("10.00"), TransactionType.DEPOSIT,
+                Fixtures.amt("10.00"), Fixtures.amt("20.00"), java.time.Instant.now(), "banknote-deposit");
+        RedemptionResult second = backend.redeemPrepared(nonce, upd2, tx2);
+        assertTrue(second.isReplay());
+        assertEquals(0, Fixtures.amt("10.00").compareTo(backend.load(owner).orElseThrow().balances().get("dollar")));
+        assertEquals(1, backend.loadAll().size());
+        backend.close();
+    }
+
+    @Test
+    void redeemPreparedUnknownAccountLeavesNonceUnused() throws Exception {
+        SqlBackend backend = backendFor(dir.resolve("preparedMissing.db"));
+        backend.initialize();
+        UUID stranger = UUID.randomUUID();
+        Account fake = Account.create(stranger, "ghost", Map.of("dollar", Fixtures.amt("10.00")));
+        Transaction tx = new Transaction(UUID.randomUUID(), stranger, null, "dollar",
+                Fixtures.amt("10.00"), TransactionType.DEPOSIT,
+                Fixtures.amt("0.00"), Fixtures.amt("10.00"), java.time.Instant.now(), "banknote-deposit");
+        UUID nonce = UUID.randomUUID();
+        RedemptionResult r = backend.redeemPrepared(nonce, fake, tx);
+        assertTrue(r.isAccountMissing());
+        assertFalse(backend.isConsumed(nonce));
         backend.close();
     }
 }
