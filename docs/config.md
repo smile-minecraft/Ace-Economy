@@ -1,10 +1,21 @@
-# Configuration guide / 設定指南
+# Configuration guide
+
+English · [简体中文](config.zh-CN.md) · [繁體中文](config.zh-TW.md)
 
 AceEconomy reads `config.yml` as a versioned YAML file. This page explains what each setting is for, when it takes effect, and which values are safe to use. The examples use placeholders for secrets; replace them only in the server's private copy.
 
-AceEconomy 會把 `config.yml` 當作有版本的 YAML 設定檔讀取。本頁說明每個設定存在的原因、何時生效，以及可以使用的值。範例中的秘密都使用 placeholder，請只在伺服器自己的私有副本填入實際內容。
+## Contents
 
-## Before editing / 編輯前
+- [Before editing](#before-editing)
+- [Storage choice](#storage-choice)
+- [Economy rules](#economy-rules)
+- [Currencies](#currencies)
+- [Locale and retained command setting](#locale-and-retained-command-setting)
+- [Leaderboard](#leaderboard)
+- [Discord and secret boundaries](#discord-and-secret-boundaries)
+- [Applying changes](#applying-changes)
+
+## Before editing
 
 The file uses the v2 configuration format:
 
@@ -14,41 +25,27 @@ version: "2.0"
 
 Keep the YAML nesting and key names intact. A missing value receives the schema default where a default is defined. A storage type that is not `json`, `sqlite`, or `mysql` is rejected instead of silently selecting another backend.
 
-檔案使用 v2 設定格式：
-
-```yaml
-version: "2.0"
-```
-
-請保留 YAML 的縮排與設定鍵名稱。若有定義預設值，缺少該值時會使用 schema 預設值。`storage.type` 只能使用 `json`、`sqlite` 或 `mysql`；其他值會被拒絕，不會靜默改用另一種儲存方式。
-
-| Purpose / 用途 | Key / 設定鍵 | Default and format / 預設與格式 | Takes effect / 生效時機 |
+| Purpose | Key | Default and format | Takes effect |
 | --- | --- | --- | --- |
-| Identify the configuration format. / 指定設定檔格式。 | `version` | `"2.0"`; quoted major/minor text. / 預設 `"2.0"`；加引號的 major/minor 文字。 | When the configuration is loaded. / 設定載入時。 |
+| Identify the configuration format. | `version` | `"2.0"`; quoted major/minor text. | When the configuration is loaded. |
 
-Do not replace `version: "2.0"` with the persistence schema value `1`; they describe different layers. / 請不要把 `version: "2.0"` 改成持久化 schema 的 `1`；兩者描述的是不同層級。
+Do not replace `version: "2.0"` with the persistence schema value `1`; they describe different layers.
 
-## Storage choice / 儲存方式
+## Storage choice
 
 Storage determines where accounts, balances, and transaction records live. Choose it before putting the server into normal operation, because changing the backend does not itself convert existing data.
 
-儲存方式決定帳戶、餘額與交易紀錄存放在哪裡。正式運作前就應先選定，因為切換 backend 不會自動轉換既有資料。
-
 ### `storage.type`
 
-| Purpose / 用途 | Key / 設定鍵 | Default and format / 預設與格式 | Takes effect / 生效時機 |
+| Purpose | Key | Default and format | Takes effect |
 | --- | --- | --- | --- |
-| Select the persistence backend. / 選擇持久化 backend。 | `storage.type` | `json`; one of `json`, `sqlite`, `mysql`. / 預設 `json`，可用值為 `json`、`sqlite`、`mysql`。 | At plugin startup. Restart after changing it. / 插件啟動時讀取；修改後請重啟。 |
+| Select the persistence backend. | `storage.type` | `json`; one of `json`, `sqlite`, `mysql`. | At plugin startup. Restart after changing it. |
 
 Use JSON for a simple single-server installation. Use SQLite when you want one local database file. Use MySQL for a server that already operates a database service or needs its data outside the plugin folder. MariaDB has no separate config value; configure a MariaDB service through the `mysql` backend.
-
-單一伺服器、希望維護最少時可用 JSON。想使用一個本機資料庫檔案時可用 SQLite。已有資料庫服務，或希望資料放在插件資料夾以外時可用 MySQL。MariaDB 沒有獨立的設定值；MariaDB 服務請透過 `mysql` backend 設定。
 
 ### JSON
 
 JSON is the default and stores the v2 model in one file under the plugin data folder. It needs no connection settings.
-
-JSON 是預設方式，會在插件資料夾下以單一檔案儲存 v2 資料，不需要連線設定。
 
 ```yaml
 storage:
@@ -57,13 +54,11 @@ storage:
 
 The file is `data-v2.json`. Keep it with the plugin's data directory when backing up or moving the server.
 
-檔案名稱是 `data-v2.json`。備份或搬遷伺服器時，請把它和插件資料夾一起保留。
-
 ### SQLite
 
-| Purpose / 用途 | Key / 設定鍵 | Default and format / 預設與格式 | Takes effect / 生效時機 |
+| Purpose | Key | Default and format | Takes effect |
 | --- | --- | --- | --- |
-| Choose the SQLite file name. / 指定 SQLite 檔案名稱。 | `storage.sqlite.path` | `data-v2.sqlite`; a relative path is resolved under the plugin data folder. / 預設 `data-v2.sqlite`；相對路徑會在插件資料夾下解析。 | At startup. Restart after changing it. / 啟動時讀取；修改後請重啟。 |
+| Choose the SQLite file name. | `storage.sqlite.path` | `data-v2.sqlite`; a relative path is resolved under the plugin data folder. | At startup. Restart after changing it. |
 
 ```yaml
 storage:
@@ -74,23 +69,19 @@ storage:
 
 The path must remain inside the plugin data folder. Paths such as `../economy.sqlite` and absolute paths outside that folder are rejected. This keeps a configuration typo from selecting an unrelated file on the host.
 
-路徑必須留在插件資料夾內。`../economy.sqlite` 這類越界路徑，以及指向其他根目錄的絕對路徑都會被拒絕，避免設定錯誤時誤選主機上的其他檔案。
-
 ### MySQL and MariaDB
 
 `mysql` is the only SQL network backend value. It builds a JDBC connection from `host`, `port`, and `database`, then creates a HikariCP connection pool.
 
-SQL 網路 backend 只有 `mysql` 這個設定值。系統會用 `host`、`port` 與 `database` 組成 JDBC 連線，再建立 HikariCP 連線池。
-
-| Purpose / 用途 | Key / 設定鍵 | Default and format / 預設與格式 | Takes effect / 生效時機 |
+| Purpose | Key | Default and format | Takes effect |
 | --- | --- | --- | --- |
-| Database server name. / 資料庫主機名稱。 | `storage.mysql.host` | `localhost`; text. / 預設 `localhost`；文字。 | Startup. / 啟動時。 |
-| Database server port. / 資料庫連接埠。 | `storage.mysql.port` | `3306`; integer. / 預設 `3306`；整數。 | Startup. / 啟動時。 |
-| Database name. / 資料庫名稱。 | `storage.mysql.database` | `aceeconomy`; text. / 預設 `aceeconomy`；文字。 | Startup. / 啟動時。 |
-| Database user. / 資料庫使用者。 | `storage.mysql.username` | `root`; text. Use a dedicated account for a live server. / 預設 `root`；文字。正式伺服器請使用專用帳號。 | Startup. / 啟動時。 |
-| Database password. / 資料庫密碼。 | `storage.mysql.password` | Empty string in the shipped example; set it privately. / 隨附範例為空字串；請在私有設定中填入。 | Startup. / 啟動時。 |
-| Maximum pool size. / 連線池上限。 | `storage.mysql.pool-size` | `10`; positive integer. / 預設 `10`；正整數。 | Startup. / 啟動時。 |
-| Maximum connection lifetime. / 連線最長生命週期。 | `storage.mysql.max-lifetime` | `1800000`; positive milliseconds (30 minutes). / 預設 `1800000`；正整數，單位為毫秒（30 分鐘）。 | Startup. / 啟動時。 |
+| Database server name. | `storage.mysql.host` | `localhost`; text. | Startup. |
+| Database server port. | `storage.mysql.port` | `3306`; integer. | Startup. |
+| Database name. | `storage.mysql.database` | `aceeconomy`; text. | Startup. |
+| Database user. | `storage.mysql.username` | `root`; text. Use a dedicated account for a live server. | Startup. |
+| Database password. | `storage.mysql.password` | Empty string in the shipped example; set it privately. | Startup. |
+| Maximum pool size. | `storage.mysql.pool-size` | `10`; positive integer. | Startup. |
+| Maximum connection lifetime. | `storage.mysql.max-lifetime` | `1800000`; positive milliseconds (30 minutes). | Startup. |
 
 ```yaml
 storage:
@@ -107,19 +98,15 @@ storage:
 
 The database and user must already be available to the server. The plugin creates the v2 tables when it initializes the SQL backend; it does not use the old v1 table names as a v2 setup script. See [Database concepts and upgrades](database.md) for the data model.
 
-資料庫與使用者必須先能讓伺服器連線。插件初始化 SQL backend 時會建立 v2 資料表；v2 不使用舊版 v1 的資料表名稱作為建庫腳本。資料模型請參考[資料庫概念與升級](database.md)。
-
-## Economy rules / 經濟規則
+## Economy rules
 
 These values shape new accounts and the default currency's debt policy. They are read when the economy services are built, so restart after changing them rather than assuming a reload will rebuild live services.
 
-這些設定會影響新帳戶與預設貨幣的負債規則。它們會在經濟服務建立時讀取，因此修改後請重啟，不要假設 reload 會重新建立正在運作的服務。
-
-| Purpose / 用途 | Key / 設定鍵 | Default and format / 預設與格式 | Notes / 注意 |
+| Purpose | Key | Default and format | Notes |
 | --- | --- | --- | --- |
-| Allow the balance of the default currency to go below zero. / 允許預設貨幣餘額低於零。 | `economy.allow-negative-balance` | `true`; boolean. / 預設 `true`；布林值。 | When `false`, the debt policy is disabled. / 設為 `false` 時停用負債規則。 |
-| Set the default debt limit. / 設定預設負債上限。 | `economy.default-debt-limit` | `0.0`; decimal amount. / 預設 `0.0`；小數金額。 | Used when the player has no permission-specific debt setting. / 玩家沒有權限專屬負債設定時使用。 |
-| Give a new account its initial amount in the default currency. / 設定新帳戶的預設金額。 | `start-balance` | `1000.0`; decimal amount. / 預設 `1000.0`；小數金額。 | Existing accounts are not reset by changing this value. / 修改後不會重設既有帳戶。 |
+| Allow the balance of the default currency to go below zero. | `economy.allow-negative-balance` | `true`; boolean. | When `false`, the debt policy is disabled. |
+| Set the default debt limit. | `economy.default-debt-limit` | `0.0`; decimal amount. | Used when the player has no permission-specific debt setting. |
+| Give a new account its initial amount in the default currency. | `start-balance` | `1000.0`; decimal amount. | Existing accounts are not reset by changing this value. |
 
 ```yaml
 economy:
@@ -128,18 +115,16 @@ economy:
 start-balance: 1000.0
 ```
 
-## Currencies / 貨幣
+## Currencies
 
-The `currencies` section is an operator-owned map. The shipped file defines `dollar` and `token`, and any additional currency can be added the same way — the plugin loads whatever legal map the section contains. Each entry gives the application a stable ID, a display name, a symbol, and a decimal scale. Exactly one entry must have `default: true`; that entry supplies the default currency used by the general economy flow and Vault integration.
+The `currencies` section is an operator-owned map. The shipped file defines `dollar` and `token`, and any additional currency can be added the same way; the plugin loads whatever legal map the section contains. Each entry gives the application a stable ID, a display name, a symbol, and a decimal scale. Exactly one entry must have `default: true`; that entry supplies the default currency used by the general economy flow and Vault integration.
 
-`currencies` 區塊由伺服器管理者自行定義。隨附檔案定義了 `dollar` 與 `token`，並可用同樣方式新增其他貨幣——插件會載入區塊中任何合法的組合。每個項目提供穩定的 ID、顯示名稱、符號與小數位數。必須且只能有一個項目使用 `default: true`；該項目是一般經濟流程與 Vault 整合使用的預設貨幣。
-
-| Purpose / 用途 | Key / 設定鍵 | Default and format / 預設與格式 | Notes / 注意 |
+| Purpose | Key | Default and format | Notes |
 | --- | --- | --- | --- |
-| Human-readable name. / 給玩家看的名稱。 | `currencies.<id>.name` | Text; required for every currency. / 文字；每個貨幣必填。 | The ID is the key below `currencies`; keep it stable once data exists. / ID 是 `currencies` 下的鍵，已有資料後請保持穩定。 |
-| Display symbol. / 顯示符號。 | `currencies.<id>.symbol` | Text; required for every currency. / 文字；每個貨幣必填。 | Used beside amounts in user-facing output. / 顯示金額時會放在數值旁。 |
-| Number of fractional digits. / 小數位數。 | `currencies.<id>.scale` | Non-negative integer; required for every currency. / 非負整數；每個貨幣必填。 | Amounts with more fractional digits are not implicitly rounded. / 超過位數的金額不會被自動四捨五入。 |
-| Select the default currency. / 指定預設貨幣。 | `currencies.<id>.default` | Boolean; exactly one `true` across the section. / 布林值；整個區塊只能有一個 `true`。 | Keep exactly one default. / 必須維持一個預設貨幣。 |
+| Human-readable name. | `currencies.<id>.name` | Text; required for every currency. | The ID is the key below `currencies`; keep it stable once data exists. |
+| Display symbol. | `currencies.<id>.symbol` | Text; required for every currency. | Used beside amounts in user-facing output. |
+| Number of fractional digits. | `currencies.<id>.scale` | Non-negative integer; required for every currency. | Amounts with more fractional digits are not implicitly rounded. |
+| Select the default currency. | `currencies.<id>.default` | Boolean; exactly one `true` across the section. | Keep exactly one default. |
 
 ```yaml
 currencies:
@@ -162,30 +147,20 @@ currencies:
 
 Validation rules that apply to every entry:
 
-每個項目都適用以下驗證規則：
-
 - The currency ID is the key under `currencies`. After trimming surrounding spaces and converting to lower case it must consist only of `a-z`, `0-9`, and `_`. IDs that differ only in case or spacing (for example `Dollar` and `dollar`) count as the same currency and are rejected as duplicates.
 - Every entry must define all four fields with the declared types; missing fields or values of the wrong type (a quoted number for `scale`, a quoted boolean for `default`) are rejected.
 - The section must contain at least one currency and exactly one default.
 
-- 貨幣 ID 是 `currencies` 下的鍵。去除前後空白並轉為小寫後，只能使用 `a-z`、`0-9` 與 `_`。只有大小寫或空白差異的 ID（例如 `Dollar` 與 `dollar`）視為同一貨幣，會以重複為由拒絕。
-- 每個項目都必須以正確型別定義四個欄位；缺欄位或型別錯誤（例如 `scale` 寫成加引號的文字、`default` 寫成 `"true"`）都會被拒絕。
-- 區塊至少要有一個貨幣，且恰好一個預設貨幣。
-
 A config that violates these rules stops the plugin at startup with an error naming the problem; nothing is partially applied. Changing a name or symbol affects presentation. Changing an ID, scale, or default currency affects how later operations interpret amounts, so make a backup and plan the change before applying it to a live economy.
-
-違反這些規則的設定會讓插件在啟動時停止，並留下指出問題的錯誤訊息；不會有半套用的狀態。修改名稱或符號會影響顯示。修改 ID、小數位數或預設貨幣會影響後續操作如何解讀金額；套用到正式經濟系統前，請先備份並安排變更。
 
 The currency set is read once at startup. The administrative reload action refreshes the configuration snapshot but does not rebuild the running registry, commands, Vault bridge, or placeholder expansion; adding, removing, or editing currencies takes effect after a restart.
 
-貨幣組合只在啟動時讀取一次。管理員 reload 操作會更新設定快照，但不會重建運行中的 registry、指令、Vault 橋接或 placeholder 擴充；新增、移除或修改貨幣請重啟後才會生效。
+## Locale and retained command setting
 
-## Locale and retained command setting / 語系與保留的指令設定
-
-| Purpose / 用途 | Key / 設定鍵 | Default and format / 預設與格式 | Takes effect / 生效時機 |
+| Purpose | Key | Default and format | Takes effect |
 | --- | --- | --- | --- |
-| Select message language. / 選擇訊息語系。 | `settings.locale` | `zh_TW`; one of `en_US`, `zh_TW`, `zh_CN`. / 預設 `zh_TW`；可用 `en_US`、`zh_TW`、`zh_CN`。 | On language load or reload. / 語言載入或 reload 時。 |
-| Additional label for the admin command. / 管理指令的額外標籤。 | `settings.main-command-alias` | `aceeco`; text matching `a-z`, `0-9`, `-`, `_`. / 預設 `aceeco`；文字，限 `a-z`、`0-9`、`-`、`_`。 | At startup only; restart after changing it. / 只在啟動時生效；修改後請重啟。 |
+| Select message language. | `settings.locale` | `zh_TW`; one of `en_US`, `zh_TW`, `zh_CN`. | On language load or reload. |
+| Additional label for the admin command. | `settings.main-command-alias` | `aceeco`; text matching `a-z`, `0-9`, `-`, `_`. | At startup only; restart after changing it. |
 
 ```yaml
 settings:
@@ -195,29 +170,20 @@ settings:
 
 The formal root command is `/aceeco`. Setting `main-command-alias` to another value attaches that label as an additional alias of the same admin command inside AceEconomy's command registry at startup. An empty or blank value keeps the default entry point.
 
-正式 root command 是 `/aceeco`。把 `main-command-alias` 設成其他值時，插件會在啟動時把該標籤掛為同一個管理指令在 AceEconomy 指令 registry 內的額外別名。空值或空白會維持預設入口。
-
 Two boundaries apply:
 
-此設定有兩個邊界：
-
-1. **Collision rejection.** The value must not collide with any command label the plugin already declares in `plugin.yml` (the roots `money`, `pay`, `aceeco`, `withdraw`, `baltop`, `bank` and their aliases such as `balance`, `bal`, `balancetop`, `top`, `menu`, `bankmenu`) nor with another AceEconomy command name. A collision stops the plugin at startup with a clear error instead of overriding the existing entry — `/bank` and the other shipped entries can never be taken over by this setting.
+1. **Collision rejection.** The value must not collide with any command label the plugin already declares in `plugin.yml` (the roots `money`, `pay`, `aceeco`, `withdraw`, `baltop`, `bank` and their aliases such as `balance`, `bal`, `balancetop`, `top`, `menu`, `bankmenu`) nor with another AceEconomy command name. A collision stops the plugin at startup with a clear error instead of overriding the existing entry; `/bank` and the other shipped entries can never be taken over by this setting.
 2. **Static Bukkit labels.** The server only delivers command labels that exist in `plugin.yml`, which ships fixed with the release. A custom alias is validated and resolvable inside AceEconomy's dispatcher, but typing it in-game reaches the plugin only after the label is also declared as a root/alias in `plugin.yml`; v2.1.0 does not register new Bukkit commands at runtime. Changing the value always requires a restart, and reload never re-registers commands.
-
-1. **衝突拒絕。** 設定值不得與插件已在 `plugin.yml` 宣告的任何指令標籤（root：`money`、`pay`、`aceeco`、`withdraw`、`baltop`、`bank`；alias：如 `balance`、`bal`、`balancetop`、`top`、`menu`、`bankmenu`）或其他 AceEconomy 指令名稱衝突。衝突會讓插件在啟動時以明確錯誤停止，而不是覆蓋既有入口——這個設定永遠無法搶走 `/bank` 等既有指令。
-2. **Bukkit 標籤是靜態的。** 伺服器只會轉送 `plugin.yml` 中宣告的指令標籤，而該檔案隨版本固定發布。自訂 alias 會經過驗證並可在 AceEconomy 的 dispatcher 內解析，但要在遊戲內實際輸入該標籤抵達插件，前提是該標籤也已宣告在 `plugin.yml` 的 root/alias 中；v2.1.0 不會在 runtime 註冊新的 Bukkit 指令。修改此值一律需要重啟，reload 不會重新註冊指令。
 
 The language files are named `lang/en_US.yml`, `lang/zh_TW.yml`, and `lang/zh_CN.yml`. Do not put passwords or webhook URLs in language files.
 
-語言檔名稱為 `lang/en_US.yml`、`lang/zh_TW.yml` 與 `lang/zh_CN.yml`。請不要把密碼或 webhook URL 放進語言檔。
+## Leaderboard
 
-## Leaderboard / 排行榜
-
-| Purpose / 用途 | Key / 設定鍵 | Default and format / 預設與格式 | Notes / 注意 |
+| Purpose | Key | Default and format | Notes |
 | --- | --- | --- | --- |
-| Make leaderboard features available. / 啟用排行榜功能。 | `leaderboard.enabled` | `true`; boolean. / 預設 `true`；布林值。 | `false` removes the executable `/baltop` handler at startup; the label itself is static in `plugin.yml`. Restart after changing it. / `false` 會在啟動時移除可執行的 `/baltop` 處理器；指令標籤本身仍靜態存在於 `plugin.yml`。修改後請重啟。 |
-| Control how long a cached result is reused. / 控制排行榜快取重用時間。 | `leaderboard.cache-time-seconds` | `300`; integer seconds. / 預設 `300`；整數秒。 | A shorter value refreshes more often; a longer value reduces refresh work. / 值較小會更常更新，值較大會減少更新次數。 |
-| Set entries per page. / 設定每頁筆數。 | `leaderboard.page-size` | `10`; integer. / 預設 `10`；整數。 | This controls the page size, not the number of stored accounts. / 這只控制每頁顯示數量，不會限制帳戶數。 |
+| Make leaderboard features available. | `leaderboard.enabled` | `true`; boolean. | `false` removes the executable `/baltop` handler at startup; the label itself is static in `plugin.yml`. Restart after changing it. |
+| Control how long a cached result is reused. | `leaderboard.cache-time-seconds` | `300`; integer seconds. | A shorter value refreshes more often; a longer value reduces refresh work. |
+| Set entries per page. | `leaderboard.page-size` | `10`; integer. | This controls the page size, not the number of stored accounts. |
 
 ```yaml
 leaderboard:
@@ -226,16 +192,14 @@ leaderboard:
   page-size: 10
 ```
 
-With `enabled: false` the plugin does not build or attach the baltop command spec in its registry, so no economy code runs for it. Because `plugin.yml` still declares the static `baltop` label, the server answers with the plain usage line instead; fully removing the label requires a release that changes `plugin.yml`. The toggle is read once at startup — restart after changing it.
+With `enabled: false` the plugin does not build or attach the baltop command spec in its registry, so no economy code runs for it. Because `plugin.yml` still declares the static `baltop` label, the server answers with the plain usage line instead; fully removing the label requires a release that changes `plugin.yml`. The toggle is read once at startup; restart after changing it.
 
-設定 `enabled: false` 時，插件不會在其 registry 建立或掛上 baltop 指令 spec，因此不會執行任何經濟程式碼。由於 `plugin.yml` 仍宣告靜態的 `baltop` 標籤，伺服器只會回應單純的 usage 說明；要完全移除該標籤需要變更 `plugin.yml` 的新版本。此開關只在啟動時讀取——修改後請重啟。
+## Discord and secret boundaries
 
-## Discord and secret boundaries / Discord 與秘密邊界
-
-| Purpose / 用途 | Key / 設定鍵 | Default and format / 預設與格式 | Notes / 注意 |
+| Purpose | Key | Default and format | Notes |
 | --- | --- | --- | --- |
-| Turn webhook notifications on or off. / 開啟或關閉 webhook 通知。 | `discord.enabled` | `false`; boolean. / 預設 `false`；布林值。 | Keep it `false` until a private endpoint is configured. / 尚未設定私有 endpoint 前請維持 `false`。 |
-| Identify the Discord webhook endpoint. / 指定 Discord webhook endpoint。 | `discord.webhook-url` | Empty string by default; URL text. / 預設空字串；URL 文字。 | Treat the complete URL as a credential. / 完整 URL 應視為憑證。 |
+| Turn webhook notifications on or off. | `discord.enabled` | `false`; boolean. | Keep it `false` until a private endpoint is configured. |
+| Identify the Discord webhook endpoint. | `discord.webhook-url` | Empty string by default; URL text. | Treat the complete URL as a credential. |
 
 ```yaml
 discord:
@@ -245,15 +209,11 @@ discord:
 
 Never publish a real webhook URL, database password, or connection details with credentials. Do not paste them into issue reports or shared examples. If a secret is exposed, replace it at the provider and update the private configuration.
 
-請勿公開真實 webhook URL、資料庫密碼，或含有憑證的連線資訊。也不要把它們貼到 issue 或共用範例中。若秘密已外洩，請先在服務供應商端更換，再更新伺服器的私有設定。
+## Applying changes
 
-## Applying changes / 套用變更
-
-1. Stop the server before changing storage paths or connection settings. / 修改儲存路徑或連線設定前先停止伺服器。
-2. Make a copy of the relevant data file or database backup. / 複製相關資料檔或建立資料庫備份。
-3. Edit `config.yml` without changing the YAML structure. / 編輯 `config.yml`，不要改變 YAML 結構。
-4. Start the server and check the startup log for configuration or connection errors. / 啟動伺服器，查看啟動日誌是否有設定或連線錯誤。
+1. Stop the server before changing storage paths or connection settings.
+2. Make a copy of the relevant data file or database backup.
+3. Edit `config.yml` without changing the YAML structure.
+4. Start the server and check the startup log for configuration or connection errors.
 
 The administrative reload action reloads the configuration and language snapshots. It does not move data between backends or reopen the storage backend. Settings that are captured while services are created — storage selection, currencies, `settings.main-command-alias`, and `leaderboard.enabled` — keep their startup values until the next restart; a reload never rebuilds the currency registry, re-registers commands, or rewires Vault and placeholder integrations.
-
-管理員 reload 操作會重新載入設定與語言快照，但不會在 backend 之間搬移資料，也不會重新開啟儲存 backend。在服務建立時讀取的設定——儲存方式、貨幣、`settings.main-command-alias`、`leaderboard.enabled`——會維持啟動時的值直到下次重啟；reload 不會重建貨幣 registry、不會重新註冊指令，也不會重接 Vault 與 placeholder 整合。

@@ -1,0 +1,239 @@
+# 指令与权限
+
+[English](commands.md) · 简体中文 · [繁體中文](commands.zh-TW.md)
+
+你可能只是想查余额、转一笔钱，或打开银行界面。这一页把玩家指令和管理员指令分开，方便你直接找到要用的指令。以下是当前 v2 语法：每个主指令后面都要接一个指定的子指令。
+
+## 目录
+
+- [快速查表](#快速查表)
+- [玩家用法](#玩家用法)
+- [管理员权限](#管理员权限)
+- [常见指令错误](#常见指令错误)
+
+## 快速查表
+
+| 主指令 | 子指令 | 用法 | 执行者 | 权限 | 别名 |
+|---|---|---|---|---|---|
+| `/money` | `balance` | `[player] [currency]` | 玩家或控制台；控制台必须提供 `player` | `aceeconomy.command.money` | `/balance` |
+| `/pay` | `send` | `<player> <amount> [currency]` | 仅限玩家 | `aceeconomy.command.pay` | 无 |
+| `/withdraw` | `cash` | `<amount> [currency]` | 仅限玩家 | `aceeconomy.command.withdraw` | 无 |
+| `/baltop` | `top` | `[currency]` | 玩家或控制台 | `aceeconomy.command.baltop` | 无 |
+| `/bank` | `open` | 不接受参数 | 仅限玩家 | `aceeconomy.command.bank` | 无 |
+| `/aceeco` | `give`、`take`、`set`、`history`、`reload`、`rollback`、`backup`、`restore` | 见管理员参考 | `reload`、`rollback`、`restore` 仅限控制台；`backup` 与其他子指令可由玩家或控制台执行 | `aceeconomy.admin` 加上子指令权限 | 无 |
+
+`<必填>` 代表必须提供的值；`[可选]` 代表可省略的值。省略 `currency` 时，使用设置的默认货币。货币 ID 不区分大小写。
+
+金额必须是有效数字、大于零、符合该货币的小数位数，而且不得超过 `1,000,000,000,000,000`。
+
+v2 指令规格列出的主指令别名只有 `/money` 的 `/balance`。它仍然要接 `balance` 子指令：`/balance balance [player] [currency]`。没有独立的 `/backup` 或 `/restore` 主指令，请使用 `/aceeco` 的管理子指令。
+
+## 玩家用法
+
+### 查询余额：`/money balance`
+
+想看自己的余额时直接省略玩家名称。查询其他账户时加上玩家名称；控制台没有自己的玩家账户，所以必须使用带有 `player` 的完整形式。
+
+| 项目 | 说明 |
+|---|---|
+| 用法 | `/money balance [player] [currency]` |
+| 执行者 | 玩家或控制台；玩家可省略 `player`，控制台必须提供 `player` |
+| 权限 | `aceeconomy.command.money` |
+| 别名 | 主指令可用 `/balance`，但仍要保留 `balance` 子指令 |
+
+示例：
+
+```text
+/money balance
+/money balance Alex <currency>
+/balance balance Alex <currency>
+```
+
+### 转账：`/pay send`
+
+把钱转给其他玩家。这个指令必须在游戏内由玩家执行。
+
+| 项目 | 说明 |
+|---|---|
+| 用法 | `/pay send <player> <amount> [currency]` |
+| 执行者 | 仅限玩家 |
+| 权限 | `aceeconomy.command.pay` |
+| 别名 | v2 指令规格未提供别名 |
+
+示例：`/pay send Alex 25 <currency>`
+
+### 提取银行支票：`/withdraw cash`
+
+把指定金额提取成银行支票。这个指令必须由玩家执行。
+
+| 项目 | 说明 |
+|---|---|
+| 用法 | `/withdraw cash <amount> [currency]` |
+| 执行者 | 仅限玩家 |
+| 权限 | `aceeconomy.command.withdraw` |
+| 别名 | v2 指令规格未提供别名 |
+
+示例：`/withdraw cash 100 <currency>`
+
+### 查看排行榜：`/baltop top`
+
+查看余额最高的玩家。玩家和控制台都能执行；不想使用默认货币时，再指定货币即可。
+
+| 项目 | 说明 |
+|---|---|
+| 用法 | `/baltop top [currency]` |
+| 执行者 | 玩家或控制台 |
+| 权限 | `aceeconomy.command.baltop` |
+| 别名 | v2 指令规格未提供别名 |
+
+示例：
+
+```text
+/baltop top
+/baltop top <currency>
+```
+
+### 打开银行：`/bank open`
+
+打开 AceEconomy 银行界面。这个指令不接受参数，必须由玩家执行。
+
+| 项目 | 说明 |
+|---|---|
+| 用法 | `/bank open` |
+| 执行者 | 仅限玩家 |
+| 权限 | `aceeconomy.command.bank` |
+| 别名 | v2 指令规格未提供别名 |
+
+银行界面的按钮与格子对应如下：
+
+- 存款（DEPOSIT）：第 4 格（上方中间）。
+- 提款（WITHDRAW）：第 11 格与第 13 格（分别是 `100` 与 `500` 提款按钮）。
+- 关闭（CLOSE）：第 15 格。
+
+存入一张有效的 v2 银行支票时，必须先完成持久防重播机制与入帐，之后才会移除支票或减少堆叠数量。无效、被重播或入帐失败的支票，会留在玩家物品栏里。右键兑换尚未实作。
+
+## 管理员权限
+
+管理员主指令是 `/aceeco`，v2 指令规格未提供别名。主权限为 `aceeconomy.admin`，每个操作也各有自己的权限节点。变更余额的子指令沿用「玩家名称、金额、可选货币」的格式。`history` 只读取已记录的交易，不会改变余额。`reload`、`rollback` 与 `restore` 只能由控制台执行；`rollback` 要带交易 ID，`restore` 则要带备份 ID 与精确的 `confirm`。
+
+| 子指令 | 用法 | 执行者 | 子指令权限 | 别名 |
+|---|---|---|---|---|
+| `give` | `/aceeco give <player> <amount> [currency]` | 玩家或控制台 | `aceeconomy.admin.give` | 无 |
+| `take` | `/aceeco take <player> <amount> [currency]` | 玩家或控制台 | `aceeconomy.admin.take` | 无 |
+| `set` | `/aceeco set <player> <amount> [currency]` | 玩家或控制台 | `aceeconomy.admin.set` | 无 |
+| `history` | `/aceeco history [player] [currency] [page]` | 玩家或控制台 | `aceeconomy.admin.history` | 无 |
+| `reload` | `/aceeco reload` | 仅限控制台 | `aceeconomy.admin.reload` | 无 |
+| `rollback` | `/aceeco rollback <transaction-id>` | 仅限控制台 | `aceeconomy.admin.rollback` | 无 |
+| `backup` | `/aceeco backup [label]` | 玩家或控制台 | `aceeconomy.admin.backup` | 无 |
+| `restore` | `/aceeco restore <backup-id> confirm` | 仅限控制台 | `aceeconomy.admin.restore` | 无 |
+
+插件声明的默认值是：玩家指令权限为 `true`，管理员权限为 `op`。另外，插件也声明 `aceeconomy.bypass.debt`，默认值为 `op`，用于跳过债务上限的权限。
+
+### 增加余额：`/aceeco give`
+
+需要为玩家增加余额时使用 `give`。
+
+示例：`/aceeco give Alex 500 <currency>`
+
+### 扣除余额：`/aceeco take`
+
+需要从玩家余额中扣除金额时使用 `take`。
+
+示例：`/aceeco take Alex 125 <currency>`
+
+### 设置余额：`/aceeco set`
+
+需要把玩家余额直接设为指定金额时使用 `set`。
+
+示例：`/aceeco set Alex 1000 <currency>`
+
+### 查询交易历史：`/aceeco history`
+
+管理员需要查看已记录的余额变更时使用 `history`。这个指令是只读的：不会改变余额或审计记录。省略 `player` 时列出所有账户的交易；省略 `currency` 时使用设置的默认货币；`page` 从 0 开始，每页显示 10 条。空页、找不到玩家、页码小于零都会有明确回复。
+
+| 项目 | 说明 |
+|---|---|
+| 用法 | `/aceeco history [player] [currency] [page]` |
+| 执行者 | 玩家或控制台 |
+| 权限 | `aceeconomy.admin.history` |
+| 排序 | 由新到旧，并以稳定的次序处理同一时刻的记录，因此重复查询的结果顺序一致 |
+
+示例：
+
+```text
+/aceeco history
+/aceeco history Alex
+/aceeco history Alex <currency>
+/aceeco history Alex <currency> 2
+```
+
+### 重载经济配置：`/aceeco reload`
+
+修改经济配置后，从控制台执行这个指令。它不接受参数，玩家不能执行。
+
+示例：`/aceeco reload`
+
+### 回滚交易：`/aceeco rollback`
+
+管理员需要根据 ID 复原一笔已记录的交易时使用 `rollback`。这是具有破坏性的管理操作，因此仅限控制台执行，而且需要同时拥有 `aceeconomy.admin` 与 `aceeconomy.admin.rollback`。交易 ID 是该笔交易的 UUID；格式不正确时会在查询前就被拒绝。
+
+各种结果都会有明确回复：
+
+| 结果 | 回复 |
+|---|---|
+| 成功 | 指出被回滚的交易，并列出该笔回滚的审计记录 ID。 |
+| 已回滚过 | 说明该交易已经回滚、未做任何变更；再次提交同一个 ID 是安全的空操作，不会重复余额效果或审计记录。 |
+| 找不到交易 | 错误提示：不存在这个 ID 的交易。 |
+| ID 格式错误 | 错误提示：参数不是有效 UUID，不会进行任何查询。 |
+| 转账对应腿缺失 | 错误提示：找不到转账的另一腿，无法安全回滚。 |
+| 执行失败 | 错误提示：回滚未生效，该交易仍可重试。 |
+| 标记写入失败 | 错误提示：回滚效果可能已经发生，但回滚标记缺失；请先检查存储并人工核对，再考虑重试。 |
+
+示例：`/aceeco rollback 0b5f8a2e-1c3d-4e5f-6a7b-8c9d0e1f2a3b`
+
+`rollback` 指令已经接入实际上线的指令介面，也有自动化契约测试覆盖，但**尚未在实际运行的服务器上验证过**：Folia/Bukkit 桥接的实机执行、真实 MySQL 存储，以及用真实数据进行的故障注入演练，都还是未完成的发布门槛。在这些验证完成之前，上表内容应视为设计规格，而不是实测结果。
+
+### 创建逻辑备份：`/aceeco backup`
+
+这个指令会在服务器运行时创建 v2 逻辑 JSON 快照。`label` 可省略；如果提供，只能使用安全的文件名字符。
+
+| 项目 | 说明 |
+|---|---|
+| 用法 | `/aceeco backup [label]` |
+| 执行者 | 玩家或控制台 |
+| 权限 | `aceeconomy.admin.backup`（还需要主权限 `aceeconomy.admin`） |
+| 存储位置 | 插件控制的 `<plugin data folder>/backups` |
+| 输出 | 原子写入且不覆盖已有文件，并回报备份 ID |
+
+快照是 v2 逻辑 JSON 模型，包含账户、余额、交易、已回滚标记与已消耗的一次性序号，但不包含数据库密码或 webhook 网址。没有独立的 `/backup` 主指令。
+
+### 还原逻辑备份：`/aceeco restore`
+
+还原会替换正式经济数据，因此只能从控制台执行，并且需要主权限与子指令权限。确认字符串区分大小写，只接受小写 `confirm`。
+
+| 项目 | 说明 |
+|---|---|
+| 用法 | `/aceeco restore <backup-id> confirm` |
+| 执行者 | 仅限控制台；有任何玩家在线时会拒绝 |
+| 权限 | `aceeconomy.admin.restore`（还需要主权限 `aceeconomy.admin`） |
+| 执行前检查 | 在动到正式数据前，先检查 JSON 结构、schema 版本、记录与配置货币的兼容性 |
+| 安全备份 | 先备份当前状态；安全备份失败时中止还原 |
+| 成功后 | 清除排行榜缓存，但不会热刷新 session 或 GUI。让玩家回来前必须重启服务器。 |
+
+示例：`/aceeco restore 20260824T093000-aaaa1111 confirm`
+
+## 常见指令错误
+
+| 情况 | 检查方式 |
+|---|---|
+| 没有权限 | 确认执行者拥有主指令或子指令列出的权限。 |
+| 执行者类型不对 | 玩家限定指令请在游戏内执行；`/aceeco reload`、`/aceeco rollback` 与 `/aceeco restore` 请从控制台执行；`restore` 还要求没有玩家在线。 |
+| 参数少了或多了 | 对照正确的子指令和用法。例如 `/baltop` 必须接 `top`，不接受页码。 |
+| 找不到玩家 | 检查玩家名称后再试一次。 |
+| 找不到货币 | 使用已配置的货币 ID；省略货币时会使用设置的默认值。 |
+| 金额格式错误 | 请输入大于零、符合货币小数位数且未超过指令上限的数字。 |
+| 经济操作被拒绝 | 根据返回的错误修正账户或经济条件，例如余额不足或超过债务上限。 |
+| 回滚被拒绝 | 根据错误提示判断：需要有效的交易 UUID、已回滚的交易是空操作、标记失败需先人工核对再重试。 |
+| 还原确认被拒绝 | 必须使用精确的小写 `confirm`：`/aceeco restore <backup-id> confirm`。`CONFIRM`、`Confirm` 与其他拼法都会被拒绝。 |
+| 还原时有玩家在线 | 先让所有玩家离线，再从控制台重试。 |
+| 还原的安全备份或快照检查失败 | 保留正式数据，根据错误提示检查原因；不要删除当前存储内容来强行还原。 |
