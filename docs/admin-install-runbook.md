@@ -13,16 +13,37 @@ This runbook is for the person who looks after a Paper or Folia server and wants
 
 ## What you need
 
-Use a Java 25 server running Paper or Folia 26.1.2. AceEconomy requires `AceLib-1.0.0.jar`; Vault and PlaceholderAPI are optional. The SQLite and MySQL JDBC drivers are already included in `AceEconomy-2.1.0.jar`, so do not download separate driver JARs.
+Use a Java 25 server running Paper or Folia 26.1.2. AceEconomy requires `AceLib-1.2.0.jar`; Vault and PlaceholderAPI are optional. The SQLite and MySQL JDBC drivers are already included in `AceEconomy-2.1.0.jar`, so do not download separate driver JARs.
+
+Paper/Folia 26.1.2 is the officially supported server line. Folia 26.2 has been validated only on specific builds (VERIFIED-BETA); other 26.2 builds are unverified.
 
 Prepare these two plugin files:
 
 ```text
-plugins/AceLib-1.0.0.jar
+plugins/AceLib-1.2.0.jar
 plugins/AceEconomy-2.1.0.jar
 ```
 
 Do not leave `AceLib-0.5.0-SNAPSHOT.jar` or another AceLib version in `plugins/`. Two AceLib versions can make the server report an ambiguous dependency and prevent a clean start.
+
+### AceLib v1.2.0 download and checksum
+
+Download `AceLib-1.2.0.jar` from the AceLib v1.2.0 GitHub Release: <https://github.com/smile-minecraft/AceLib/releases/tag/v1.2.0>.
+
+Before placing the JAR in `plugins/`, verify it against the published SHA-256:
+
+```text
+da9f196b47c2b28c6db443d102236b27c1a1bbdf7dd3e7c22470170420935278  AceLib-1.2.0.jar
+```
+
+Calculate the local digest and compare it exactly:
+
+```text
+shasum -a 256 AceLib-1.2.0.jar   # macOS
+sha256sum AceLib-1.2.0.jar       # Linux
+```
+
+Do not install the JAR if the digest does not match.
 
 ## Install in a maintenance window
 
@@ -40,7 +61,7 @@ On a fresh installation the directory may not exist yet. That is fine; the impor
 
 ### 2. Check the dependency set
 
-Remove old or duplicate AceLib files from the live `plugins/` directory, but keep them in the backup if they belong to the previous installation. Place exactly `AceLib-1.0.0.jar` and `AceEconomy-2.1.0.jar` in `plugins/`.
+Remove old or duplicate AceLib files from the live `plugins/` directory, but keep them in the backup if they belong to the previous installation. Place exactly `AceLib-1.2.0.jar` and `AceEconomy-2.1.0.jar` in `plugins/`.
 
 If you use integrations, place Vault and/or PlaceholderAPI in the same `plugins/` directory. AceEconomy starts without either optional plugin, so do not treat their absence as an installation failure.
 
@@ -141,7 +162,7 @@ After opening the server, keep the dated pre-install backup and the v2 configura
 
 Use [`troubleshooting.md`](troubleshooting.md) by symptom. In particular, check the following before changing data:
 
-- `AceLib-1.0.0.jar` is present and no older AceLib JAR is active.
+- `AceLib-1.2.0.jar` is present and no older AceLib JAR is active.
 - `config.yml` contains `version: "2.0"` and a valid `storage.type`.
 - A SQLite path stays under `plugins/AceEconomy/`.
 - A MySQL password and webhook URL were set locally, not copied into a ticket or public post.

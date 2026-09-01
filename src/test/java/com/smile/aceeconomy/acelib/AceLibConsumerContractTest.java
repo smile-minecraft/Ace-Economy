@@ -24,7 +24,7 @@ import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
 
 /**
- * Contract test for the minimal AceLib v1.0.0 consumer foundation.
+ * Contract test for the minimal AceLib v1.2.0 consumer foundation.
  *
  * <p>Covers the supported consumer branches (missing provider, registered-but-not-ready facade,
  * ready facade) and the public SafeScheduler API surface. Full server-region scheduling behaviour

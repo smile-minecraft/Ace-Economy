@@ -4,6 +4,8 @@ English · [简体中文](release-v2.0.0.zh-CN.md) · [繁體中文](release-v2.
 
 AceEconomy v2.0.0 is the v2 server release for Java 25 and Paper/Folia 26.1.2. It uses `AceLib-1.0.0.jar` as a required dependency and ships as `AceEconomy-2.0.0.jar`.
 
+> **Historical release notes.** The versions on this page describe v2.0.0 as it shipped. For a new installation, use the current release [AceEconomy v2.1.0](release-v2.1.0.md), which requires `AceLib-1.2.0.jar`.
+
 This page is for someone installing or replacing the server plugin. It lists what the release contains, which files must be present, where the v2 data lives, and how to check the file before installing.
 
 ## Contents

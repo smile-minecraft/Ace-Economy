@@ -16,7 +16,7 @@ This reference is for plugin developers. It describes the public integration sur
 
 ## Availability and compatibility
 
-AceEconomy requires AceLib `v1.0.0` at runtime. Vault and PlaceholderAPI are optional integrations; your plugin should handle either public service being unavailable. Do not make an AceEconomy implementation class a hard dependency when the standard integration is enough.
+AceEconomy requires AceLib `v1.2.0` at runtime. Vault and PlaceholderAPI are optional integrations; your plugin should handle either public service being unavailable. Do not make an AceEconomy implementation class a hard dependency when the standard integration is enough.
 
 ## Vault provider
 

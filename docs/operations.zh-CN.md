@@ -18,7 +18,7 @@
 
 ## 每日开服检查
 
-正常启动或重启之后，先在服务器控制台确认出现了 `AceEconomy v2.1.0` 和 `AceLib v1.0.0`，并且只加载了一个 AceLib 版本。接着用一个测试账号执行 `/money balance`，必要时再执行 `/baltop top`。
+正常启动或重启之后，先在服务器控制台确认出现了 `AceEconomy v2.1.0` 和 `AceLib v1.2.0`，并且只加载了一个 AceLib 版本。接着用一个测试账号执行 `/money balance`，必要时再执行 `/baltop top`。
 
 如果服务器还没准备好，不要对玩家开放。保留最早出现的那条 AceEconomy、AceLib 或存储错误，然后按照[故障排除](troubleshooting.zh-CN.md)处理。
 

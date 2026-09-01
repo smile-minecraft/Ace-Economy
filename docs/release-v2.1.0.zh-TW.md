@@ -2,7 +2,7 @@
 
 [English](release-v2.1.0.md) · [简体中文](release-v2.1.0.zh-CN.md) · 繁體中文
 
-AceEconomy v2.1.0 擴充 v2 伺服器功能，加入維運歷史與 rollback 指令、管理式 logical backup 與 restore、可設定貨幣與指令轉送、銀行票據與銀行 GUI 操作，以及 JSON/SQLite 持久化路徑。發布基線是 Java 25 與 Paper/Folia 26.1.2。`AceLib-1.0.0.jar` 是必要的 runtime dependency，預期插件 artifact 為 `AceEconomy-2.1.0.jar`。
+AceEconomy v2.1.0 擴充 v2 伺服器功能，加入維運歷史與 rollback 指令、管理式 logical backup 與 restore、可設定貨幣與指令轉送、銀行票據與銀行 GUI 操作，以及 JSON/SQLite 持久化路徑。發布基線是 Java 25 與 Paper/Folia 26.1.2，這是正式支援的伺服器線；Folia 26.2 僅在特定 build 上通過驗證（VERIFIED-BETA），其餘 26.2 build 尚未驗證。`AceLib-1.2.0.jar` 是必要的 runtime dependency，預期插件 artifact 為 `AceEconomy-2.1.0.jar`。
 
 本文供發布操作員與維護者使用，說明已實作的指令與 persistence surface，以及目前可取得的有界 runtime evidence。不宣稱尚未完成的真實玩家、正式資料庫、客戶端 GUI、跨程序或復原 gate 已通過。
 
@@ -32,11 +32,11 @@ AceEconomy v2.1.0 擴充 v2 伺服器功能，加入維運歷史與 rollback 指
 | --- | --- |
 | Java | 25 |
 | Paper/Folia | 26.1.2 |
-| 必要相依性 | `AceLib-1.0.0.jar` |
+| 必要相依性 | `AceLib-1.2.0.jar` |
 | 插件 artifact | `AceEconomy-2.1.0.jar`（預期檔名） |
 | AceLib config schema | `version: "2.0"` |
 
-config schema 維持 `2.0`；本版本沒有引入 `version: "2.1"`。`plugins/` 內只保留一個相容的 AceLib JAR。Vault 與 PlaceholderAPI 仍是選用整合，文件所述儲存路徑使用的 JDBC drivers 由插件 artifact 提供。
+config schema 維持 `2.0`；本版本沒有引入 `version: "2.1"`。`plugins/` 內只保留一個相容的 AceLib JAR。請從 <https://github.com/smile-minecraft/AceLib/releases/tag/v1.2.0> 下載 `AceLib-1.2.0.jar`，並在安裝前核對其 SHA-256 `da9f196b47c2b28c6db443d102236b27c1a1bbdf7dd3e7c22470170420935278`；實際命令見 [`admin-install-runbook.zh-TW.md`](admin-install-runbook.zh-TW.md)。Vault 與 PlaceholderAPI 仍是選用整合，文件所述儲存路徑使用的 JDBC drivers 由插件 artifact 提供。
 
 ## 本版本包含什麼
 
@@ -96,7 +96,7 @@ command registry 會把 `plugin.yml` 宣告的 aliases 轉送到 canonical roots
 ### 全新安裝
 
 1. 停止伺服器，在 live server directory 外建立有日期且可還原的副本；若已有 `plugins/AceEconomy/`，請完整納入。
-2. 把 `AceLib-1.0.0.jar` 與預期的 `AceEconomy-2.1.0.jar` 放進 `plugins/`，不要讓其他 AceLib 版本並存。
+2. 把 `AceLib-1.2.0.jar` 與預期的 `AceEconomy-2.1.0.jar` 放進 `plugins/`，不要讓其他 AceLib 版本並存。
 3. 先啟動一次建立 v2 檔案，再確認啟用中的 `plugins/AceEconomy/config.yml` 包含 `version: "2.0"`。
 4. 選擇 JSON、SQLite 或設定好的 MySQL-compatible backend。資料庫密碼與 webhook URL 只保留在本機。
 5. 再次啟動，檢查 enable messages 並執行適用的 operator checks。完整流程見 [`admin-install-runbook.zh-TW.md`](admin-install-runbook.zh-TW.md)。

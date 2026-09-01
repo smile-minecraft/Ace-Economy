@@ -2,7 +2,7 @@
 
 English · [简体中文](release-v2.1.0.zh-CN.md) · [繁體中文](release-v2.1.0.zh-TW.md)
 
-AceEconomy v2.1.0 extends the v2 server surface with operational history and rollback commands, managed logical backup and restore, configurable currencies and command forwarding, banknote and bank GUI actions, and JSON/SQLite persistence paths. The release baseline is Java 25 with Paper/Folia 26.1.2. `AceLib-1.0.0.jar` is a required runtime dependency. The expected plugin artifact is `AceEconomy-2.1.0.jar`.
+AceEconomy v2.1.0 extends the v2 server surface with operational history and rollback commands, managed logical backup and restore, configurable currencies and command forwarding, banknote and bank GUI actions, and JSON/SQLite persistence paths. The release baseline is Java 25 with Paper/Folia 26.1.2, the officially supported server line; Folia 26.2 is verified only on specific builds (VERIFIED-BETA) and other 26.2 builds are unverified. `AceLib-1.2.0.jar` is a required runtime dependency. The expected plugin artifact is `AceEconomy-2.1.0.jar`.
 
 This document is for release operators and maintainers. It describes the implemented command and persistence surfaces together with the bounded runtime evidence currently available. It does not claim that the remaining live-player, live-database, client-GUI, cross-process, or recovery gates have passed.
 
@@ -32,11 +32,11 @@ For installation and daily operation, use [`admin-install-runbook.md`](admin-ins
 | --- | --- |
 | Java | 25 |
 | Paper/Folia | 26.1.2 |
-| Required dependency | `AceLib-1.0.0.jar` |
+| Required dependency | `AceLib-1.2.0.jar` |
 | Plugin artifact | `AceEconomy-2.1.0.jar` (expected filename) |
 | AceLib config schema | `version: "2.0"` |
 
-The config schema remains `2.0`; this release does not introduce `version: "2.1"`. Keep exactly one compatible AceLib JAR in `plugins/`. Vault and PlaceholderAPI remain optional integrations, and the JDBC drivers used by the documented storage paths are supplied by the plugin artifact.
+The config schema remains `2.0`; this release does not introduce `version: "2.1"`. Keep exactly one compatible AceLib JAR in `plugins/`. Download `AceLib-1.2.0.jar` from <https://github.com/smile-minecraft/AceLib/releases/tag/v1.2.0> and verify its SHA-256 `da9f196b47c2b28c6db443d102236b27c1a1bbdf7dd3e7c22470170420935278` before installing it; [`admin-install-runbook.md`](admin-install-runbook.md) shows the exact command. Vault and PlaceholderAPI remain optional integrations, and the JDBC drivers used by the documented storage paths are supplied by the plugin artifact.
 
 ## What is included
 
@@ -98,7 +98,7 @@ The documented v2 backends are JSON, SQLite, and MySQL-compatible configuration 
 ### Fresh installation
 
 1. Stop the server and make a dated, restorable copy outside the live server directory. Include the complete `plugins/AceEconomy/` directory when it already exists.
-2. Put `AceLib-1.0.0.jar` and the expected `AceEconomy-2.1.0.jar` in `plugins/`. Do not keep another AceLib version beside them.
+2. Put `AceLib-1.2.0.jar` and the expected `AceEconomy-2.1.0.jar` in `plugins/`. Do not keep another AceLib version beside them.
 3. Start once to create the v2 files, then confirm the active `plugins/AceEconomy/config.yml` contains `version: "2.0"`.
 4. Choose JSON, SQLite, or the configured MySQL-compatible backend. Keep database passwords and webhook URLs as local values.
 5. Start again, check the enable messages, and run the appropriate operator checks. Use [`admin-install-runbook.md`](admin-install-runbook.md) for the full procedure.

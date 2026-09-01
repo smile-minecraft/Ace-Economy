@@ -14,7 +14,7 @@ import org.jetbrains.annotations.Nullable;
 import java.util.Optional;
 
 /**
- * Minimal AceLib v1.0.0 consumer foundation for AceEconomy v2.
+ * Minimal AceLib v1.2.0 consumer foundation for AceEconomy v2.
  *
  * <p>Demonstrates the supported consumer contract against AceLib:
  * <ul>

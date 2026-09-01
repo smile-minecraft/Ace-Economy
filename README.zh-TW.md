@@ -61,13 +61,15 @@ AceEconomy 為 Paper 與 Folia 伺服器提供遊戲內經濟系統。玩家可�
 | --- | --- |
 | Java | `25` |
 | 伺服器 | Paper/Folia API `26.1.2 build 74` |
-| 必要插件 | `AceLib v1.0.0` |
+| 必要插件 | `AceLib v1.2.0` |
 | 可選插件 | Vault、PlaceholderAPI |
+
+Paper/Folia 26.1.2 是正式支援的伺服器線。Folia 26.2 僅在特定 build 上通過驗證（VERIFIED-BETA），其餘 26.2 build 尚未驗證。
 
 ## 快速開始
 
 1. 安裝插件前先停止伺服器。
-2. 將 `AceLib-1.0.0.jar` 與 `AceEconomy-2.1.0.jar` 放進伺服器的 `plugins` 資料夾。
+2. 將 `AceLib-1.2.0.jar` 與 `AceEconomy-2.1.0.jar` 放進伺服器的 `plugins` 資料夾。請從 <https://github.com/smile-minecraft/AceLib/releases/tag/v1.2.0> 下載 `AceLib-1.2.0.jar`，並在放入前核對其 SHA-256（`da9f196b47c2b28c6db443d102236b27c1a1bbdf7dd3e7c22470170420935278`）；實際命令見[管理員安裝手冊](docs/admin-install-runbook.zh-TW.md)。
 3. 需要這些整合功能時，再安裝 Vault 或 PlaceholderAPI。
 4. 啟動伺服器。AceEconomy 第一次啟動時會建立預設設定與資料儲存。
 5. 依需求調整 `config.yml` 的儲存方式、語系、貨幣與整合設定。[設定指南](docs/config.zh-TW.md) 會說明各項設定。

@@ -15,7 +15,7 @@
 
 ## 开始前
 
-AceEconomy 运行时需要 AceLib `v1.0.0`。请先装好 AceLib，再启动 AceEconomy。`plugin.yml` 把 AceLib 声明为硬依赖；如果没有一个就绪的 AceLib 服务，AceEconomy 根本不会启动。运行环境还需要 Java 25，以及符合本版本基准的 Paper/Folia 服务器。
+AceEconomy 运行时需要 AceLib `v1.2.0`。请先装好 AceLib，再启动 AceEconomy。`plugin.yml` 把 AceLib 声明为硬依赖；如果没有一个就绪的 AceLib 服务，AceEconomy 根本不会启动。运行环境还需要 Java 25，以及符合本版本基准的 Paper/Folia 服务器。
 
 Vault 和 PlaceholderAPI 是可选的软依赖。插件没装或没启用时，AceEconomy 会跳过对应的整合。Discord 不需要另外装服务器插件，它用的是 `config.yml` 里配置的 webhook。
 
@@ -28,7 +28,7 @@ Vault 和 PlaceholderAPI 是可选的软依赖。插件没装或没启用时，A
 无法启动时：
 
 1. 确认 AceLib 的 JAR 已经安装并启用。
-2. 确认本版本使用的是 AceLib `v1.0.0`。
+2. 确认本版本使用的是 AceLib `v1.2.0`。
 3. 看 AceEconomy 启动时最早出现的那条错误。先把 AceLib 修好，再重启 AceEconomy。
 
 ## Vault

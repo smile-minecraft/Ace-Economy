@@ -15,7 +15,7 @@ Use this guide when replacing an existing v1 installation with AceEconomy v2. v2
 
 ## What changes
 
-The v2 runtime requires Java 25, Paper/Folia 26.1.2, and `AceLib-1.0.0.jar`. The v2 plugin is `AceEconomy-2.1.0.jar`. Vault and PlaceholderAPI remain optional integrations.
+The v2 runtime requires Java 25, Paper/Folia 26.1.2, and `AceLib-1.2.0.jar`. The v2 plugin is `AceEconomy-2.1.0.jar`. Vault and PlaceholderAPI remain optional integrations. Paper/Folia 26.1.2 is the officially supported server line; Folia 26.2 has been validated only on specific builds (VERIFIED-BETA), and other 26.2 builds are unverified.
 
 The v2 command surface uses explicit subcommands: `/money balance`, `/pay send`, `/withdraw cash`, `/baltop top`, `/bank open`, and `/aceeco` administration commands. Do not use v1-only history, rollback, import, or old banknote data instructions as if they were v2 commands.
 
@@ -40,7 +40,7 @@ With the server stopped, move the old AceEconomy JAR and old AceLib JAR out of t
 Place these files in the live `plugins/` directory:
 
 ```text
-AceLib-1.0.0.jar
+AceLib-1.2.0.jar
 AceEconomy-2.1.0.jar
 ```
 
@@ -100,7 +100,7 @@ Rollback means restoring the pre-cutover v1 installation. It does not mean askin
 
 1. Stop the v2 server with `stop` and wait for saving to finish.
 2. Make a separate copy of the current v2 `plugins/AceEconomy/` directory and any v2 database backup. Keep it for investigation; do not overwrite the v1 backup.
-3. Move `AceEconomy-2.1.0.jar` and `AceLib-1.0.0.jar` out of the live `plugins/` directory.
+3. Move `AceEconomy-2.1.0.jar` and `AceLib-1.2.0.jar` out of the live `plugins/` directory.
 4. Restore the pre-cutover v1 JARs, v1 configuration, and v1 data from the dated backup.
 5. Start the server and confirm that v1 data is readable before allowing players back in.
 

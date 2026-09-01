@@ -39,7 +39,7 @@
 | 插件版本 | `2.1.0` | `build.gradle.kts` `version = "2.1.0"` |
 | Java | 25（`JavaLanguageVersion.of(25)`；`compileJava` 與 `compileV2Foundation` 都是 `options.release.set(25)`） | `build.gradle.kts` |
 | Paper/Folia | 26.1.2（paperweight dev bundle `26.1.2.build.74-stable`；`plugin.yml` `api-version: 1.26`、`folia-supported: true`） | `build.gradle.kts`、`plugin.yml` |
-| AceLib | `com.github.smile-minecraft:AceLib:v1.0.0`（`compileOnly`；runtime 由外部 JAR 提供，**禁止 shade**） | `build.gradle.kts` |
+| AceLib | `com.github.smile-minecraft:AceLib:v1.2.0`（`compileOnly`；runtime 由外部 JAR 提供，**禁止 shade**） | `build.gradle.kts` |
 | Vault | `com.github.MilkBowl:VaultAPI:1.7.1`（`compileOnly`） | `build.gradle.kts` |
 | PlaceholderAPI | `me.clip:placeholderapi:2.11.6`（`compileOnly`） | `build.gradle.kts` |
 
@@ -89,7 +89,7 @@
 
 ### 打包內容
 
-`AceLib:v1.0.0`、`VaultAPI:1.7.1`、`PlaceholderAPI:2.11.6` 是 `compileOnly`，不打包。shaded `implementation` 包含 HikariCP `5.1.0`、`slf4j-api:2.0.9`、`slf4j-nop:2.0.9`、SQLite JDBC `3.47.0.0`、MySQL Connector/J `9.1.0`。兩個 JDBC driver 會 shade、由 `minimize { }` 保留，並以 `mergeServiceFiles()` 合併 `META-INF/services/java.sql.Driver`；不需額外 driver JAR。relocate 為 `com.zaxxer.hikari` → `com.smile.aceeconomy.libs.hikari`、`org.slf4j` → `com.smile.aceeconomy.libs.slf4j`，並排除 `META-INF/*.SF`、`*.DSA`、`*.RSA`。
+`AceLib:v1.2.0`、`VaultAPI:1.7.1`、`PlaceholderAPI:2.11.6` 是 `compileOnly`，不打包。shaded `implementation` 包含 HikariCP `5.1.0`、`slf4j-api:2.0.9`、`slf4j-nop:2.0.9`、SQLite JDBC `3.47.0.0`、MySQL Connector/J `9.1.0`。兩個 JDBC driver 會 shade、由 `minimize { }` 保留，並以 `mergeServiceFiles()` 合併 `META-INF/services/java.sql.Driver`；不需額外 driver JAR。relocate 為 `com.zaxxer.hikari` → `com.smile.aceeconomy.libs.hikari`、`org.slf4j` → `com.smile.aceeconomy.libs.slf4j`，並排除 `META-INF/*.SF`、`*.DSA`、`*.RSA`。
 
 `jar` 使用 classifier `slim`；`shadowJar` 使用空 classifier 取代預設 JAR；`assemble` 依賴 `shadowJar`。交付物是 `build/libs/AceEconomy-2.1.0.jar`。
 
@@ -127,7 +127,7 @@ v2 是同 repository 的 clean-slate 重寫；v1 source 只作行為與商業規
 ### 全新安裝
 
 1. 使用 Java 25 的 Paper/Folia 26.1.2（`api-version 1.26`、`folia-supported: true`）。
-2. 將 `AceLib-1.0.0.jar` 與 `AceEconomy-2.1.0.jar` 放入 `plugins/`；AceLib 是 hard dependency。
+2. 將 `AceLib-1.2.0.jar` 與 `AceEconomy-2.1.0.jar` 放入 `plugins/`；AceLib 是 hard dependency。
 3. Vault 或 VaultUnlocked、PlaceholderAPI 是選用整合，缺少時略過。
 4. 重啟伺服器；不要用 Bukkit `/reload` 驗證生命週期。
 5. 首次啟動建立 `config.yml`、`lang/<locale>.yml` 與 `data-v2.json`。
@@ -148,7 +148,7 @@ v2→v1 downgrade 不支援。v1.4.0 不會讀取 `data-v2.json` 或 `version: "
 
 ## v2.0.0 發布驗證：已完成與仍待補驗
 
-共用 Folia 測試服在 Folia `26.2-4-ver/26.2.x`（Minecraft 26.2）、Java 25、AceLib `1.0.0`、AceEconomy `2.0.0`、Vault `2.20.2`、PlaceholderAPI `2.12.3` 完成 fresh start 與第二次 restart；不代表 Folia 26.1.2 同版本證據。
+共用 Folia 測試服在 Folia `26.2-4-ver/26.2.x`（Minecraft 26.2）、Java 25、AceLib `1.0.0`、AceEconomy `2.0.0`、Vault `2.20.2`、PlaceholderAPI `2.12.3` 完成 fresh start 與第二次 restart；不代表 Folia 26.1.2 同版本證據。此歷史紀錄早於目前的 AceLib v1.2.0 runtime 基線；新安裝以[版本與 runtime 基線](#版本與-runtime-基線)中的 AceLib 版本為準。
 
 已完成：只有一個 `AceLib 1.0.0`、`AceEconomy 2.0.0` 成功啟用且無 `MemorySection` 啟動錯誤、建立 `plugins/AceEconomy/data-v2.json`；移除舊 `AceLib-0.5.0-SNAPSHOT.jar`；RCON 執行 `plugins`、`aceeco`、`money`、`pay`、`withdraw`、`baltop`、`bank` help、`aceeco reload` 與 stop；保留 parser regression log 與測試；full suite **291 tests、0 failures/errors**，parser target **23 tests、0 failures/errors**；`clean build` 與 `shadowJar` 成功；JAR inspection 的 `com/smile/acelib/**`、`org/bukkit/**`、`net/milkbowl/**`、`me/clip/**` 為 0，SQLite、MySQL、Hikari 與 service markers 存在。`SHA256SUMS` 已更新，本文不重複 hash。
 

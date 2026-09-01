@@ -61,13 +61,15 @@ AceEconomy adds an in-game economy to Paper and Folia servers. Players can check
 | --- | --- |
 | Java | `25` |
 | Server | Paper/Folia API `26.1.2 build 74` |
-| Required plugin | `AceLib v1.0.0` |
+| Required plugin | `AceLib v1.2.0` |
 | Optional plugins | Vault, PlaceholderAPI |
+
+Paper/Folia 26.1.2 is the officially supported server line. Folia 26.2 has been validated only on specific builds (VERIFIED-BETA); other 26.2 builds are unverified.
 
 ## Quick start
 
 1. Stop the server before installing the plugins.
-2. Place `AceLib-1.0.0.jar` and `AceEconomy-2.1.0.jar` in the server's `plugins` folder.
+2. Place `AceLib-1.2.0.jar` and `AceEconomy-2.1.0.jar` in the server's `plugins` folder. Download `AceLib-1.2.0.jar` from <https://github.com/smile-minecraft/AceLib/releases/tag/v1.2.0> and verify its SHA-256 (`da9f196b47c2b28c6db443d102236b27c1a1bbdf7dd3e7c22470170420935278`) before copying it in; the [admin installation runbook](docs/admin-install-runbook.md) shows the exact command.
 3. Add Vault or PlaceholderAPI if you want those integrations.
 4. Start the server. AceEconomy creates its default configuration and storage on first start.
 5. Adjust `config.yml` for your storage, locale, currencies, and integrations. The [configuration guide](docs/config.md) explains each setting.

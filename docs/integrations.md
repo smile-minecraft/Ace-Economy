@@ -15,7 +15,7 @@ Use this guide when a server administrator needs AceEconomy to work with another
 
 ## Before you start
 
-AceEconomy requires AceLib `v1.0.0` at runtime. Install it before AceEconomy; `plugin.yml` declares AceLib as a hard dependency, so AceEconomy will not start without a ready AceLib service. It also requires Java 25 and a Paper/Folia server matching the release baseline.
+AceEconomy requires AceLib `v1.2.0` at runtime. Install it before AceEconomy; `plugin.yml` declares AceLib as a hard dependency, so AceEconomy will not start without a ready AceLib service. It also requires Java 25 and a Paper/Folia server matching the release baseline.
 
 Vault and PlaceholderAPI are optional soft dependencies. AceEconomy skips the corresponding integration when either plugin is absent or disabled. Discord does not require a separate server plugin; it uses the webhook configured in `config.yml`.
 
@@ -28,7 +28,7 @@ When it works, AceEconomy enables normally and its commands are available. If Ac
 If it does not start:
 
 1. Check that the AceLib JAR is installed and enabled.
-2. Check that the AceLib version is `v1.0.0` for this release.
+2. Check that the AceLib version is `v1.2.0` for this release.
 3. Read the first AceEconomy startup error. Fix AceLib first, then restart AceEconomy.
 
 ## Vault

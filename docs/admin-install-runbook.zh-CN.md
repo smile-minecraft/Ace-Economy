@@ -13,16 +13,37 @@
 
 ## 需要准备的环境
 
-服务器需要使用 Java 25，并运行 Paper 或 Folia 26.1.2。AceEconomy 必须搭配 `AceLib-1.0.0.jar`；Vault 和 PlaceholderAPI 都是可选集成。SQLite 与 MySQL 的 JDBC 驱动程式已经包含在 `AceEconomy-2.1.0.jar` 中，不需要另外下载驱动程式 JAR。
+服务器需要使用 Java 25，并运行 Paper 或 Folia 26.1.2。AceEconomy 必须搭配 `AceLib-1.2.0.jar`；Vault 和 PlaceholderAPI 都是可选集成。SQLite 与 MySQL 的 JDBC 驱动程式已经包含在 `AceEconomy-2.1.0.jar` 中，不需要另外下载驱动程式 JAR。
+
+Paper/Folia 26.1.2 是正式支持的服务器线。Folia 26.2 仅在特定 build 上通过验证（VERIFIED-BETA），其余 26.2 build 未验证。
 
 请先准备以下两个插件文件：
 
 ```text
-plugins/AceLib-1.0.0.jar
+plugins/AceLib-1.2.0.jar
 plugins/AceEconomy-2.1.0.jar
 ```
 
 `plugins/` 中不要留下 `AceLib-0.5.0-SNAPSHOT.jar` 或其他 AceLib 版本。两个 AceLib 版本同时存在，可能造成依赖判断不明确，使服务器无法正常启动。
+
+### AceLib v1.2.0 下载与校验和
+
+请从 AceLib v1.2.0 的 GitHub Release 下载 `AceLib-1.2.0.jar`：<https://github.com/smile-minecraft/AceLib/releases/tag/v1.2.0>。
+
+放入 `plugins/` 之前，请用已发布的 SHA-256 核对：
+
+```text
+da9f196b47c2b28c6db443d102236b27c1a1bbdf7dd3e7c22470170420935278  AceLib-1.2.0.jar
+```
+
+计算本机 digest 并逐字比较：
+
+```text
+shasum -a 256 AceLib-1.2.0.jar   # macOS
+sha256sum AceLib-1.2.0.jar       # Linux
+```
+
+digest 不一致时不要安装该 JAR。
 
 ## 在维护时段安装
 
@@ -40,7 +61,7 @@ stop
 
 ### 2. 检查依赖插件
 
-请从正式 `plugins/` 目录移走旧版或重复的 AceLib；如果它们属于旧安装，仍要保留在备份中。然后在 `plugins/` 放入 `AceLib-1.0.0.jar` 与 `AceEconomy-2.1.0.jar`。
+请从正式 `plugins/` 目录移走旧版或重复的 AceLib；如果它们属于旧安装，仍要保留在备份中。然后在 `plugins/` 放入 `AceLib-1.2.0.jar` 与 `AceEconomy-2.1.0.jar`。
 
 如果要使用集成功能，再把 Vault 和／或 PlaceholderAPI 放到同一个 `plugins/` 目录。缺少这些可选插件时 AceEconomy 仍然可以启动，不要把它们不存在当成安装失败。
 
@@ -141,7 +162,7 @@ storage:
 
 请按症状查阅 [`troubleshooting.md`](troubleshooting.zh-CN.md)。修改数据前，先检查以下几点：
 
-- `AceLib-1.0.0.jar` 已存在，而且没有旧版 AceLib JAR 同时启用。
+- `AceLib-1.2.0.jar` 已存在，而且没有旧版 AceLib JAR 同时启用。
 - `config.yml` 含有 `version: "2.0"`，且 `storage.type` 是有效值。
 - SQLite 路径仍在 `plugins/AceEconomy/` 下。
 - MySQL 密码与 webhook 网址只在本机设置，没有贴到工单或公开文章。

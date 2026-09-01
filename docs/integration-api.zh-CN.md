@@ -16,7 +16,7 @@
 
 ## 可用性与兼容性
 
-AceEconomy 运行时需要 AceLib `v1.0.0`。Vault 和 PlaceholderAPI 是可选整合；你的插件应该能处理其中任一公开服务不可用的情况。如果标准整合已经够用，不要把 AceEconomy 的实现类设成硬依赖。
+AceEconomy 运行时需要 AceLib `v1.2.0`。Vault 和 PlaceholderAPI 是可选整合；你的插件应该能处理其中任一公开服务不可用的情况。如果标准整合已经够用，不要把 AceEconomy 的实现类设成硬依赖。
 
 ## Vault 提供者
 

@@ -18,7 +18,7 @@ Use this checklist to start a server, change configuration safely, confirm stora
 
 ## Start-of-day checks
 
-After a normal start or restart, check the server console for `AceEconomy v2.1.0` and `AceLib v1.0.0`. Confirm that only one AceLib version is loaded. Then use a test account to run `/money balance` and, when appropriate, `/baltop top`.
+After a normal start or restart, check the server console for `AceEconomy v2.1.0` and `AceLib v1.2.0`. Confirm that only one AceLib version is loaded. Then use a test account to run `/money balance` and, when appropriate, `/baltop top`.
 
 If the server is not ready, do not open it to players. Keep the first AceEconomy, AceLib, or storage error and follow [Troubleshooting](troubleshooting.md).
 

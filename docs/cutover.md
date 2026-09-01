@@ -39,7 +39,7 @@ The current source, build configuration, and runtime evidence are not identical 
 | Plugin version | `2.1.0` | `build.gradle.kts` `version = "2.1.0"` |
 | Java | 25 (`JavaLanguageVersion.of(25)`; `compileJava` and `compileV2Foundation` both use `options.release.set(25)`) | `build.gradle.kts` |
 | Paper/Folia | 26.1.2 (paperweight dev bundle `26.1.2.build.74-stable`; `plugin.yml` `api-version: 1.26`, `folia-supported: true`) | `build.gradle.kts`, `plugin.yml` |
-| AceLib | `com.github.smile-minecraft:AceLib:v1.0.0` (`compileOnly`; runtime supplied by an external JAR; **must not be shaded**) | `build.gradle.kts` |
+| AceLib | `com.github.smile-minecraft:AceLib:v1.2.0` (`compileOnly`; runtime supplied by an external JAR; **must not be shaded**) | `build.gradle.kts` |
 | Vault | `com.github.MilkBowl:VaultAPI:1.7.1` (`compileOnly`) | `build.gradle.kts` |
 | PlaceholderAPI | `me.clip:placeholderapi:2.11.6` (`compileOnly`) | `build.gradle.kts` |
 
@@ -95,7 +95,7 @@ Important ownership details:
 
 ### Packaged contents
 
-`build.gradle.kts` marks `AceLib:v1.0.0`, `VaultAPI:1.7.1`, and `PlaceholderAPI:2.11.6` as `compileOnly`, so runtime supplies them. Shaded `implementation` dependencies are HikariCP `5.1.0`, `slf4j-api:2.0.9`, `slf4j-nop:2.0.9`, SQLite JDBC `3.47.0.0`, and MySQL Connector/J `9.1.0`. Both JDBC drivers are shaded, retained by `minimize { }`, and included through merged `META-INF/services/java.sql.Driver`; operators do not need separate driver JARs. Relocations are `com.zaxxer.hikari` → `com.smile.aceeconomy.libs.hikari` and `org.slf4j` → `com.smile.aceeconomy.libs.slf4j`. Signature metadata `META-INF/*.SF`, `*.DSA`, and `*.RSA` is excluded.
+`build.gradle.kts` marks `AceLib:v1.2.0`, `VaultAPI:1.7.1`, and `PlaceholderAPI:2.11.6` as `compileOnly`, so runtime supplies them. Shaded `implementation` dependencies are HikariCP `5.1.0`, `slf4j-api:2.0.9`, `slf4j-nop:2.0.9`, SQLite JDBC `3.47.0.0`, and MySQL Connector/J `9.1.0`. Both JDBC drivers are shaded, retained by `minimize { }`, and included through merged `META-INF/services/java.sql.Driver`; operators do not need separate driver JARs. Relocations are `com.zaxxer.hikari` → `com.smile.aceeconomy.libs.hikari` and `org.slf4j` → `com.smile.aceeconomy.libs.slf4j`. Signature metadata `META-INF/*.SF`, `*.DSA`, and `*.RSA` is excluded.
 
 The `jar` task uses classifier `slim`; `shadowJar` uses the empty classifier and replaces the default JAR; `assemble` depends on `shadowJar`. The artifact is `build/libs/AceEconomy-2.1.0.jar`.
 
@@ -140,7 +140,7 @@ Removed v1 components include centralized managers (`CurrencyManager`, `ConfigMa
 ### Fresh install
 
 1. Use Java 25 with Paper/Folia 26.1.2 (`api-version 1.26`, `folia-supported: true`).
-2. Put `AceLib-1.0.0.jar` and `AceEconomy-2.1.0.jar` in `plugins/`; AceLib is hard dependency.
+2. Put `AceLib-1.2.0.jar` and `AceEconomy-2.1.0.jar` in `plugins/`; AceLib is hard dependency.
 3. Vault or VaultUnlocked and PlaceholderAPI are optional; absent integrations are skipped.
 4. Restart the server. Do not use Bukkit `/reload` to validate lifecycle; the plan explicitly does not use it.
 5. The first start creates `config.yml`, `lang/<locale>.yml`, and `data-v2.json`.
@@ -161,7 +161,7 @@ v2→v1 downgrade is unsupported. v1.4.0 cannot read `data-v2.json` or a `versio
 
 ## v2.0.0 release validation: completed and open
 
-The shared Folia test server completed a fresh start and a second restart on Folia `26.2-4-ver/26.2.x` (Minecraft 26.2), Java 25, AceLib `1.0.0`, AceEconomy `2.0.0`, Vault `2.20.2`, and PlaceholderAPI `2.12.3`. It is not same-version Folia 26.1.2 evidence.
+The shared Folia test server completed a fresh start and a second restart on Folia `26.2-4-ver/26.2.x` (Minecraft 26.2), Java 25, AceLib `1.0.0`, AceEconomy `2.0.0`, Vault `2.20.2`, and PlaceholderAPI `2.12.3`. It is not same-version Folia 26.1.2 evidence. This historical run predates the current AceLib v1.2.0 runtime baseline; new installations follow the AceLib version in [Version and runtime baseline](#version-and-runtime-baseline).
 
 Completed checks: one active AceLib (`AceLib 1.0.0`), successful `AceEconomy 2.0.0` enable without the `MemorySection` startup error, and creation of `plugins/AceEconomy/data-v2.json`; removal of old `AceLib-0.5.0-SNAPSHOT.jar`; RCON `plugins`, `aceeco`, `money`, `pay`, `withdraw`, `baltop`, `bank` help checks, `aceeco reload`, and RCON stop; parser regression logs and tests; full suite **291 tests, 0 failures/errors**, parser target **23 tests, 0 failures/errors**; successful `clean build` and `shadowJar`; JAR inspection showing zero `com/smile/acelib/**`, `org/bukkit/**`, `net/milkbowl/**`, and `me/clip/**`, with SQLite, MySQL, Hikari, and service markers present. `SHA256SUMS` was updated; the hash is not repeated here.
 
