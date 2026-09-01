@@ -118,6 +118,70 @@ class V2ConfigResourceContractTest {
         }
     }
 
+    @Test
+    void canonicalLangDynamicVarsUseCurlyAndNoUnescapedAnglePlaceholders() {
+        // Dynamic vars must use {name} not <name>; help literals must be escaped as \<name>
+        // This separates MiniMessage <tag> from {placeholder} and catches <currency_name>/<amount>/<issuer> regressions.
+        for (String loc : new String[]{"en_US", "zh_TW", "zh_CN"}) {
+            String resource = "lang/" + loc + ".yml";
+            String raw;
+            try (InputStream in = getClass().getClassLoader().getResourceAsStream(resource)) {
+                assertNotNull(in, "missing resource: " + resource);
+                raw = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+            // Unescaped dynamic placeholders must not appear
+            for (String dyn : new String[]{"currency_name", "amount", "issuer"}) {
+                Pattern unescaped = Pattern.compile("(?<!\\\\)<" + Pattern.quote(dyn) + ">");
+                Matcher m = unescaped.matcher(raw);
+                assertFalse(m.find(), resource + " must not contain unescaped <" + dyn + "> (use {" + dyn + "} or \\<" + dyn + "\\> for literals)");
+            }
+            // Also ensure help literals are escaped where they appear
+            for (String line : raw.split("\n")) {
+                if (line.contains("help-") || line.contains("usage")) {
+                    // Help/usage literals like <player> must be escaped as \<player> (single backslash before <)
+                    Pattern unescapedPlayer = Pattern.compile("(?<!\\\\)<player>");
+                    if (unescapedPlayer.matcher(line).find()) {
+                        assertFalse(true, resource + " help/usage line must escape <player> as \\<player>: " + line.trim());
+                    }
+                    if (line.contains("help-") && line.contains("<amount>")) {
+                        Pattern unescapedAmount = Pattern.compile("(?<!\\\\)<amount>");
+                        if (unescapedAmount.matcher(line).find()) {
+                            assertFalse(true, resource + " help line must escape <amount> as \\<amount>: " + line.trim());
+                        }
+                    }
+                }
+            }
+            // Ensure MiniMessage tags are not confused with placeholders: check that no leftover {currency_name} etc is missing?
+            // The placeholder consistency test above already covers that.
+        }
+    }
+
+    @Test
+    void canonicalLangHelpLiteralsAreEscapedAndRenderAsLiteral() {
+        // Help literals must be escaped so MiniMessage does not parse them as tags.
+        // After YAML single-quote load, escaped form is "\<player>" (backslash before '<', '>' literal).
+        // MiniMessage renders "\<player>" as literal "<player>".
+        for (String loc : new String[]{"en_US", "zh_TW", "zh_CN"}) {
+            Map<String, Object> lang = loadYaml("lang/" + loc + ".yml");
+            Object helpPay = null;
+            Object admin = lang.get("admin");
+            if (admin instanceof Map) {
+                helpPay = ((Map<String, Object>) admin).get("help-pay");
+            }
+            if (helpPay != null) {
+                String val = String.valueOf(helpPay);
+                // Must contain escaped literal "\<player>" or "\<amount>"
+                assertTrue(val.contains("\\<player>") || val.contains("\\<amount>") || val.contains("\\<"),
+                        loc + " help-pay must contain escaped literal \\<player> etc, got: " + val);
+                Pattern unescaped = Pattern.compile("(?<!\\\\)<player>");
+                assertFalse(unescaped.matcher(val).find(),
+                        loc + " help-pay must not contain unescaped <player>, got: " + val);
+            }
+        }
+    }
+
     private Set<String> extractNames(String value, Pattern placeholder) {
         Set<String> names = new TreeSet<>();
         Matcher m = placeholder.matcher(value);

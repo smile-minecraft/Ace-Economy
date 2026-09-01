@@ -82,8 +82,8 @@ class ConfigCapabilityTest {
         assertTrue(settings.containsKey("locale"), "必須保留 locale 設定");
         for (String loc : List.of("en_US", "zh_TW", "zh_CN")) {
             InputStream lang = getClass().getClassLoader()
-                    .getResourceAsStream("lang/messages_" + loc + ".yml");
-            assertNotNull(lang, "語系檔 messages_" + loc + ".yml 必須存在");
+                    .getResourceAsStream("lang/" + loc + ".yml");
+            assertNotNull(lang, "語系檔 lang/" + loc + ".yml 必須存在");
         }
     }
 

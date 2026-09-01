@@ -13,11 +13,17 @@ public final class ReloadResult {
 
     private final boolean configReloaded;
     private final boolean langReloaded;
+    private final String configError;
     private final String langError;
 
     public ReloadResult(boolean configReloaded, boolean langReloaded, String langError) {
+        this(configReloaded, langReloaded, null, langError);
+    }
+
+    public ReloadResult(boolean configReloaded, boolean langReloaded, String configError, String langError) {
         this.configReloaded = configReloaded;
         this.langReloaded = langReloaded;
+        this.configError = configError;
         this.langError = langError;
     }
 
@@ -33,6 +39,10 @@ public final class ReloadResult {
         return configReloaded && langReloaded;
     }
 
+    public String configError() {
+        return configError;
+    }
+
     public String langError() {
         return langError;
     }
@@ -40,6 +50,9 @@ public final class ReloadResult {
     public String diagnostics() {
         StringBuilder sb = new StringBuilder();
         sb.append("config=").append(configReloaded ? "ok" : "failed");
+        if (configError != null) {
+            sb.append(", configError=").append(configError);
+        }
         sb.append(", lang=").append(langReloaded ? "ok" : "failed");
         if (langError != null) {
             sb.append(", langError=").append(langError);

@@ -12,13 +12,166 @@ general:
   invalid-amount: "<red>Invalid amount: <white>{amount}</white></red>"
   player-not-found: "<red>Player not found: <white>{player}</white></red>"
   status: "<green>Status: <white>{status}</white></green>"
+  amount-must-be-positive: "<red>Amount must be positive!</red>"
+  player-offline: "<red>Player <white>{player}</white> is offline!</red>"
+  player-no-account: "<red>Player does not have an account!</red>"
+  account-not-loaded: "<red>Account not loaded. Please try again later!</red>"
+  invalid-time-format: "<red>Invalid time format! Use formats like 1h, 30m, 1d.</red>"
+  inventory-full: "<red>Inventory full! Cannot withdraw banknote.</red>"
+  transaction-failed: "<red>Transaction failed!</red>"
+  transaction-cancelled: "<red>Transaction cancelled!</red>"
+  reload-success: "<green>Configuration reloaded!</green>"
+  unknown-currency: "<red>Error: Unknown currency <white>{currency}</white>.</red>"
+  console-only-player: "<red>This command can only be executed by players!</red>"
+  console-specify-player: "<red>Console must specify a player name!</red>"
+  offline-support-disabled: "<red>Offline player support is currently disabled.</red>"
 
 economy:
   balance-check: "Your balance: <yellow>{balance}</yellow>"
   balance-check-other: "<aqua>{player}</aqua>'s balance: <yellow>{balance}</yellow>"
+  balance-check-currency: "Your {currency_name} balance: <yellow>{balance}</yellow>"
+  balance-check-currency-other: "<aqua>{player}</aqua>'s {currency_name} balance: <yellow>{balance}</yellow>"
   payment-sent: "<green>Sent <yellow>{amount}</yellow> to <aqua>{player}</aqua>!</green>"
   payment-received: "<green>Received <yellow>{amount}</yellow> from <aqua>{player}</aqua>!</green>"
+  payment-sent-currency: "<green>Sent <yellow>{amount}</yellow> {currency_name} to <aqua>{player}</aqua>!</green>"
+  payment-received-currency: "<green>Received <yellow>{amount}</yellow> {currency_name} from <aqua>{player}</aqua>!</green>"
+  cannot-pay-self: "<red>You cannot pay yourself!</red>"
   insufficient-funds: "<red>Insufficient funds!</red>"
+  insufficient-funds-currency: "<red>Insufficient {currency_name} funds (Required: {amount})!</red>"
+  insufficient-funds-debt: "<red>Insufficient funds! Your account can only overdraw <gold>{limit}</gold> (Current: <yellow>{balance}</yellow>).<reset>"
+  debt-status: "<gray>(Credit limit: <gold>{limit}</gold>)</gray>"
+  withdraw-success: "<green>Withdrawn banknote: <yellow>{amount}</yellow></green>"
+  withdraw-redeem: "<green>Redeemed banknote: <yellow>{amount}</yellow> <gray>(Issuer: {issuer})</gray></green>"
+  min-withdraw-amount: "<red>Minimum withdraw amount is {amount}!</red>"
+  account-not-found: "<red>Account not found!</red>"
 
 admin:
   give: "<green>Given <yellow>{amount}</yellow> to <aqua>{player}</aqua></green>"
+  take: "<green>Taken <yellow>{amount}</yellow> from <aqua>{player}</aqua></green>"
+  set: "<green>Set <aqua>{player}</aqua>'s balance to <yellow>{amount}</yellow></green>"
+  give-currency: "<green>Given <yellow>{amount}</yellow> {currency_name} to <aqua>{player}</aqua></green>"
+  take-currency: "<green>Taken <yellow>{amount}</yellow> {currency_name} from <aqua>{player}</aqua></green>"
+  set-currency: "<green>Set <aqua>{player}</aqua>'s {currency_name} balance to <yellow>{amount}</yellow></green>"
+  notify-give: "<green>Admin gave you <yellow>{amount}</yellow></green>"
+  notify-take: "<green>Admin took <yellow>{amount}</yellow> from you</green>"
+  notify-set: "<green>Admin set your balance to <yellow>{amount}</yellow></green>"
+  notify-give-currency: "<green>Admin gave you <yellow>{amount}</yellow> {currency_name}</green>"
+  notify-take-currency: "<green>Admin took <yellow>{amount}</yellow> {currency_name} from you</green>"
+  notify-set-currency: "<green>Admin set your {currency_name} balance to <yellow>{amount}</yellow></green>"
+  admin-action-failed: "<red>Action failed!</red>"
+  admin-taking-failed: "<red>Action failed! Insufficient funds likely.</red>"
+  backup-success: "<green>Backup created: <white>{backup_id}</white> (logical v2 snapshot)</green>"
+  backup-failed: "<red>Backup failed: <white>{reason}</white></red>"
+  restore-success: "<green>Restored backup <white>{backup_id}</white>. Safety backup: <white>{safety_id}</white>. Restart the server before players join!</green>"
+  restore-confirm-required: "<red>Restore is destructive. Re-run exactly as: <white>/aceeco restore {backup_id} confirm</white></red>"
+  restore-failed: "<red>Restore failed: <white>{reason}</white></red>"
+  help-header: "<yellow>--- AceEconomy Commands ---</yellow>"
+  help-money: "<white>/money [player]</white> <gray>- Check balance</gray>"
+  help-withdraw: '<white>/withdraw \<amount></white> <gray>- Withdraw balance as check</gray>'
+  help-pay: '<white>/pay \<player> \<amount></white> <gray>- Transfer money</gray>'
+  help-admin-header: "<yellow>--- Admin Commands ---</yellow>"
+  help-give: '<white>/aceeco give \<player> \<amount> [currency]</white> <gray>- Give money</gray>'
+  help-take: '<white>/aceeco take \<player> \<amount> [currency]</white> <gray>- Take money</gray>'
+  help-set: '<white>/aceeco set \<player> \<amount> [currency]</white> <gray>- Set balance</gray>'
+  help-history: '<white>/aceeco history \<player> [page]</white> <gray>- View transaction history</gray>'
+  help-rollback: '<white>/aceeco rollback \<id></white> <gray>- Rollback transaction</gray>'
+  help-import: '<white>/aceeco import \<essentials|cmi></white> <gray>- Import data</gray>'
+  help-migrate: '<white>/aceeco migrate \<sqlite|mysql></white> <gray>- Migrate storage type</gray>'
+  help-help: "<white>/aceeco help</white> <gray>- Show this help</gray>"
+  migration-start: "<yellow>Starting data import from <white>{plugin}</white>...</yellow>"
+  migration-progress: "<gray>Import progress: <white>{current}/{total}</white></gray>"
+  migration-complete: "<green>Migration complete! Success: <white>{success}</white>, Failed: <white>{fail}</white></green>"
+  migration-error: "<red>Migration failed: <white>{error}</white></red>"
+  migration-not-available: "<red>Data folder for <white>{plugin}</white> not found!</red>"
+  migration-in-progress: "<red>Migration already in progress!</red>"
+  migration-usage: '<gray>Usage: <white>/aceeco import \<essentials|cmi></white></gray>'
+  migration-unsupported-plugin: "<red>Unsupported plugin: <white>{plugin}</white></red>"
+  migration-supported-plugins: "<gray>Supported plugins: <white>essentials, cmi</white></gray>"
+  migration-source-not-found: "<red>Source not found for <white>{plugin}</white>!</red>"
+  migration-no-data: "<red>No data found to import!</red>"
+  migration-failed: "<red>Migration failed: <white>{error}</white></red>"
+  usage-import: '<gray>Usage: <white>/aceeco import \<essentials|cmi></white></gray>'
+
+command:
+  usage-pay: '<gray>Usage: <white>/pay \<player> \<amount> [currency]</white></gray>'
+  usage-withdraw: '<gray>Usage: <white>/withdraw \<amount></white></gray>'
+  usage-balance: "<gray>Usage: <white>/balance [player] [currency]</white></gray>"
+  usage-baltop: "<gray>Usage: <white>/baltop [currency] [page]</white></gray>"
+  usage-history: '<gray>Usage: <white>/aceeco history \<player> [page]</white></gray>'
+  usage-rollback: '<gray>Usage: <white>/aceeco rollback \<player> \<time> [category]</white></gray>'
+  invalid-uuid: "<red>Transaction id must be a valid UUID: <white>{raw}</white></red>"
+  invalid-page: "<red>Page must be a non-negative integer: <white>{raw}</white></red>"
+  restore-confirm-required: "<red>Restore is destructive. Re-run exactly as: <white>/aceeco restore {backup_id} confirm</white></red>"
+
+error:
+  format-error: "<red>Message format error for key={key}</red>"
+  missing-key: "<red>Message key missing: {key}</red>"
+  injection-detected: "<red>Unsafe content detected in message variable</red>"
+  bedrock-lookup-failed: "<red>Bedrock player lookup failed</red>"
+  folia-unsafe-context: "<red>Folia region context blocked message operation</red>"
+
+baltop:
+  header: "<gold>=== 🏆 {currency_name} Top Balances ===</gold>"
+  entry: "<yellow>#{rank} <white>{player} <dark_gray>- <green>{amount}"
+  empty: "<red>Leaderboard is empty.</red>"
+  invalid-page: "<red>Page out of range (Max: {max_page})"
+  footer: "<gray>Updated: {time_ago} ago <dark_gray>| </dark_gray><click:run_command:'/baltop {currency} {prev_page}'><gold>[Prev]</gold></click> <gray>({page}/{total_pages}) </gray><click:run_command:'/baltop {currency} {next_page}'><gold>[Next]</gold></click>"
+  loading: "<gray>Loading leaderboard...</gray>"
+  disabled: "<red>Leaderboard is disabled.</red>"
+
+history:
+  header: "<gold>=== {player}'s History (Page {page}) ===</gold>"
+  empty: "<yellow>No history found.</yellow>"
+  error: "<red>Error fetching history.</red>"
+  entry-set: "<yellow>[{time}] {type} {old_balance} -> {new_balance} {currency} {partner}</yellow>"
+  entry-normal: "<green>[{time}] {type} {amount} {currency} {partner}</green>"
+  entry-reverted: "<gray>[{time}] {type} (Reverted) {amount} {currency} {partner}</gray>"
+  id: "<dark_gray>  ID: {id}</dark_gray>"
+  usage: '<gray>Usage: <white>/aceeco history \<player> [page]</white></gray>'
+
+rollback:
+  usage: '<gray>Usage: <white>/aceeco rollback \<player> \<time> [category]</white></gray>'
+  searching: "<yellow>Searching and rolling back transactions...</yellow>"
+  none-found: "<red>No matching transactions found to rollback.</red>"
+  complete: "<green>Rollback complete! Success: {success}, Failed: {fail}</green>"
+  error: "<red>Error occurred during rollback.</red>"
+
+usage:
+  pay: '<gray>Usage: <white>/pay \<player> \<amount> [currency]</white></gray>'
+  withdraw: '<gray>Usage: <white>/withdraw \<amount></white></gray>'
+  balance: "<gray>Usage: <white>/balance [player] [currency]</white></gray>"
+  baltop: "<gray>Usage: <white>/baltop [currency] [page]</white></gray>"
+  history: '<gray>Usage: <white>/aceeco history \<player> [page]</white></gray>'
+  rollback: '<gray>Usage: <white>/aceeco rollback \<player> \<time> [category]</white></gray>'
+
+console:
+  start: "AceEconomy {version} Enabled!"
+  stop: "AceEconomy Disabled!"
+  migration-start: "Starting migration from {plugin}..."
+
+gui:
+  bank-title: "<gradient:#FFD700:#FFA500>🏦 AceEconomy Dashboard</gradient>"
+  bank-profile-name: "<gradient:aqua:blue>👤 Account: {player}</gradient>"
+  bank-assets-name: "<green>💵 Assets (Balance)"
+  bank-debt-name: "<red>📉 Debt & Credit"
+  bank-history-name: "<gold>📜 Transaction History"
+  bank-withdraw-name: "<green>💸 Withdraw Banknote"
+  bank-withdraw-lore:
+    - "<gray>Left-Click: $1,000</gray>"
+    - "<gray>Right-Click: $10,000</gray>"
+    - "<gray>Shift-Click: Custom Amount</gray>"
+  bank-close-name: "<!italic><red>Close Menu"
+  bank-loading: "<!italic><yellow>Loading data..."
+  input-request: "<yellow>Please type the amount you want to withdraw in chat:</yellow> <gray>(Type 'cancel' to stop)</gray>"
+  input-invalid: "<red>Invalid number! Please try again.</red>"
+  input-cancel: "<yellow>Withdrawal cancelled.</yellow>"
+
+banknote:
+  name: "<green><bold>Banknote</bold></green> <gray>(Banknote)</gray>"
+  lore-value: "<gray>Value: </gray><yellow>{value}</yellow>"
+  lore-issuer: "<gray>Issuer: </gray><aqua>{issuer}</aqua>"
+  lore-click: "<dark_gray>Right-click to redeem</dark_gray>"
+  damaged: "<red>This banknote is damaged!</red>"
+  voided: "<red>This banknote has been voided!</red>"
+  redeem-success: "<green>Redeemed banknote: <yellow>{amount}</yellow> <gray>(Issuer: {issuer})</gray></green>"
+  redeem-failed: "<red>Redemption failed!</red>"

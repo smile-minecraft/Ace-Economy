@@ -1,0 +1,179 @@
+package com.smile.aceeconomy.infrastructure.acelib;
+
+import java.util.Set;
+
+/**
+ * Authoritative production message key registry for v2.
+ *
+ * <p>This set is the explicit, auditable contract for coverage: tests assert
+ * that all three canonical lang files contain these keys. It is NOT derived
+ * at test time from the resources themselves, so resource-to-resource tautology
+ * is impossible.</p>
+ *
+ * <p>How it represents production usage: every key listed here currently backs
+ * a v2 lang template that will be used by the command/GUI/error/banknote
+ * surfaces. For the initial localization baseline the production code has not yet
+ * migrated all command callers, so the registry equals the intended v2 surface
+ * rather than a live scanner of Java literals. For future command migration
+ * changes, two guards apply:</p>
+ * <ul>
+ *   <li>If a new key is added to code but the lang files are not updated, coverage
+ *       fails because the new key must be added here and will then be missing
+ *       from the lang files.</li>
+ *   <li>If a new key is added to the lang files but this registry is not updated,
+ *       the scanner guard in {@code LanguageCoverageTest} (literal scan of
+ *       src/main/java for lang keys) will detect that the production literal
+ *       is not in the registry and fail, prompting a registry update.</li>
+ * </ul>
+ * <p>This keeps the expected set checkable in review and prevents silent drift.</p>
+ */
+public final class ProductionMessageKeys {
+
+    private ProductionMessageKeys() {}
+
+    public static final Set<String> EXPECTED = Set.of(
+            "admin.admin-action-failed",
+            "admin.admin-taking-failed",
+            "admin.backup-failed",
+            "admin.backup-success",
+            "admin.give",
+            "admin.give-currency",
+            "admin.help-admin-header",
+            "admin.help-give",
+            "admin.help-header",
+            "admin.help-help",
+            "admin.help-history",
+            "admin.help-import",
+            "admin.help-migrate",
+            "admin.help-money",
+            "admin.help-pay",
+            "admin.help-rollback",
+            "admin.help-set",
+            "admin.help-take",
+            "admin.help-withdraw",
+            "admin.migration-complete",
+            "admin.migration-error",
+            "admin.migration-failed",
+            "admin.migration-in-progress",
+            "admin.migration-no-data",
+            "admin.migration-not-available",
+            "admin.migration-progress",
+            "admin.migration-source-not-found",
+            "admin.migration-start",
+            "admin.migration-supported-plugins",
+            "admin.migration-unsupported-plugin",
+            "admin.migration-usage",
+            "admin.notify-give",
+            "admin.notify-give-currency",
+            "admin.notify-set",
+            "admin.notify-set-currency",
+            "admin.notify-take",
+            "admin.notify-take-currency",
+            "admin.restore-confirm-required",
+            "admin.restore-failed",
+            "admin.restore-success",
+            "admin.set",
+            "admin.set-currency",
+            "admin.take",
+            "admin.take-currency",
+            "admin.usage-import",
+            "baltop.disabled",
+            "baltop.empty",
+            "baltop.entry",
+            "baltop.footer",
+            "baltop.header",
+            "baltop.invalid-page",
+            "baltop.loading",
+            "banknote.damaged",
+            "banknote.lore-click",
+            "banknote.lore-issuer",
+            "banknote.lore-value",
+            "banknote.name",
+            "banknote.redeem-failed",
+            "banknote.redeem-success",
+            "banknote.voided",
+            "command.invalid-page",
+            "command.invalid-uuid",
+            "command.restore-confirm-required",
+            "command.usage-balance",
+            "command.usage-baltop",
+            "command.usage-history",
+            "command.usage-pay",
+            "command.usage-rollback",
+            "command.usage-withdraw",
+            "console.migration-start",
+            "console.start",
+            "console.stop",
+            "economy.account-not-found",
+            "economy.balance-check",
+            "economy.balance-check-currency",
+            "economy.balance-check-currency-other",
+            "economy.balance-check-other",
+            "economy.cannot-pay-self",
+            "economy.debt-status",
+            "economy.insufficient-funds",
+            "economy.insufficient-funds-currency",
+            "economy.insufficient-funds-debt",
+            "economy.min-withdraw-amount",
+            "economy.payment-received",
+            "economy.payment-received-currency",
+            "economy.payment-sent",
+            "economy.payment-sent-currency",
+            "economy.withdraw-redeem",
+            "economy.withdraw-success",
+            "error.bedrock-lookup-failed",
+            "error.folia-unsafe-context",
+            "error.format-error",
+            "error.injection-detected",
+            "error.missing-key",
+            "general.account-not-loaded",
+            "general.amount-must-be-positive",
+            "general.console-only-player",
+            "general.console-specify-player",
+            "general.invalid-amount",
+            "general.invalid-time-format",
+            "general.inventory-full",
+            "general.no-permission",
+            "general.offline-support-disabled",
+            "general.player-no-account",
+            "general.player-not-found",
+            "general.player-offline",
+            "general.reload-success",
+            "general.status",
+            "general.transaction-cancelled",
+            "general.transaction-failed",
+            "general.unknown-currency",
+            "gui.bank-assets-name",
+            "gui.bank-close-name",
+            "gui.bank-debt-name",
+            "gui.bank-history-name",
+            "gui.bank-loading",
+            "gui.bank-profile-name",
+            "gui.bank-title",
+            "gui.bank-withdraw-lore",
+            "gui.bank-withdraw-name",
+            "gui.input-cancel",
+            "gui.input-invalid",
+            "gui.input-request",
+            "history.empty",
+            "history.entry-normal",
+            "history.entry-reverted",
+            "history.entry-set",
+            "history.error",
+            "history.header",
+            "history.id",
+            "history.usage",
+            "message.prefix",
+            "rollback.complete",
+            "rollback.error",
+            "rollback.none-found",
+            "rollback.searching",
+            "rollback.usage",
+            "usage.balance",
+            "usage.baltop",
+            "usage.history",
+            "usage.pay",
+            "usage.rollback",
+            "usage.withdraw"
+    );
+}

@@ -13,9 +13,9 @@ public class LanguageIntegrityTest {
 
     @Test
     public void testLanguageKeysMatchEnUS() {
-        Set<String> enKeys = loadKeys("lang/messages_en_US.yml");
-        Set<String> zhTWKeys = loadKeys("lang/messages_zh_TW.yml");
-        Set<String> zhCNKeys = loadKeys("lang/messages_zh_CN.yml");
+        Set<String> enKeys = loadKeys("lang/en_US.yml");
+        Set<String> zhTWKeys = loadKeys("lang/zh_TW.yml");
+        Set<String> zhCNKeys = loadKeys("lang/zh_CN.yml");
 
         Assertions.assertFalse(enKeys.isEmpty(), "en_US keys should not be empty");
 
@@ -28,14 +28,14 @@ public class LanguageIntegrityTest {
         Set<String> missingTw = new HashSet<>(enKeys);
         missingTw.removeAll(zhTWKeys);
         if (!missingTw.isEmpty()) {
-            Assertions.fail("messages_zh_TW.yml is missing keys: " + missingTw);
+            Assertions.fail("zh_TW.yml is missing keys: " + missingTw);
         }
 
         // VALIDATION 3: zh_CN matches en_US
         Set<String> missingCn = new HashSet<>(enKeys);
         missingCn.removeAll(zhCNKeys);
         if (!missingCn.isEmpty()) {
-            Assertions.fail("messages_zh_CN.yml is missing keys: " + missingCn);
+            Assertions.fail("zh_CN.yml is missing keys: " + missingCn);
         }
     }
 
