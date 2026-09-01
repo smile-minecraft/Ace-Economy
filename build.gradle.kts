@@ -26,8 +26,8 @@ dependencies {
     // Paper / Folia API (Folia-compatible) — 26.1.2 dev bundle
     paperweight.paperDevBundle("26.1.2.build.74-stable")
 
-    // AceLib v1.0.0 (Folia-first base library) — provided at runtime by the server, never shaded
-    compileOnly("com.github.smile-minecraft:AceLib:v1.0.0")
+    // AceLib v1.2.0 (Folia-first base library) — provided at runtime by the server, never shaded
+    compileOnly("com.github.smile-minecraft:AceLib:v1.2.0")
 
     // Vault API (經濟整合介面)
     compileOnly("com.github.MilkBowl:VaultAPI:1.7.1")
@@ -64,7 +64,7 @@ dependencies {
     testImplementation("com.github.MilkBowl:VaultAPI:1.7.1") // Vault on test classpath for Mockito inline mock maker
     // AceLib on the test classpath so the consumer-foundation smoke test can exercise the public API surface.
     // This is test-only and is NOT part of the production/runtime classpath, so it is never shaded into the plugin JAR.
-    testImplementation("com.github.smile-minecraft:AceLib:v1.0.0")
+    testImplementation("com.github.smile-minecraft:AceLib:v1.2.0")
 
     // PlaceholderAPI is compileOnly for production; bring it onto the test classpath (compile AND
     // runtime) so the v2 PAPI expansion, its fakes, and contract tests can reference and load
