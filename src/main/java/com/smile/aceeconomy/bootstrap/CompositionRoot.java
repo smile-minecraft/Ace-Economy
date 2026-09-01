@@ -51,6 +51,7 @@ import com.smile.aceeconomy.operations.HistoryService;
 import com.smile.aceeconomy.operations.BackupRestoreService;
 import com.smile.aceeconomy.operations.LeaderboardService;
 import com.smile.aceeconomy.operations.RollbackService;
+import com.smile.aceeconomy.ports.AuditSink;
 import com.smile.aceeconomy.ports.AccountRepository;
 import com.smile.aceeconomy.ports.Clock;
 import com.smile.aceeconomy.ports.FoliaContextExecutor;
@@ -79,6 +80,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.function.Consumer;
+import java.util.logging.Logger;
 
 /**
  * The single v2 production composition root. Modules are deliberately registered in dependency order;
@@ -194,8 +197,29 @@ public final class CompositionRoot {
                 ? DebtPolicy.enabled(currencies.get(currencies.defaultCurrencyId()).amountOf(
                 decimal("economy.default-debt-limit", 0.0)))
                 : DebtPolicy.disabled();
+
+        // Discord notification wiring: best-effort, post-commit via AuditSink decorator.
+        // Active only when discord.enabled=true AND the webhook URL passes strict validation
+        // (absolute, scheme http/https, host required, no userinfo, legal port). A failed
+        // validation degrades gracefully: a fixed diagnostic is logged (the URL is never
+        // echoed) and the audit sink stays the plain PersistentAuditSink.
+        // Notification failures never become AuditException, so transaction results and
+        // audit-failure semantics remain unpolluted.
+        //
+        // The wiring is delegated to the package-private {@link #wireDiscord} seam so tests
+        // can drive the same path with fake dependencies (transactions, executor, transport
+        // factory, diagnostics consumer) without booting Bukkit.
+        DiscordWiring.Outcome discord = wireDiscord(
+                transactions,
+                ioExecutor,
+                resources,
+                bool("discord.enabled", false),
+                string("discord.webhook-url", ""),
+                plugin.getLogger());
+        AuditSink auditSink = discord.auditSink();
+
         economy = new EconomyService(currencies, debt, startBalance, accounts,
-                new PersistentAuditSink(transactions), clock, publisher);
+                auditSink, clock, publisher);
         api = new EconomyApiImpl(economy, publisher);
 
         // Production rollback boundary and banknote replay guard. Both are bound to the
@@ -443,5 +467,37 @@ public final class CompositionRoot {
     @FunctionalInterface
     private interface ModuleAction {
         void run(ResourceOwner resources) throws Exception;
+    }
+
+    // -----------------------------------------------------------------------
+    // Discord wiring seam — package-private so unit tests can drive the same
+    // path the production {@link #startApplication} uses, without booting
+    // Bukkit or running a real storage start. The two overloads mirror the
+    // DiscordWiring.wire signatures; the simple form uses the production
+    // defaults (HttpClient-backed transport factory + logger diagnostics).
+    // -----------------------------------------------------------------------
+
+    static DiscordWiring.Outcome wireDiscord(
+            TransactionRepository transactions,
+            ExecutorService ioExecutor,
+            ResourceOwner resources,
+            boolean enabled,
+            String webhookUrl,
+            Logger logger) {
+        return wireDiscord(transactions, ioExecutor, resources, enabled, webhookUrl, logger,
+                DiscordWiring.defaultTransportFactory(), logger::warning);
+    }
+
+    static DiscordWiring.Outcome wireDiscord(
+            TransactionRepository transactions,
+            ExecutorService ioExecutor,
+            ResourceOwner resources,
+            boolean enabled,
+            String webhookUrl,
+            Logger logger,
+            DiscordWiring.TransportFactory transportFactory,
+            Consumer<String> diagnosticsSink) {
+        return DiscordWiring.wire(transactions, ioExecutor, enabled, webhookUrl, logger,
+                resources, transportFactory, diagnosticsSink);
     }
 }
