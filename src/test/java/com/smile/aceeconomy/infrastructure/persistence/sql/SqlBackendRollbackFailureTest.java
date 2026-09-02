@@ -24,6 +24,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import com.smile.aceeconomy.infrastructure.persistence.sql.SqlConnectionProvider;
 
 /**
  * Regression tests for the SQL restore connection-state contract: on failure the backend
@@ -48,7 +49,8 @@ class SqlBackendRollbackFailureTest {
         when(connection.prepareStatement(org.mockito.ArgumentMatchers.anyString()))
                 .thenReturn(mock(java.sql.PreparedStatement.class));
 
-        SqlBackend backend = new SqlBackend(connection, new SqliteDialect());
+        SqlBackend backend = new SqlBackend(new SqlConnectionProvider(connection), new SqliteDialect());
+        backend.setInitializedForTest(true);
         backend.restore(new ByteArrayInputStream(
                 VALID_SNAPSHOT.getBytes(StandardCharsets.UTF_8)));
 
@@ -63,7 +65,7 @@ class SqlBackendRollbackFailureTest {
             throws Exception {
         Path db = dir.resolve("autocommit.db");
         Connection connection = DriverManager.getConnection("jdbc:sqlite:" + db);
-        SqlBackend backend = new SqlBackend(connection, new SqliteDialect());
+        SqlBackend backend = new SqlBackend(new SqlConnectionProvider(connection), new SqliteDialect());
         backend.initialize();
 
         backend.restore(new ByteArrayInputStream(
@@ -89,7 +91,8 @@ class SqlBackendRollbackFailureTest {
         // ...and the rollback fails too.
         doThrow(new SQLException("rollback-boom")).when(connection).rollback();
 
-        SqlBackend backend = new SqlBackend(connection, new SqliteDialect());
+        SqlBackend backend = new SqlBackend(new SqlConnectionProvider(connection), new SqliteDialect());
+        backend.setInitializedForTest(true);
 
         PersistenceException failure = assertThrows(PersistenceException.class,
                 () -> backend.restore(new ByteArrayInputStream(
@@ -120,7 +123,8 @@ class SqlBackendRollbackFailureTest {
                 .thenThrow(new SQLException("dml-boom"));
         // Rollback succeeds this time.
 
-        SqlBackend backend = new SqlBackend(connection, new SqliteDialect());
+        SqlBackend backend = new SqlBackend(new SqlConnectionProvider(connection), new SqliteDialect());
+        backend.setInitializedForTest(true);
 
         PersistenceException failure = assertThrows(PersistenceException.class,
                 () -> backend.restore(new ByteArrayInputStream(

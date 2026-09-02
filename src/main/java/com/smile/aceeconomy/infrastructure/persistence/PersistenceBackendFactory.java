@@ -3,6 +3,7 @@ package com.smile.aceeconomy.infrastructure.persistence;
 import com.smile.aceeconomy.infrastructure.persistence.json.JsonPersistenceBackend;
 import com.smile.aceeconomy.infrastructure.persistence.sql.MySqlDialect;
 import com.smile.aceeconomy.infrastructure.persistence.sql.SqlBackend;
+import com.smile.aceeconomy.infrastructure.persistence.sql.SqlConnectionProvider;
 import com.smile.aceeconomy.infrastructure.persistence.sql.SqliteDialect;
 import com.smile.aceeconomy.ports.AccountRepository;
 import com.smile.aceeconomy.ports.persistence.AtomicRedemptionStore;
@@ -10,9 +11,6 @@ import com.smile.aceeconomy.ports.persistence.AtomicReversalStore;
 import com.smile.aceeconomy.ports.persistence.NonceStore;
 import com.smile.aceeconomy.ports.persistence.PersistenceLifecycle;
 import com.smile.aceeconomy.ports.persistence.TransactionRepository;
-
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
 
 import javax.sql.DataSource;
 
@@ -61,7 +59,7 @@ public final class PersistenceBackendFactory {
         Connection open(Path databaseFile) throws SQLException;
     }
 
-    /** Production seam: builds the MySQL {@link DataSource} (HikariCP). Tests inject fakes. */
+    /** Test/integration seam: supplies a MySQL DataSource to the strict provider. */
     @FunctionalInterface
     public interface MysqlDataSourceFactory {
         DataSource build(String jdbcUrl, String username, String password,
@@ -100,14 +98,21 @@ public final class PersistenceBackendFactory {
     }
 
     /**
-     * Production entry point: SQLite via {@link DriverManager}, MySQL via HikariCP.
-     * Same wiring rules as the test seam below; same cleanup guarantees.
+     * Production entry point: SQLite via {@link DriverManager}, MySQL via the provider-owned
+     * strict pool. Same wiring rules as the test seam below; same cleanup guarantees.
      */
     public static WiringResult create(StorageConfig config, ResourceRegistry resources)
             throws Exception {
-        return create(config, resources,
-                file -> DriverManager.getConnection("jdbc:sqlite:" + file.toAbsolutePath()),
-                PersistenceBackendFactory::defaultMysqlDataSource);
+        Objects.requireNonNull(config, "config");
+        Objects.requireNonNull(resources, "resources");
+        return switch (config) {
+            case StorageConfig.Json j -> createJson(j, resources);
+            case StorageConfig.Sqlite s -> createSqlite(
+                    s,
+                    resources,
+                    file -> DriverManager.getConnection("jdbc:sqlite:" + file.toAbsolutePath()));
+            case StorageConfig.Mysql m -> createMysql(m, resources);
+        };
     }
 
     /**
@@ -155,27 +160,24 @@ public final class PersistenceBackendFactory {
             StorageConfig.Sqlite config,
             ResourceRegistry resources,
             SqliteConnector sqliteConnector) throws Exception {
-        // Use a single-slot array so the lambda below can read the captured Connection
-        // while remaining effectively-final. The slot is written exactly once before the
-        // lambda is registered; reads are guarded by the ResourceOwner.close() contract
-        // (cleanup callbacks run after the start() phase has fully returned).
-        final Connection[] connRef = new Connection[1];
+        // Single ownership: backend.close() is the registered shutdown owner and it
+        // releases the provider (and therefore the SQLite {@link Connection}). On init
+        // failure the backend was never registered, so we close the provider directly
+        // here to avoid leaving an orphan JDBC connection.
+        final SqlConnectionProvider[] providerRef = new SqlConnectionProvider[1];
         try {
             Connection conn = sqliteConnector.open(config.databaseFile());
-            connRef[0] = conn;
-            SqlBackend backend = new SqlBackend(conn, new SqliteDialect());
+            SqlConnectionProvider provider = new SqlConnectionProvider(conn);
+            providerRef[0] = provider;
+            SqlBackend backend = new SqlBackend(provider, new SqliteDialect());
             backend.initialize();
-            resources.register(() -> {
-                // Order: backend first (closes its Connection), then a defensive
-                // closeQuietly on the captured reference (idempotent).
-                backend.close();
-                closeQuietly(connRef[0]);
-            });
+            resources.register(backend::close);
             return new WiringResult(backend, backend, backend, backend, backend, backend);
-        } catch (RuntimeException | SQLException e) {
-            // open() or initialize() failed: release whatever we managed to acquire so no
-            // JDBC connection leaks.
-            closeQuietly(connRef[0]);
+        } catch (SQLException | RuntimeException | Error e) {
+            SqlConnectionProvider provider = providerRef[0];
+            if (provider != null) {
+                closeProviderAfterFailure(provider, e);
+            }
             throw e;
         }
     }
@@ -184,76 +186,61 @@ public final class PersistenceBackendFactory {
             StorageConfig.Mysql config,
             ResourceRegistry resources,
             MysqlDataSourceFactory mysqlDataSourceFactory) throws Exception {
-        // Same capture pattern as the SQLite branch: DataSource and Connection are both
-        // written into single-slot arrays so the cleanup lambda can reach them.
-        final Connection[] connRef = new Connection[1];
-        final DataSource[] dsRef = new DataSource[1];
+        // Single ownership: backend.close() releases the {@link SqlConnectionProvider},
+        // which owns the injected {@link DataSource} and its borrowed connections. There is
+        // no defensive close on the raw DataSource reference outside that shutdown owner.
+        final SqlConnectionProvider[] providerRef = new SqlConnectionProvider[1];
         try {
             DataSource ds = mysqlDataSourceFactory.build(
                     config.jdbcUrl(), config.username(), config.password(),
                     config.poolSize(), config.maxLifetimeMs());
-            dsRef[0] = ds;
-            Connection conn = ds.getConnection();
-            connRef[0] = conn;
-            SqlBackend backend = new SqlBackend(conn, new MySqlDialect());
+            SqlConnectionProvider provider = new SqlConnectionProvider(
+                    ds, config.poolSize(), config.maxLifetimeMs());
+            providerRef[0] = provider;
+            SqlBackend backend = new SqlBackend(provider, new MySqlDialect());
             backend.initialize();
-            resources.register(() -> {
-                backend.close();          // closes the borrowed Connection
-                closeQuietly(connRef[0]); // defensive (idempotent if already closed)
-                closeDataSource(dsRef[0]); // closes the Hikari pool / DataSource
-            });
+            resources.register(backend::close);
             return new WiringResult(backend, backend, backend, backend, backend, backend);
-        } catch (RuntimeException | SQLException e) {
-            // Failed at any step: release the connection (if borrowed) and the DataSource
-            // (if built). Both are best-effort and idempotent.
-            closeQuietly(connRef[0]);
-            closeDataSource(dsRef[0]);
+        } catch (SQLException | RuntimeException | Error e) {
+            SqlConnectionProvider provider = providerRef[0];
+            if (provider != null) {
+                closeProviderAfterFailure(provider, e);
+            }
             throw e;
         }
     }
 
-    // ---------- production providers ----------
-
-    private static DataSource defaultMysqlDataSource(
-            String jdbcUrl, String username, String password,
-            int poolSize, long maxLifetimeMs) {
-        HikariConfig hc = new HikariConfig();
-        hc.setJdbcUrl(jdbcUrl);
-        hc.setUsername(username);
-        hc.setPassword(password);
-        hc.setMaximumPoolSize(poolSize);
-        hc.setMaxLifetime(maxLifetimeMs);
-        hc.setPoolName("aceeconomy-v2-mysql");
-        hc.setDriverClassName("com.mysql.cj.jdbc.Driver");
-        return new HikariDataSource(hc);
-    }
-
-    private static void closeQuietly(Connection c) {
-        if (c == null) {
-            return;
-        }
+    private static WiringResult createMysql(
+            StorageConfig.Mysql config,
+            ResourceRegistry resources) throws Exception {
+        final SqlConnectionProvider[] providerRef = new SqlConnectionProvider[1];
         try {
-            c.close();
-        } catch (Exception ignore) {
-            // best-effort; resource release is always best-effort on shutdown
+            SqlConnectionProvider provider = new SqlConnectionProvider(
+                    config.jdbcUrl(),
+                    config.username(),
+                    config.password(),
+                    config.poolSize(),
+                    config.maxLifetimeMs());
+            providerRef[0] = provider;
+            SqlBackend backend = new SqlBackend(provider, new MySqlDialect());
+            backend.initialize();
+            resources.register(backend::close);
+            return new WiringResult(backend, backend, backend, backend, backend, backend);
+        } catch (RuntimeException | Error e) {
+            SqlConnectionProvider provider = providerRef[0];
+            if (provider != null) {
+                closeProviderAfterFailure(provider, e);
+            }
+            throw e;
         }
     }
 
-    /**
-     * Close a {@link DataSource} without throwing. {@code DataSource} on this JDK does not
-     * extend {@link AutoCloseable} nor declare a {@code close()} method (verified via
-     * {@code javap}), so we close via the {@link AutoCloseable} interface when the
-     * implementation supports it. HikariCP, the JDK reference pool and most production
-     * pools all implement {@link AutoCloseable}, so production close paths are exercised;
-     * a {@link DataSource} that does not implement {@link AutoCloseable} is left as-is.
-     */
-    private static void closeDataSource(DataSource ds) {
-        if (ds instanceof AutoCloseable ac) {
-            try {
-                ac.close();
-            } catch (Exception ignore) {
-                // best-effort
-            }
+    private static void closeProviderAfterFailure(SqlConnectionProvider provider, Throwable primary) {
+        try {
+            provider.close();
+        } catch (Throwable closeFailure) {
+            primary.addSuppressed(closeFailure);
         }
     }
+
 }

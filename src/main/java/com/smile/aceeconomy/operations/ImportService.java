@@ -115,7 +115,7 @@ public final class ImportService {
                     before = cur.zero();
                 }
                 Account updated = existing.setBalance(cur.id(), r.amount());
-                accounts.save(updated);
+                accounts.save(existing, updated);
                 Amount after = updated.balanceOf(cur.id());
                 UUID txId = appendImportRecord(r, cur, before, after);
                 idempotency.consume(key);

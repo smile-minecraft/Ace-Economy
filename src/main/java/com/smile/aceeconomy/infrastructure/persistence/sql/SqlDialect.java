@@ -9,4 +9,9 @@ public interface SqlDialect {
     default String insertIgnore() {
         return isMySQL() ? "INSERT IGNORE" : "INSERT OR IGNORE";
     }
+
+    /** Row-level lock suffix for read-modify-write. MySQL uses {@code FOR UPDATE}; SQLite returns empty. */
+    default String forUpdateClause() {
+        return "";
+    }
 }

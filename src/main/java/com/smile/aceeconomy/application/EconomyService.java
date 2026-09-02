@@ -131,7 +131,7 @@ public final class EconomyService {
                 return EconomyResult.failure(EconomyError.TRANSACTION_CANCELLED, "deposit cancelled");
             }
             Account updated = acc.get().deposit(currencyId, amount);
-            accounts.save(updated);
+            accounts.save(acc.get(), updated);
             Amount after = updated.balanceOf(currencyId);
             return commitAudit(new Transaction(newId(), uuid, null, norm(currencyId), amount,
                     TransactionType.DEPOSIT, before, after, now(), "deposit"), after);
@@ -229,7 +229,7 @@ public final class EconomyService {
                 return rejectWithdraw();
             }
             Account updated = acc.get().withdraw(currencyId, amount);
-            accounts.save(updated);
+            accounts.save(acc.get(), updated);
             return commitAudit(new Transaction(newId(), uuid, null, norm(currencyId), amount,
                     TransactionType.WITHDRAW, before, after, now(), "withdraw"), after);
         } finally {
@@ -266,7 +266,7 @@ public final class EconomyService {
                 return EconomyResult.failure(EconomyError.DEBT_LIMIT_EXCEEDED, "debt limit exceeded");
             }
             Account updated = acc.get().setBalance(currencyId, amount);
-            accounts.save(updated);
+            accounts.save(acc.get(), updated);
             return commitAudit(new Transaction(newId(), uuid, null, norm(currencyId), amount,
                     TransactionType.SET, before, amount, now(), "set"), amount);
         } finally {
@@ -321,8 +321,8 @@ public final class EconomyService {
 
             Account updatedFrom = fromAcc.get().withdraw(currencyId, amount);
             Account updatedTo = toAcc.get().deposit(currencyId, amount);
-            accounts.save(updatedFrom);
-            accounts.save(updatedTo);
+            accounts.save(fromAcc.get(), updatedFrom);
+            accounts.save(toAcc.get(), updatedTo);
 
             // deterministic audit: mutation/outcome first, then fixed-order records (out, in)
             Transaction outTx = new Transaction(newId(), from, to, norm(currencyId), amount,

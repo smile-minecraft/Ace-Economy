@@ -28,6 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import com.smile.aceeconomy.infrastructure.persistence.sql.SqlConnectionProvider;
 
 /**
  * Offline logical round-trip matrix for the managed backup/restore surface: JSON→JSON and
@@ -55,7 +56,7 @@ class BackupRestoreRoundTripTest {
 
     private SqlBackend sqliteBackend(Path dbFile) throws Exception {
         Connection conn = DriverManager.getConnection("jdbc:sqlite:" + dbFile);
-        SqlBackend backend = new SqlBackend(conn, new SqliteDialect());
+        SqlBackend backend = new SqlBackend(new SqlConnectionProvider(conn), new SqliteDialect());
         backend.initialize();
         return backend;
     }

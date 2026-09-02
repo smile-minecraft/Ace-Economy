@@ -31,6 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import com.smile.aceeconomy.infrastructure.persistence.sql.SqlConnectionProvider;
 
 /**
  * Real, offline SQLite JDBC contract tests for {@link SqlBackend}. Uses a temporary on-disk database
@@ -51,7 +52,7 @@ final class SqlBackendContractTest {
 
     private SqlBackend backendFor(Path dbFile) throws SQLException {
         Connection conn = DriverManager.getConnection("jdbc:sqlite:" + dbFile);
-        return new SqlBackend(conn, new SqliteDialect());
+        return new SqlBackend(new SqlConnectionProvider(conn), new SqliteDialect());
     }
 
     private Transaction sampleTx(UUID id, UUID account, String currency, String amount,

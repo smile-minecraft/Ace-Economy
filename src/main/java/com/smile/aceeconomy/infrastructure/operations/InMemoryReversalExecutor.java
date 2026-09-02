@@ -50,15 +50,23 @@ public final class InMemoryReversalExecutor implements ReversalExecutor {
     public ReversalOutcome execute(ReversalPlan plan) {
         // 1. Validate every referenced account exists and compute updated accounts locally.
         Map<UUID, Account> updated = new HashMap<>();
+        Map<UUID, Account> original = new HashMap<>();
         for (ReversalPlan.AccountDelta d : plan.deltas()) {
-            Account current = accounts.load(d.accountId()).orElse(null);
+            Account current = original.get(d.accountId());
+            if (current == null) {
+                current = accounts.load(d.accountId()).orElse(null);
+                if (current != null) {
+                    original.put(d.accountId(), current);
+                }
+            }
             if (current == null) {
                 return ReversalOutcome.failure(RollbackError.EXECUTION_FAILED,
                         "account not found for reversal: " + d.accountId());
             }
-            Account next = current.deposit(d.currencyId(), d.delta());
+            Account base = updated.getOrDefault(d.accountId(), current);
+            Account next = base.deposit(d.currencyId(), d.delta());
             if (d.delta().isNegative()) {
-                next = current.withdraw(d.currencyId(), d.delta().abs());
+                next = base.withdraw(d.currencyId(), d.delta().abs());
             }
             updated.put(d.accountId(), next);
         }
@@ -69,13 +77,17 @@ public final class InMemoryReversalExecutor implements ReversalExecutor {
             deltaCounterparty.put(orig.accountId(), orig.counterparty());
         }
         List<Transaction> reversalRecords = new ArrayList<>();
+        Map<UUID, Account> recordState = new HashMap<>();
         for (ReversalPlan.AccountDelta d : plan.deltas()) {
-            Account current = accounts.load(d.accountId()).orElseThrow();
-            Amount before = current.balanceOf(d.currencyId());
+            Account base = recordState.getOrDefault(d.accountId(), original.get(d.accountId()));
+            Amount before = base.balanceOf(d.currencyId());
             if (before == null) {
                 before = d.delta().zero(d.delta().scale());
             }
             Amount after = before.add(d.delta());
+            recordState.put(d.accountId(), d.delta().isNegative()
+                    ? base.withdraw(d.currencyId(), d.delta().abs())
+                    : base.deposit(d.currencyId(), d.delta()));
             TransactionType type;
             Amount recordedAmount;
             if (plan.category() == RollbackCategory.SET) {
@@ -103,7 +115,7 @@ public final class InMemoryReversalExecutor implements ReversalExecutor {
         }
         try {
             for (Account a : updated.values()) {
-                accounts.save(a);
+                accounts.save(original.get(a.owner()), a);
             }
         } catch (RuntimeException e) {
             return ReversalOutcome.failure(RollbackError.EXECUTION_FAILED,

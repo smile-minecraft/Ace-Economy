@@ -223,6 +223,131 @@ final class PersistenceBackendFactoryTest {
                 "no cleanup must be registered when the connector itself fails");
     }
 
+    @Test
+    void sqliteInitializeThrowingErrorMustCloseProviderAndPropagateErrorWithoutCleanup() throws Exception {
+        StorageConfig.Sqlite cfg = new StorageConfig.Sqlite(dataFolder.resolve("err-sqlite.db"));
+        RecordingResources resources = new RecordingResources();
+        AssertionError injected = new AssertionError("sqlite-init-error");
+        java.sql.Connection mockConn = org.mockito.Mockito.mock(java.sql.Connection.class);
+        org.mockito.Mockito.doThrow(injected).when(mockConn).createStatement();
+        // borrow will succeed; close must be tracked
+        org.mockito.Mockito.doNothing().when(mockConn).close();
+
+        AssertionError thrown = assertThrows(AssertionError.class, () ->
+                PersistenceBackendFactory.create(cfg, resources,
+                        file -> mockConn,
+                        null));
+        assertEquals(injected, thrown, "original Error must be propagated unchanged");
+        org.mockito.Mockito.verify(mockConn).close();
+        assertEquals(0, resources.cleanups.size(), "no cleanup must be registered on init Error");
+        assertEquals(0, thrown.getSuppressed().length,
+                "no suppressed exception must be attached when provider close succeeded");
+    }
+
+    @Test
+    void sqliteInitializeThrowingErrorWhenCloseFailsMustSuppressCleanupFailure() throws Exception {
+        StorageConfig.Sqlite cfg = new StorageConfig.Sqlite(dataFolder.resolve("err-sqlite-close.db"));
+        RecordingResources resources = new RecordingResources();
+        AssertionError injected = new AssertionError("sqlite-init-error-close");
+        java.sql.Connection mockConn = org.mockito.Mockito.mock(java.sql.Connection.class);
+        org.mockito.Mockito.doThrow(injected).when(mockConn).createStatement();
+        java.sql.SQLException closeFailure = new java.sql.SQLException("close-fail");
+        org.mockito.Mockito.doThrow(closeFailure).when(mockConn).close();
+
+        AssertionError thrown = assertThrows(AssertionError.class, () ->
+                PersistenceBackendFactory.create(cfg, resources,
+                        file -> mockConn,
+                        null));
+        assertEquals(injected, thrown);
+        boolean found = false;
+        for (Throwable sup : thrown.getSuppressed()) {
+            if (sup == closeFailure || "close-fail".equals(sup.getMessage())) {
+                found = true;
+            }
+        }
+        assertTrue(found, "provider close failure must be suppressed on original Error");
+        assertEquals(0, resources.cleanups.size());
+    }
+
+    @Test
+    void mysqlInitializeThrowingErrorMustCloseDataSourceAndPropagateErrorWithoutCleanup() throws Exception {
+        StorageConfig.Mysql cfg = new StorageConfig.Mysql(
+                "jdbc:mysql://localhost:3306/aceeconomy",
+                "root", "", 1, 60_000L);
+        RecordingResources resources = new RecordingResources();
+        AssertionError injected = new AssertionError("mysql-init-error");
+        java.sql.Connection mockConn = org.mockito.Mockito.mock(java.sql.Connection.class);
+        org.mockito.Mockito.doThrow(injected).when(mockConn).createStatement();
+
+        TrackingCloseDataSource ds = new TrackingCloseDataSource(mockConn);
+
+        AssertionError thrown = assertThrows(AssertionError.class, () ->
+                PersistenceBackendFactory.create(cfg, resources, null,
+                        (url, user, pass, poolSize, maxLifetime) -> ds));
+        assertEquals(injected, thrown);
+        org.mockito.Mockito.verify(mockConn).close();
+        assertTrue(ds.closed, "DataSource must be closed even when initialize throws Error");
+        assertEquals(1, ds.closeCount, "DataSource close must be attempted exactly once");
+        assertEquals(0, resources.cleanups.size(), "no cleanup must be registered on init Error");
+    }
+
+    @Test
+    void mysqlInitializeThrowingErrorWhenCloseFailsMustSuppress() throws Exception {
+        StorageConfig.Mysql cfg = new StorageConfig.Mysql(
+                "jdbc:mysql://localhost:3306/aceeconomy",
+                "root", "", 1, 60_000L);
+        RecordingResources resources = new RecordingResources();
+        AssertionError injected = new AssertionError("mysql-init-error-suppress");
+        java.sql.Connection mockConn = org.mockito.Mockito.mock(java.sql.Connection.class);
+        org.mockito.Mockito.doThrow(injected).when(mockConn).createStatement();
+
+        java.sql.SQLException closeFailure = new java.sql.SQLException("ds-close-fail");
+        TrackingCloseDataSource ds = new TrackingCloseDataSource(mockConn) {
+            @Override public void close() throws Exception {
+                closed = true;
+                closeCount++;
+                throw closeFailure;
+            }
+        };
+
+        AssertionError thrown = assertThrows(AssertionError.class, () ->
+                PersistenceBackendFactory.create(cfg, resources, null,
+                        (url, user, pass, poolSize, maxLifetime) -> ds));
+        assertEquals(injected, thrown);
+        boolean found = false;
+        for (Throwable sup : thrown.getSuppressed()) {
+            if (sup == closeFailure || "ds-close-fail".equals(sup.getMessage())) {
+                found = true;
+            }
+        }
+        assertTrue(found, "DataSource close failure must be suppressed on original Error");
+        assertEquals(0, resources.cleanups.size());
+    }
+
+    private static class TrackingCloseDataSource implements DataSource, AutoCloseable {
+        final java.sql.Connection connToReturn;
+        boolean closed = false;
+        int closeCount = 0;
+        TrackingCloseDataSource(java.sql.Connection connToReturn) {
+            this.connToReturn = connToReturn;
+        }
+        @Override public java.sql.Connection getConnection() { return connToReturn; }
+        @Override public java.sql.Connection getConnection(String u, String p) { return connToReturn; }
+        @Override public PrintWriter getLogWriter() { return null; }
+        @Override public void setLogWriter(PrintWriter out) { }
+        @Override public void setLoginTimeout(int seconds) { }
+        @Override public int getLoginTimeout() { return 0; }
+        @Override public Logger getParentLogger() { return null; }
+        @Override public <T> T unwrap(Class<T> iface) { return null; }
+        @Override public boolean isWrapperFor(Class<?> iface) { return false; }
+        @Override public void close() throws Exception {
+            closed = true;
+            closeCount++;
+            // Also close underlying connection via provider path if needed
+            // Provider will call ds.close(), not conn.close() directly; we also ensure conn close not double-counted
+        }
+    }
+
     // ---------- MySQL ----------
 
     @Test

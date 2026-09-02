@@ -24,6 +24,8 @@ public final class AsyncAccountSessionStore implements SessionStore {
     private final AccountRepository accounts;
     private final Executor ioExecutor;
     private final ConcurrentHashMap<UUID, CompletableFuture<Account>> inFlight = new ConcurrentHashMap<>();
+    /** Snapshot paired with each loaded session so flush can use compare-and-save semantics. */
+    private final ConcurrentHashMap<UUID, Account> loadedSnapshots = new ConcurrentHashMap<>();
 
     public AsyncAccountSessionStore(AccountRepository accounts, Executor ioExecutor) {
         this.accounts = accounts;
@@ -41,7 +43,9 @@ public final class AsyncAccountSessionStore implements SessionStore {
                         future.completeExceptionally(new SessionException(
                                 SessionError.ACCOUNT_NOT_FOUND, "no account for " + uuid));
                     } else {
-                        future.complete(loaded.get());
+                        Account account = loaded.get();
+                        loadedSnapshots.put(uuid, account);
+                        future.complete(account);
                     }
                 } catch (RuntimeException ex) {
                     future.completeExceptionally(new SessionException(
@@ -59,7 +63,13 @@ public final class AsyncAccountSessionStore implements SessionStore {
         CompletableFuture<Void> future = new CompletableFuture<>();
         ioExecutor.execute(() -> {
             try {
-                accounts.save(account);
+                Account expected = loadedSnapshots.get(account.owner());
+                if (expected == null) {
+                    accounts.save(account);
+                } else {
+                    accounts.save(expected, account);
+                }
+                loadedSnapshots.put(account.owner(), account);
                 future.complete(null);
             } catch (RuntimeException ex) {
                 future.completeExceptionally(new SessionException(
@@ -72,6 +82,7 @@ public final class AsyncAccountSessionStore implements SessionStore {
     @Override
     public void invalidate(@NotNull UUID uuid) {
         CompletableFuture<Account> future = inFlight.remove(uuid);
+        loadedSnapshots.remove(uuid);
         if (future != null) {
             future.cancel(false);
         }

@@ -40,32 +40,77 @@ public final class JsonModel {
         }
         Map<String, Object> obj = (Map<String, Object>) root;
         JsonModel model = new JsonModel();
-        model.schemaVersion = (int) asDouble(obj.get("schemaVersion"), SCHEMA_VERSION);
+        if (!obj.containsKey("schemaVersion")) {
+            throw new PersistenceException("Missing 'schemaVersion' in JSON model: expected integer " + SCHEMA_VERSION);
+        }
+        Object schemaRaw = obj.get("schemaVersion");
+        if (schemaRaw == null) {
+            throw new PersistenceException("Invalid 'schemaVersion' in JSON model: expected integer JSON number, got null");
+        }
+        if (!(schemaRaw instanceof Number)) {
+            throw new PersistenceException("Invalid 'schemaVersion' in JSON model: expected integer JSON number, got " + schemaRaw);
+        }
+        double d = ((Number) schemaRaw).doubleValue();
+        if (!Double.isFinite(d) || d != Math.rint(d)) {
+            throw new PersistenceException("Invalid 'schemaVersion' in JSON model: expected integer JSON number, got " + schemaRaw);
+        }
+        if (d < Integer.MIN_VALUE || d > Integer.MAX_VALUE) {
+            throw new PersistenceException("Invalid 'schemaVersion' in JSON model: out of range " + schemaRaw);
+        }
+        int sv = (int) d;
+        if ((double) sv != d) {
+            throw new PersistenceException("Invalid 'schemaVersion' in JSON model: expected integer JSON number, got " + schemaRaw);
+        }
+        model.schemaVersion = sv;
+        // accounts and transactions are required v2 sections. Missing or mistyped sections must
+        // fail fast instead of being treated as empty, otherwise a truncated snapshot
+        // {"schemaVersion":1} would be restored as empty and wipe live data with DELETEs.
         Object accObj = obj.get("accounts");
-        if (accObj instanceof Map) {
-            for (Map.Entry<String, Object> e : ((Map<String, Object>) accObj).entrySet()) {
-                model.accounts.put(e.getKey(), JsonAccount.fromJson(e.getValue()));
-            }
+        if (!(accObj instanceof Map)) {
+            throw new PersistenceException("Missing or invalid 'accounts' section in JSON model");
+        }
+        for (Map.Entry<String, Object> e : ((Map<String, Object>) accObj).entrySet()) {
+            model.accounts.put(e.getKey(), JsonAccount.fromJson(e.getValue()));
         }
         Object txObj = obj.get("transactions");
-        if (txObj instanceof List) {
-            for (Object o : (List<Object>) txObj) {
-                model.transactions.add(JsonTransaction.fromJson(o));
-            }
+        if (!(txObj instanceof List)) {
+            throw new PersistenceException("Missing or invalid 'transactions' section in JSON model");
+        }
+        for (Object o : (List<Object>) txObj) {
+            model.transactions.add(JsonTransaction.fromJson(o));
         }
         // Nonces are an optional additive section: files written before durable replay
-        // protection simply load with an empty set. Keys must be well-formed UUIDs — a
-        // malformed record means the file was corrupted or hand-edited, so fail fast
-        // instead of silently dropping the replay guard.
-        Object nonceObj = obj.get("nonces");
-        if (nonceObj instanceof Map) {
+        // protection simply load with an empty set. The section must be absent or a Map;
+        // an explicit null, array or string would otherwise be mistaken for "missing"
+        // and silently clear the replay guard, allowing a banknote to be replayed.
+        // Keys must be well-formed UUIDs — a malformed record means the file was
+        // corrupted or hand-edited, so fail fast instead of silently dropping the guard.
+        if (!obj.containsKey("nonces")) {
+            // absent -> compatible with pre-nonce files
+        } else {
+            Object nonceObj = obj.get("nonces");
+            if (!(nonceObj instanceof Map)) {
+                throw new PersistenceException("Invalid 'nonces' section in JSON model: expected object");
+            }
             for (Map.Entry<String, Object> e : ((Map<String, Object>) nonceObj).entrySet()) {
+                String rawKey = e.getKey();
+                UUID parsed;
                 try {
-                    UUID.fromString(e.getKey());
+                    parsed = UUID.fromString(rawKey);
                 } catch (IllegalArgumentException ex) {
-                    throw new PersistenceException("Invalid nonce record in JSON model: " + e.getKey());
+                    throw new PersistenceException("Invalid nonce record in JSON model: " + rawKey);
                 }
-                model.nonces.put(e.getKey(), e.getValue() == null ? "" : e.getValue().toString());
+                if (!parsed.toString().equals(rawKey)) {
+                    throw new PersistenceException(
+                            "Invalid nonce record in JSON model: non-canonical UUID " + rawKey);
+                }
+                Object rawVal = e.getValue();
+                if (!(rawVal instanceof String s)) {
+                    throw new PersistenceException(
+                            "Invalid nonce value for key " + rawKey + ": expected string, got "
+                                    + (rawVal == null ? "null" : rawVal + " (" + rawVal.getClass().getSimpleName() + ")"));
+                }
+                model.nonces.put(rawKey, s);
             }
         }
         return model;
@@ -108,14 +153,20 @@ public final class JsonModel {
     }
 
     static String asString(Object o) {
-        if (o == null) {
-            throw new PersistenceException("Expected string, got null");
+        if (o instanceof String s) {
+            return s;
         }
-        return o.toString();
+        throw new PersistenceException("Expected string, got " + (o == null ? "null" : o + " (" + o.getClass().getSimpleName() + ")"));
     }
 
     static String asStringOrNull(Object o) {
-        return o == null ? null : o.toString();
+        if (o == null) {
+            return null;
+        }
+        if (o instanceof String s) {
+            return s;
+        }
+        throw new PersistenceException("Expected string or null, got " + o + " (" + o.getClass().getSimpleName() + ")");
     }
 
     static boolean asBool(Object o) {
@@ -125,7 +176,7 @@ public final class JsonModel {
         if (o instanceof Boolean b) {
             return b;
         }
-        return Boolean.parseBoolean(o.toString());
+        throw new PersistenceException("Invalid boolean value: expected JSON boolean, got " + o);
     }
 
     static String amountToString(Amount a) {
@@ -153,10 +204,17 @@ public final class JsonModel {
             a.owner = asString(m.get("owner"));
             a.ownerName = asString(m.get("ownerName"));
             Object b = m.get("balances");
-            if (b instanceof Map) {
-                for (Map.Entry<String, Object> e : ((Map<String, Object>) b).entrySet()) {
-                    a.balances.put(e.getKey(), e.getValue() == null ? "0" : e.getValue().toString());
+            if (!(b instanceof Map)) {
+                throw new PersistenceException("Missing or invalid 'balances' section in account record");
+            }
+            for (Map.Entry<String, Object> e : ((Map<String, Object>) b).entrySet()) {
+                Object raw = e.getValue();
+                if (!(raw instanceof String s)) {
+                    throw new PersistenceException(
+                            "Invalid balance value for currency '" + e.getKey() + "': expected decimal string, got "
+                                    + (raw == null ? "null" : raw + " (" + raw.getClass().getSimpleName() + ")"));
                 }
+                a.balances.put(e.getKey(), s);
             }
             return a;
         }
@@ -217,7 +275,16 @@ public final class JsonModel {
             t.balanceAfter = asStringOrNull(m.get("balanceAfter"));
             t.timestamp = asString(m.get("timestamp"));
             t.reason = asStringOrNull(m.get("reason"));
-            t.reverted = asBool(m.get("reverted"));
+            if (!m.containsKey("reverted")) {
+                t.reverted = false;
+            } else {
+                Object raw = m.get("reverted");
+                if (!(raw instanceof Boolean)) {
+                    throw new PersistenceException(
+                            "Invalid 'reverted' field in transaction " + t.id + ": expected JSON boolean, got " + raw);
+                }
+                t.reverted = (Boolean) raw;
+            }
             return t;
         }
 

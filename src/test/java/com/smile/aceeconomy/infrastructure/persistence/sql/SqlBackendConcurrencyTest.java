@@ -28,6 +28,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import com.smile.aceeconomy.infrastructure.persistence.sql.SqlConnectionProvider;
 
 /**
  * Thread-safety contract for {@link SqlBackend}. The single-Connection model is safe
@@ -51,7 +52,7 @@ final class SqlBackendConcurrencyTest {
 
     private SqlBackend open(Path db) throws Exception {
         Connection conn = DriverManager.getConnection("jdbc:sqlite:" + db);
-        SqlBackend backend = new SqlBackend(conn, new SqliteDialect());
+        SqlBackend backend = new SqlBackend(new SqlConnectionProvider(conn), new SqliteDialect());
         backend.initialize();
         return backend;
     }

@@ -12,11 +12,25 @@ import java.io.OutputStream;
  * <ul>
  *   <li>{@link #initialize()} is idempotent: a fresh create and a restart must both
  *       succeed and leave an identical, consistent schema.</li>
- *   <li>If initialization fails partway, no partial schema is left behind; a later
- *       {@link #initialize()} call must be able to recover.</li>
+ *   <li>If initialization fails partway, recovery depends on the dialect: SQLite DDL
+ *       is transactional and rolls back, so no partial schema remains; MySQL DDL
+ *       implicitly commits per statement and cannot be rolled back. MySQL safety relies
+ *       on idempotent {@code CREATE TABLE IF NOT EXISTS}/{@code INSERT IGNORE} — a later
+ *       {@link #initialize()} simply completes the missing tables and {@link #needsRecreation()}
+ *       reports a partial init when tables exist without a version row. No compensating
+ *       {@code DROP} is performed on failure, to avoid destroying existing domain data.</li>
  *   <li>{@link #backup} / {@link #restore} move a portable snapshot; a corrupt source
  *       must not destroy the live data.</li>
+ *   <li>{@link #truncateAndRecreate()} and {@link #initialize()} report honest
+ *       {@link #isInitialized()}: any failure ({@code SQLException},
+ *       {@code PersistenceException} or {@code RuntimeException}) must leave
+ *       {@code isInitialized()==false}; only a fully successful create sets it true.</li>
  * </ul>
+ *
+ * <p>MySQL per-statement DDL commit is documented from the MySQL manual and the
+ * dialect source, not verified by a live MySQL integration test in this repository;
+ * tests verify SQLite transactional rollback and the MySQL idempotence contract
+ * ({@code IF NOT EXISTS}/{@code INSERT IGNORE}) instead.</p>
  */
 public interface PersistenceLifecycle {
 

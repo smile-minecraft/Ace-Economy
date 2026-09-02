@@ -35,7 +35,8 @@ dependencies {
     // PlaceholderAPI (佔位符支援)
     compileOnly("me.clip:placeholderapi:2.11.6")
 
-    // HikariCP (資料庫連線池)
+    // HikariCP remains available for the DataSource adapter and compatibility tests. The
+    // production factory uses the provider-owned strict pool over direct JDBC connections.
     implementation("com.zaxxer:HikariCP:5.1.0")
 
     // SLF4J (HikariCP 日誌 - 使用 NOP 禁止輸出)

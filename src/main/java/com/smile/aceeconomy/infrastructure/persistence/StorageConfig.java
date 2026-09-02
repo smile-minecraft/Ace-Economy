@@ -32,7 +32,7 @@ public sealed interface StorageConfig
     }
 
     /**
-     * MySQL backend via HikariCP. URL/credentials/pool settings all come from
+     * MySQL backend via the provider-owned strict pool. URL/credentials/pool settings all come from
      * {@code storage.mysql.*} — never hard-coded.
      */
     record Mysql(String jdbcUrl,

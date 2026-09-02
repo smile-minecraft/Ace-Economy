@@ -8,7 +8,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
-/** Persistence seam for accounts. No vendor imports; implement in infrastructure (Task 06+). */
+/** Persistence seam for accounts. No vendor imports; implement in infrastructure. */
 public interface AccountRepository {
 
     boolean exists(UUID uuid);
@@ -16,6 +16,13 @@ public interface AccountRepository {
     Optional<Account> load(UUID uuid);
 
     void save(Account account);
+
+    /**
+     * Persist {@code updated} only when {@code expected} still describes the live account.
+     * Implementations must perform the comparison and write as one storage operation; a stale
+     * expected snapshot is a conflict, never an implicit merge or overwrite.
+     */
+    void save(Account expected, Account updated);
 
     /** Create and persist a brand-new account with the given initial balances. */
     Account create(UUID uuid, String ownerName, Map<String, Amount> initialBalances);

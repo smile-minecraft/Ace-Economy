@@ -54,24 +54,67 @@ public final class SnapshotPreflight {
      * @throws PersistenceException when any account or transaction record is invalid
      */
     public static void validateRecords(JsonModel model) throws PersistenceException {
+        // Nonces must be canonical lowercase UUIDs; otherwise a non-canonical key such as
+        // "1-1-1-1-1" would be stored verbatim and later isConsumed(canonical) would miss it.
+        for (String nonceKey : model.nonces.keySet()) {
+            try {
+                UUID parsed = UUID.fromString(nonceKey);
+                if (!parsed.toString().equals(nonceKey)) {
+                    throw new PersistenceException(
+                            "Invalid nonce record in snapshot: non-canonical UUID " + nonceKey);
+                }
+            } catch (IllegalArgumentException e) {
+                throw new PersistenceException("Invalid nonce record in snapshot: " + nonceKey, e);
+            }
+        }
+        Set<UUID> seenOwners = new HashSet<>();
         for (Map.Entry<String, JsonModel.JsonAccount> entry : model.accounts.entrySet()) {
             try {
-                UUID.fromString(entry.getKey());
+                String rawKey = entry.getKey();
+                String rawOwner = entry.getValue().owner;
+                UUID keyUuid = requireCanonicalUUID(rawKey, "account map key");
+                UUID ownerUuid = requireCanonicalUUID(rawOwner, "account owner");
+                if (!keyUuid.equals(ownerUuid)) {
+                    throw new PersistenceException(
+                            "Account map key " + entry.getKey()
+                                    + " does not match owner field " + entry.getValue().owner);
+                }
+                if (!seenOwners.add(ownerUuid)) {
+                    throw new PersistenceException(
+                            "Duplicate owner identity in snapshot: " + ownerUuid);
+                }
                 Map<String, com.smile.aceeconomy.domain.Amount> balances = new LinkedHashMap<>();
                 for (Map.Entry<String, String> b : entry.getValue().balances.entrySet()) {
                     balances.put(b.getKey(), JsonModel.stringToAmount(b.getValue()));
                 }
                 // Account.create enforces the same invariants the JSON backend applies on load.
-                Account.create(UUID.fromString(entry.getValue().owner),
-                        entry.getValue().ownerName, balances);
+                Account.create(ownerUuid, entry.getValue().ownerName, balances);
+            } catch (PersistenceException e) {
+                throw e;
             } catch (RuntimeException e) {
                 throw new PersistenceException(
                         "Invalid account record in snapshot: " + entry.getKey()
-                                + " (" + e.getMessage() + ")");
+                                + " (" + e.getMessage() + ")", e);
             }
         }
         Set<String> seenTransactionIds = new HashSet<>();
         for (JsonModel.JsonTransaction t : model.transactions) {
+            // Enforce canonical lowercase UUID form for all transaction UUID fields; a non-canonical
+            // representation would otherwise be accepted by UUID.fromString but stored in a different
+            // textual form, splitting the identity and breaking replay detection or lookups.
+            try {
+                requireCanonicalUUID(t.id, "transaction id");
+                requireCanonicalUUID(t.accountId, "transaction accountId");
+                if (t.counterparty != null) {
+                    requireCanonicalUUID(t.counterparty, "transaction counterparty");
+                }
+            } catch (PersistenceException e) {
+                throw new PersistenceException(
+                        "Invalid transaction record in snapshot: " + t.id + " (" + e.getMessage() + ")", e);
+            } catch (RuntimeException e) {
+                throw new PersistenceException(
+                        "Invalid transaction record in snapshot: " + t.id + " (" + e.getMessage() + ")", e);
+            }
             Transaction domain;
             try {
                 // Same conversion JsonPersistenceBackend/SqlBackend apply when loading rows.
@@ -129,5 +172,22 @@ public final class SnapshotPreflight {
         checkSchemaVersion(model);
         validateRecords(model);
         checkCurrencies(model, allowedCurrencyIds);
+    }
+
+    private static UUID requireCanonicalUUID(String raw, String field) {
+        if (raw == null) {
+            throw new PersistenceException("Invalid " + field + ": expected canonical UUID string, got null");
+        }
+        UUID parsed;
+        try {
+            parsed = UUID.fromString(raw);
+        } catch (IllegalArgumentException e) {
+            throw new PersistenceException("Invalid " + field + ": malformed UUID " + raw, e);
+        }
+        if (!parsed.toString().equals(raw)) {
+            throw new PersistenceException(
+                    "Invalid " + field + ": non-canonical UUID " + raw + " (expected " + parsed + ")");
+        }
+        return parsed;
     }
 }

@@ -9,11 +9,12 @@ import java.util.UUID;
 /**
  * Atomic cross-resource mutation boundary for rollback persistence.
  *
- * <p>Implementations (one per storage backend) must apply the given account snapshots, append the
- * reversal audit records and set the reverted markers inside ONE storage transaction: either every
- * effect becomes visible together or none does. On any failure the previous balances, the absence
- * of the reversal records and the un-reverted markers must remain intact, so a retry can safely
- * re-execute the whole reversal without duplicating balance effects or audit records.</p>
+ * <p>Implementations (one per storage backend) must append the reversal audit records and set the
+ * reverted markers inside ONE storage transaction. Balance changes are derived from the signed
+ * reversal records against live storage rows, rather than copied from caller account snapshots.
+ * Either every effect becomes visible together or none does. On any failure the previous balances,
+ * the absence of the reversal records and the un-reverted markers must remain intact, so a retry
+ * can safely re-execute the whole reversal without duplicating balance effects or audit records.</p>
  *
  * <p>This is the production replacement for sequentially calling {@code AccountRepository.save},
  * {@code TransactionRepository.appendBatch} and {@code TransactionRepository.markReverted}; those
@@ -26,7 +27,9 @@ public interface AtomicReversalStore {
     /**
      * Atomically persist reversed account balances, reversal audit records and reverted markers.
      *
-     * @param updatedAccounts the full account snapshots carrying the reversed balances
+     * @param updatedAccounts legacy caller snapshots retained for source compatibility; the
+     *                       persistence implementation must derive balances from live rows and the
+     *                       reversal records instead of trusting these values
      * @param reversalRecords the reversal audit records to append
      * @param revertMarkerIds ids of existing transactions to mark reverted; every id must exist
      * @throws PersistenceException when any part fails; no partial effect may remain visible
@@ -34,4 +37,5 @@ public interface AtomicReversalStore {
     void applyReversal(List<Account> updatedAccounts,
                        List<Transaction> reversalRecords,
                        List<UUID> revertMarkerIds) throws PersistenceException;
+
 }

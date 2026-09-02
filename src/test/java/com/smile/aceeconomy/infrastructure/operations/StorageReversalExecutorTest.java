@@ -28,6 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import com.smile.aceeconomy.infrastructure.persistence.sql.SqlConnectionProvider;
 
 /**
  * End-to-end rollback tests for {@link StorageReversalExecutor} against REAL persistence
@@ -47,7 +48,7 @@ final class StorageReversalExecutorTest {
 
     private SqlBackend sqliteBackend(Path db) throws Exception {
         Connection conn = DriverManager.getConnection("jdbc:sqlite:" + db);
-        SqlBackend backend = new SqlBackend(conn, new SqliteDialect());
+        SqlBackend backend = new SqlBackend(new SqlConnectionProvider(conn), new SqliteDialect());
         backend.initialize();
         return backend;
     }

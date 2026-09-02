@@ -54,10 +54,17 @@ public final class JsonPersistenceBackend
     private final Path dataFile;
     private final ReentrantLock lock = new ReentrantLock();
     private JsonModel model = new JsonModel();
-    private boolean initialized = false;
+    private volatile boolean initialized = false;
 
     public JsonPersistenceBackend(Path dataFile) {
         this.dataFile = dataFile;
+    }
+
+    private void ensureInitialized() {
+        if (!initialized) {
+            throw new PersistenceException(
+                    "Persistence backend not initialized: call initialize() or truncateAndRecreate() first (file: " + dataFile + ")");
+        }
     }
 
     // ---------------- lifecycle ----------------
@@ -66,6 +73,10 @@ public final class JsonPersistenceBackend
     public void initialize() throws PersistenceException {
         lock.lock();
         try {
+            // Fail-closed: any re-initialize that subsequently fails must not leave the
+            // backend in an initialized state with stale in-memory data. Reset up front
+            // and only set true after the file has been fully validated and adopted.
+            initialized = false;
             Path parent = dataFile.getParent();
             if (parent != null) {
                 // If the parent cannot be created (e.g. it is an existing regular file) this
@@ -80,6 +91,10 @@ public final class JsonPersistenceBackend
                                     + "; expected " + JsonModel.SCHEMA_VERSION
                                     + ". Call truncateAndRecreate().");
                 }
+                // Validate records before adopting the loaded model: a corrupted file
+                // (mismatched key/owner, duplicate owner, invalid balances etc.) must
+                // not become the live state and must leave isInitialized() false.
+                SnapshotPreflight.validateRecords(loaded);
                 model = loaded;
             } else {
                 model = new JsonModel();
@@ -133,11 +148,16 @@ public final class JsonPersistenceBackend
     public void truncateAndRecreate() throws PersistenceException {
         lock.lock();
         try {
+            initialized = false;
             model = new JsonModel();
             persist();
             initialized = true;
         } catch (IOException e) {
+            initialized = false;
             throw new PersistenceException("Failed to recreate JSON persistence at " + dataFile, e);
+        } catch (RuntimeException | Error e) {
+            initialized = false;
+            throw e;
         } finally {
             lock.unlock();
         }
@@ -147,6 +167,7 @@ public final class JsonPersistenceBackend
     public void backup(OutputStream out) throws PersistenceException, IOException {
         lock.lock();
         try {
+            ensureInitialized();
             out.write(model.toJson().getBytes(StandardCharsets.UTF_8));
             out.flush();
         } finally {
@@ -156,7 +177,9 @@ public final class JsonPersistenceBackend
 
     @Override
     public void restore(InputStream in) throws PersistenceException, IOException {
-        // Parse and validate fully BEFORE touching live state.
+        // Parse and validate fully BEFORE touching live state. The structure check in
+        // JsonModel rejects missing or mistyped sections before empty collections could
+        // wipe the live model, and record validation rejects mismatched identities.
         byte[] bytes = in.readAllBytes();
         JsonModel candidate = JsonModel.fromJson(new String(bytes, StandardCharsets.UTF_8));
         if (candidate.schemaVersion != JsonModel.SCHEMA_VERSION) {
@@ -164,8 +187,10 @@ public final class JsonPersistenceBackend
                     "Backup schema version " + candidate.schemaVersion
                             + " incompatible with expected " + JsonModel.SCHEMA_VERSION);
         }
+        SnapshotPreflight.validateRecords(candidate);
         lock.lock();
         try {
+            ensureInitialized();
             JsonModel previous = model;
             try {
                 model = candidate;
@@ -190,6 +215,7 @@ public final class JsonPersistenceBackend
             throws PersistenceException, IOException {
         lock.lock();
         try {
+            ensureInitialized();
             return operation.run();
         } finally {
             lock.unlock();
@@ -202,6 +228,7 @@ public final class JsonPersistenceBackend
     public boolean exists(UUID uuid) {
         lock.lock();
         try {
+            ensureInitialized();
             return model.accounts.containsKey(uuid.toString());
         } finally {
             lock.unlock();
@@ -212,6 +239,7 @@ public final class JsonPersistenceBackend
     public Optional<Account> load(UUID uuid) {
         lock.lock();
         try {
+            ensureInitialized();
             JsonModel.JsonAccount a = model.accounts.get(uuid.toString());
             return a == null ? Optional.empty() : Optional.of(toAccount(a));
         } finally {
@@ -223,6 +251,7 @@ public final class JsonPersistenceBackend
     public List<Account> listAll() {
         lock.lock();
         try {
+            ensureInitialized();
             List<Account> result = new ArrayList<>(model.accounts.size());
             for (JsonModel.JsonAccount account : model.accounts.values()) {
                 result.add(toAccount(account));
@@ -237,10 +266,60 @@ public final class JsonPersistenceBackend
     public void save(Account account) {
         lock.lock();
         try {
-            model.accounts.put(account.owner().toString(), toJsonAccount(account));
-            persist();
-        } catch (IOException e) {
-            throw new PersistenceException("Failed to save account " + account.owner(), e);
+            ensureInitialized();
+            JsonModel.JsonAccount current = model.accounts.get(account.owner().toString());
+            if (current != null && !sameAccount(toAccount(current), account)) {
+                throw optimisticConflict(account.owner());
+            }
+            if (current != null) {
+                return;
+            }
+            JsonModel previous = model;
+            JsonModel next = shallowCopy(previous);
+            model = next;
+            try {
+                next.accounts.put(account.owner().toString(), toJsonAccount(account));
+                persist();
+            } catch (IOException e) {
+                model = previous;
+                throw new PersistenceException("Failed to save account " + account.owner(), e);
+            } catch (RuntimeException e) {
+                model = previous;
+                throw e;
+            }
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    @Override
+    public void save(Account expected, Account updated) {
+        if (expected == null || updated == null || !expected.owner().equals(updated.owner())) {
+            throw new PersistenceException("Invalid expected account snapshot");
+        }
+        lock.lock();
+        try {
+            ensureInitialized();
+            JsonModel.JsonAccount current = model.accounts.get(updated.owner().toString());
+            if (current == null || !sameAccount(toAccount(current), expected)) {
+                throw optimisticConflict(updated.owner());
+            }
+            if (sameAccount(expected, updated)) {
+                return;
+            }
+            JsonModel previous = model;
+            JsonModel next = shallowCopy(previous);
+            next.accounts.put(updated.owner().toString(), toJsonAccount(updated));
+            model = next;
+            try {
+                persist();
+            } catch (IOException e) {
+                model = previous;
+                throw new PersistenceException("Failed to save account " + updated.owner(), e);
+            } catch (RuntimeException e) {
+                model = previous;
+                throw e;
+            }
         } finally {
             lock.unlock();
         }
@@ -250,16 +329,27 @@ public final class JsonPersistenceBackend
     public Account create(UUID uuid, String ownerName, Map<String, Amount> initialBalances) {
         lock.lock();
         try {
+            ensureInitialized();
             JsonModel.JsonAccount existing = model.accounts.get(uuid.toString());
             if (existing != null) {
                 return toAccount(existing); // safe: never overwrite an existing account
             }
-            Account account = Account.create(uuid, ownerName, initialBalances);
-            model.accounts.put(uuid.toString(), toJsonAccount(account));
-            persist();
+            JsonModel previous = model;
+            JsonModel next = shallowCopy(previous);
+            model = next;
+            Account account;
+            try {
+                account = Account.create(uuid, ownerName, initialBalances);
+                next.accounts.put(uuid.toString(), toJsonAccount(account));
+                persist();
+            } catch (IOException e) {
+                model = previous;
+                throw new PersistenceException("Failed to create account " + uuid, e);
+            } catch (RuntimeException e) {
+                model = previous;
+                throw e;
+            }
             return account;
-        } catch (IOException e) {
-            throw new PersistenceException("Failed to create account " + uuid, e);
         } finally {
             lock.unlock();
         }
@@ -271,10 +361,20 @@ public final class JsonPersistenceBackend
     public void append(Transaction transaction) throws PersistenceException {
         lock.lock();
         try {
-            insert(transaction);
-            persist();
-        } catch (IOException e) {
-            throw new PersistenceException("Failed to append transaction " + transaction.id(), e);
+            ensureInitialized();
+            JsonModel previous = model;
+            JsonModel next = shallowCopy(previous);
+            model = next;
+            try {
+                insert(transaction);
+                persist();
+            } catch (IOException e) {
+                model = previous;
+                throw new PersistenceException("Failed to append transaction " + transaction.id(), e);
+            } catch (RuntimeException e) {
+                model = previous;
+                throw e;
+            }
         } finally {
             lock.unlock();
         }
@@ -284,13 +384,23 @@ public final class JsonPersistenceBackend
     public void appendBatch(List<Transaction> transactions) throws PersistenceException {
         lock.lock();
         try {
-            for (Transaction t : transactions) {
-                insert(t);
+            ensureInitialized();
+            JsonModel previous = model;
+            JsonModel next = shallowCopy(previous);
+            model = next;
+            try {
+                for (Transaction t : transactions) {
+                    insert(t);
+                }
+                // Single atomic rewrite => all-or-none for the whole batch.
+                persist();
+            } catch (IOException e) {
+                model = previous;
+                throw new PersistenceException("Failed to append transaction batch", e);
+            } catch (RuntimeException e) {
+                model = previous;
+                throw e;
             }
-            // Single atomic rewrite => all-or-none for the whole batch.
-            persist();
-        } catch (IOException e) {
-            throw new PersistenceException("Failed to append transaction batch", e);
         } finally {
             lock.unlock();
         }
@@ -300,20 +410,20 @@ public final class JsonPersistenceBackend
     public void markReverted(UUID transactionId) throws PersistenceException {
         lock.lock();
         try {
-            boolean found = false;
-            for (JsonModel.JsonTransaction t : model.transactions) {
-                if (t.id.equals(transactionId.toString())) {
-                    t.reverted = true;
-                    found = true;
-                    break;
-                }
+            ensureInitialized();
+            JsonModel previous = model;
+            JsonModel next = shallowCopy(previous);
+            model = next;
+            try {
+                markOnModel(next, transactionId);
+                persist();
+            } catch (IOException e) {
+                model = previous;
+                throw new PersistenceException("Failed to mark transaction reverted " + transactionId, e);
+            } catch (RuntimeException e) {
+                model = previous;
+                throw e;
             }
-            if (!found) {
-                throw new PersistenceException("Cannot mark unknown transaction reverted: " + transactionId);
-            }
-            persist();
-        } catch (IOException e) {
-            throw new PersistenceException("Failed to mark transaction reverted " + transactionId, e);
         } finally {
             lock.unlock();
         }
@@ -323,6 +433,7 @@ public final class JsonPersistenceBackend
     public boolean isReverted(UUID transactionId) throws PersistenceException {
         lock.lock();
         try {
+            ensureInitialized();
             for (JsonModel.JsonTransaction t : model.transactions) {
                 if (t.id.equals(transactionId.toString())) {
                     return t.reverted;
@@ -338,6 +449,7 @@ public final class JsonPersistenceBackend
     public List<Transaction> loadByAccount(UUID accountId) throws PersistenceException {
         lock.lock();
         try {
+            ensureInitialized();
             List<Transaction> result = new ArrayList<>();
             String id = accountId.toString();
             for (JsonModel.JsonTransaction t : model.transactions) {
@@ -355,6 +467,7 @@ public final class JsonPersistenceBackend
     public List<Transaction> loadAll() throws PersistenceException {
         lock.lock();
         try {
+            ensureInitialized();
             List<Transaction> result = new ArrayList<>(model.transactions.size());
             for (JsonModel.JsonTransaction t : model.transactions) {
                 result.add(t.toDomain());
@@ -370,21 +483,44 @@ public final class JsonPersistenceBackend
     @Override
     public void applyReversal(List<Account> updatedAccounts, List<Transaction> reversalRecords,
                               List<UUID> revertMarkerIds) throws PersistenceException {
+        // Keep the snapshot overload source-compatible, but derive the mutation from the live
+        // model and the signed audit intent instead of copying caller state.
+        applyReversalDeltas(reversalRecords, revertMarkerIds);
+    }
+
+    private void applyReversalDeltas(List<Transaction> reversalRecords,
+                                     List<UUID> revertMarkerIds) throws PersistenceException {
         lock.lock();
         try {
-            // Copy-on-write: build the mutated successor model first (validations run here,
-            // before any live state changes), swap it in, then persist once. A failure at any
-            // point restores the previous reference, so the file and the memory stay in sync
-            // and no half-applied reversal is ever observable.
+            ensureInitialized();
             JsonModel previous = model;
             JsonModel next = shallowCopy(previous);
             model = next;
             try {
-                for (Account a : updatedAccounts) {
-                    next.accounts.put(a.owner().toString(), toJsonAccount(a));
-                }
-                for (Transaction t : reversalRecords) {
-                    insert(t);
+                Map<UUID, Account> live = new LinkedHashMap<>();
+                for (Transaction record : reversalRecords) {
+                    UUID owner = record.accountId();
+                    Account base = live.get(owner);
+                    if (base == null) {
+                        JsonModel.JsonAccount stored = next.accounts.get(owner.toString());
+                        if (stored == null) {
+                            throw new PersistenceException("account not found for reversal: " + owner);
+                        }
+                        base = toAccount(stored);
+                    }
+                    String currencyId = Currency.normalizeId(record.currencyId());
+                    Amount delta = reversalDelta(record);
+                    Amount before = base.balanceOf(currencyId);
+                    if (before == null) {
+                        before = Amount.zero(delta.scale());
+                    }
+                    Account updated = delta.isNegative()
+                            ? base.withdraw(currencyId, delta.abs())
+                            : base.deposit(currencyId, delta);
+                    Amount after = updated.balanceOf(currencyId);
+                    live.put(owner, updated);
+                    next.accounts.put(owner.toString(), toJsonAccount(updated));
+                    insert(authoritativeReversal(record, before, after));
                 }
                 for (UUID markerId : revertMarkerIds) {
                     markOnModel(next, markerId);
@@ -408,6 +544,7 @@ public final class JsonPersistenceBackend
     public boolean consume(UUID nonce) throws PersistenceException {
         lock.lock();
         try {
+            ensureInitialized();
             String key = nonce.toString();
             if (model.nonces.containsKey(key)) {
                 return false;
@@ -432,6 +569,7 @@ public final class JsonPersistenceBackend
     public boolean isConsumed(UUID nonce) throws PersistenceException {
         lock.lock();
         try {
+            ensureInitialized();
             return model.nonces.containsKey(nonce.toString());
         } finally {
             lock.unlock();
@@ -445,19 +583,34 @@ public final class JsonPersistenceBackend
             throws PersistenceException {
         lock.lock();
         try {
+            ensureInitialized();
             String key = nonce.toString();
             if (model.nonces.containsKey(key)) {
                 return RedemptionResult.replay();
             }
             String ownerKey = transaction.accountId().toString();
-            if (!model.accounts.containsKey(ownerKey)) {
+            JsonModel.JsonAccount stored = model.accounts.get(ownerKey);
+            if (stored == null) {
                 return RedemptionResult.accountMissing();
             }
-            // All-or-none copy-on-write with the application-prepared account and transaction.
+            // The Account argument and balance fields on the Transaction are prepared snapshots.
+            // Re-read the live model while holding the backend lock and build the audit record from
+            // that live balance, matching the SQL backend's transaction-before-read contract.
+            Account live = toAccount(stored);
+            Amount current = live.balanceOf(transaction.currencyId());
+            Amount before = current == null ? Amount.zero(transaction.amount().scale()) : current;
+            Account updated = live.deposit(transaction.currencyId(), transaction.amount());
+            Amount after = updated.balanceOf(transaction.currencyId());
+            Transaction authoritative = new Transaction(transaction.id(), transaction.accountId(),
+                    transaction.counterparty(), Currency.normalizeId(transaction.currencyId()),
+                    transaction.amount(), TransactionType.DEPOSIT, before, after,
+                    transaction.timestamp(), transaction.reason());
+
+            // All-or-none copy-on-write with the live account, authoritative transaction and nonce.
             JsonModel previous = model;
             JsonModel next = shallowCopy(previous);
-            next.accounts.put(account.owner().toString(), toJsonAccount(account));
-            next.transactions.add(JsonModel.JsonTransaction.fromDomain(transaction));
+            next.accounts.put(updated.owner().toString(), toJsonAccount(updated));
+            next.transactions.add(JsonModel.JsonTransaction.fromDomain(authoritative));
             next.nonces.put(key, java.time.Instant.now().toString());
             model = next;
             try {
@@ -466,8 +619,7 @@ public final class JsonPersistenceBackend
                 model = previous;
                 throw new PersistenceException("Failed to persist banknote redemption " + nonce, e);
             }
-            return RedemptionResult.committed(transaction.balanceBefore(), transaction.balanceAfter(),
-                    transaction.id());
+            return RedemptionResult.committed(before, after, transaction.id());
         } finally {
             lock.unlock();
         }
@@ -478,6 +630,7 @@ public final class JsonPersistenceBackend
             throws PersistenceException {
         lock.lock();
         try {
+            ensureInitialized();
             String key = nonce.toString();
             if (model.nonces.containsKey(key)) {
                 return RedemptionResult.replay();
@@ -519,6 +672,44 @@ public final class JsonPersistenceBackend
     }
 
     // ---------------- internals ----------------
+
+    private static PersistenceException optimisticConflict(UUID owner) {
+        return new PersistenceException("Optimistic account conflict for " + owner
+                + "; the caller snapshot is stale");
+    }
+
+    private static boolean sameAccount(Account left, Account right) {
+        if (!left.owner().equals(right.owner()) || !left.ownerName().equals(right.ownerName())
+                || !left.balances().keySet().equals(right.balances().keySet())) {
+            return false;
+        }
+        for (String currency : left.balances().keySet()) {
+            if (left.balances().get(currency).compareTo(right.balances().get(currency)) != 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static Amount reversalDelta(Transaction record) {
+        return switch (record.type()) {
+            case DEPOSIT, TRANSFER_IN -> record.amount();
+            case WITHDRAW, TRANSFER_OUT -> record.amount().negate();
+            case SET -> {
+                if (record.balanceBefore() == null || record.balanceAfter() == null) {
+                    throw new PersistenceException("SET reversal requires balanceBefore and balanceAfter");
+                }
+                yield record.balanceAfter().subtract(record.balanceBefore());
+            }
+        };
+    }
+
+    private static Transaction authoritativeReversal(Transaction record, Amount before, Amount after) {
+        Amount auditAmount = record.type() == TransactionType.SET ? after : record.amount().abs();
+        return new Transaction(record.id(), record.accountId(), record.counterparty(),
+                Currency.normalizeId(record.currencyId()), auditAmount, record.type(), before, after,
+                record.timestamp(), record.reason());
+    }
 
     private void insert(Transaction t) {
         String id = t.id().toString();
