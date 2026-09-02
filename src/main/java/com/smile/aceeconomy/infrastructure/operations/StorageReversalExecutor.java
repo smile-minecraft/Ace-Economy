@@ -13,6 +13,7 @@ import com.smile.aceeconomy.ports.operations.ReversalExecutor;
 import com.smile.aceeconomy.ports.operations.ReversalOutcome;
 import com.smile.aceeconomy.ports.operations.ReversalPlan;
 import com.smile.aceeconomy.ports.persistence.AtomicReversalStore;
+import com.smile.aceeconomy.ports.persistence.PersistenceException;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -103,10 +104,31 @@ public final class StorageReversalExecutor implements ReversalExecutor {
 
         // Commit balances + reversal records + reverted markers as ONE storage transaction.
         // Any persistence failure leaves the previous state fully intact, so a retry
-        // re-executes the whole plan without duplicating effects.
+        // re-executes the whole plan without duplicating effects. When the storage reports
+        // a failure after the data was already committed (post-commit auto-commit restore
+        // failure), the effect is durable and must be surfaced as success so a retry does not
+        // duplicate the debit.
         try {
             store.applyReversal(new ArrayList<>(current.values()), reversalRecords, plan.markerIds());
+        } catch (PersistenceException e) {
+            if (e.isCommitted()) {
+                List<UUID> ids = new ArrayList<>();
+                for (Transaction t : reversalRecords) {
+                    ids.add(t.id());
+                }
+                return ReversalOutcome.success(ids);
+            }
+            return ReversalOutcome.failure(RollbackError.EXECUTION_FAILED,
+                    "failed to apply reversal atomically: " + e.getMessage());
         } catch (RuntimeException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof PersistenceException pe && pe.isCommitted()) {
+                List<UUID> ids = new ArrayList<>();
+                for (Transaction t : reversalRecords) {
+                    ids.add(t.id());
+                }
+                return ReversalOutcome.success(ids);
+            }
             return ReversalOutcome.failure(RollbackError.EXECUTION_FAILED,
                     "failed to apply reversal atomically: " + e.getMessage());
         }

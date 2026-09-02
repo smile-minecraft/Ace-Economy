@@ -2,6 +2,7 @@ package com.smile.aceeconomy.ports.persistence;
 
 import com.smile.aceeconomy.domain.Account;
 import com.smile.aceeconomy.domain.Amount;
+import com.smile.aceeconomy.domain.DebtPolicy;
 import com.smile.aceeconomy.domain.Transaction;
 
 import java.util.UUID;
@@ -67,5 +68,15 @@ public interface AtomicRedemptionStore {
     default RedemptionResult redeemPrepared(UUID nonce, Account account, Transaction transaction)
             throws PersistenceException {
         throw new UnsupportedOperationException("redeemPrepared not implemented");
+    }
+
+    /**
+     * Same as {@link #redeemPrepared(UUID, Account, Transaction)} but with debt policy
+     * evaluated atomically against the live row. When the live balance violates the policy,
+     * the method returns {@code DEBT_LIMIT_EXCEEDED} without consuming the nonce.
+     */
+    default RedemptionResult redeemPrepared(UUID nonce, Account account, Transaction transaction,
+                                            DebtPolicy debtPolicy) throws PersistenceException {
+        return redeemPrepared(nonce, account, transaction);
     }
 }

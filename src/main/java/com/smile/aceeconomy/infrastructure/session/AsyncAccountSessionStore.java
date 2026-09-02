@@ -5,6 +5,7 @@ import com.smile.aceeconomy.ports.AccountRepository;
 import com.smile.aceeconomy.ports.SessionError;
 import com.smile.aceeconomy.ports.SessionException;
 import com.smile.aceeconomy.ports.SessionStore;
+import com.smile.aceeconomy.ports.persistence.PersistenceException;
 
 import org.jetbrains.annotations.NotNull;
 
@@ -65,10 +66,10 @@ public final class AsyncAccountSessionStore implements SessionStore {
             try {
                 Account expected = loadedSnapshots.get(account.owner());
                 if (expected == null) {
-                    accounts.save(account);
-                } else {
-                    accounts.save(expected, account);
+                    throw new PersistenceException(
+                            "No loaded snapshot for " + account.owner() + "; stale flush rejected");
                 }
+                accounts.save(expected, account);
                 loadedSnapshots.put(account.owner(), account);
                 future.complete(null);
             } catch (RuntimeException ex) {

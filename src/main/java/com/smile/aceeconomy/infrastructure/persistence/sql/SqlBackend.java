@@ -1,8 +1,10 @@
 package com.smile.aceeconomy.infrastructure.persistence.sql;
 
+import com.smile.aceeconomy.application.TransferResult;
 import com.smile.aceeconomy.domain.Account;
 import com.smile.aceeconomy.domain.Amount;
 import com.smile.aceeconomy.domain.Currency;
+import com.smile.aceeconomy.domain.DebtPolicy;
 import com.smile.aceeconomy.domain.Transaction;
 import com.smile.aceeconomy.domain.TransactionType;
 import com.smile.aceeconomy.infrastructure.persistence.json.JsonModel;
@@ -10,6 +12,7 @@ import com.smile.aceeconomy.infrastructure.persistence.json.SnapshotPreflight;
 import com.smile.aceeconomy.ports.AccountRepository;
 import com.smile.aceeconomy.ports.persistence.AtomicRedemptionStore;
 import com.smile.aceeconomy.ports.persistence.AtomicReversalStore;
+import com.smile.aceeconomy.ports.persistence.AtomicTransferStore;
 import com.smile.aceeconomy.ports.persistence.NonceStore;
 import com.smile.aceeconomy.ports.persistence.PersistenceException;
 import com.smile.aceeconomy.ports.persistence.PersistenceLifecycle;
@@ -114,7 +117,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  */
 public final class SqlBackend
         implements AccountRepository, TransactionRepository, PersistenceLifecycle,
-        AtomicReversalStore, AtomicRedemptionStore, NonceStore {
+        AtomicReversalStore, AtomicRedemptionStore, AtomicTransferStore, NonceStore {
 
     private final SqlConnectionProvider provider;
     private final SqlDialect dialect;
@@ -320,7 +323,7 @@ public final class SqlBackend
                     operation + " committed successfully, but restoring auto-commit on the SQL "
                             + "connection failed; the connection has been closed. The data is "
                             + "committed — do not treat this as a rollback.",
-                    autoCommitFailure);
+                    autoCommitFailure, true);
         }
     }
 
@@ -1078,6 +1081,7 @@ public final class SqlBackend
         // rolls back every statement, so no half-applied reversal is ever committed.
         Lock access = accessLock();
         access.lock();
+        java.util.concurrent.atomic.AtomicBoolean committedFlag = new java.util.concurrent.atomic.AtomicBoolean(false);
         try {
             ensureInitialized();
             try {
@@ -1101,37 +1105,83 @@ public final class SqlBackend
                             }
                             live.put(id, account.get());
                         }
-
-                        List<Transaction> authoritativeRecords = new ArrayList<>(reversalRecords.size());
-                        for (Transaction record : reversalRecords) {
-                            Account base = live.get(record.accountId());
-                            String currencyId = Currency.normalizeId(record.currencyId());
-                            Amount delta = reversalDelta(record);
-                            Amount before = base.balanceOf(currencyId);
-                            if (before == null) {
-                                before = Amount.zero(delta.scale());
+                        // Idempotency: locking read on revert markers after account locks.
+                        // Using FOR UPDATE ensures a concurrent MySQL reversal blocks on the same
+                        // marker row until the first transaction commits, then sees reverted=true
+                        // and returns idempotently instead of double-debiting.
+                        // Marker idempotency with DB row lock. Account locks (TreeSet order) are
+                        // already held above; marker SELECT ... FOR UPDATE is issued inside the same
+                        // JDBC transaction so concurrent MySQL reversals serialize on the marker row.
+                        // Semantics: all reverted => idempotent no-op; none reverted => full apply;
+                        // partial (some reverted, some not) => reject to avoid re-applying the
+                        // already-committed leg with a duplicate audit record.
+                        boolean alreadyApplied = !revertMarkerIds.isEmpty();
+                        boolean anyReverted = false;
+                        boolean anyNotReverted = false;
+                        if (alreadyApplied) {
+                            java.util.List<UUID> sortedMarkers = new java.util.ArrayList<>(revertMarkerIds);
+                            java.util.Collections.sort(sortedMarkers);
+                            String forUpdate = dialect.forUpdateClause();
+                            for (UUID markerId : sortedMarkers) {
+                                try (PreparedStatement ps = conn.prepareStatement(
+                                        "SELECT reverted FROM " + V2Schema.transactionsTable() + " WHERE id = ?" + forUpdate)) {
+                                    ps.setString(1, markerId.toString());
+                                    try (ResultSet rs = ps.executeQuery()) {
+                                        if (!rs.next()) {
+                                            throw new SQLException(
+                                                    "unknown transaction for revert marker: " + markerId);
+                                        }
+                                        if (rs.getBoolean(1)) {
+                                            anyReverted = true;
+                                        } else {
+                                            anyNotReverted = true;
+                                        }
+                                    }
+                                }
                             }
-                            Account next = delta.isNegative()
-                                    ? base.withdraw(currencyId, delta.abs())
-                                    : base.deposit(currencyId, delta);
-                            Amount after = next.balanceOf(currencyId);
-                            live.put(record.accountId(), next);
-                            authoritativeRecords.add(authoritativeReversal(record, before, after));
-                        }
-
-                        for (Account account : live.values()) {
-                            saveAccountRows(account, conn);
-                        }
-                        for (Transaction record : authoritativeRecords) {
-                            insertTransactionRow(record, false, conn);
-                        }
-                        for (UUID markerId : revertMarkerIds) {
-                            if (markRevertedRow(markerId, conn) == 0) {
-                                throw new SQLException(
-                                        "unknown transaction for revert marker: " + markerId);
+                            if (anyReverted && anyNotReverted) {
+                                throw new PersistenceException(
+                                        "partial reversal markers already reverted: markers=" + revertMarkerIds);
                             }
+                            alreadyApplied = anyReverted && !anyNotReverted;
                         }
-                        conn.commit();
+                        if (alreadyApplied) {
+                            conn.commit();
+                            committedFlag.set(true);
+                        } else {
+
+                            List<Transaction> authoritativeRecords = new ArrayList<>(reversalRecords.size());
+                            for (Transaction record : reversalRecords) {
+                                Account base = live.get(record.accountId());
+                                String currencyId = Currency.normalizeId(record.currencyId());
+                                Amount delta = reversalDelta(record);
+                                Amount before = base.balanceOf(currencyId);
+                                if (before == null) {
+                                    before = Amount.zero(delta.scale());
+                                }
+                                Account next = delta.isNegative()
+                                        ? base.withdraw(currencyId, delta.abs())
+                                        : base.deposit(currencyId, delta);
+                                Amount after = next.balanceOf(currencyId);
+                                live.put(record.accountId(), next);
+                                authoritativeRecords.add(authoritativeReversal(record, before, after));
+                            }
+
+                            for (Account account : live.values()) {
+                                saveAccountRows(account, conn);
+                            }
+                            for (Transaction record : authoritativeRecords) {
+                                insertTransactionRow(record, false, conn);
+                            }
+                            for (UUID markerId : revertMarkerIds) {
+                                if (markRevertedRow(markerId, conn) == 0) {
+                                    throw new SQLException(
+                                            "unknown transaction for revert marker: " + markerId);
+                                }
+                            }
+                            conn.commit();
+                            committedFlag.set(true);
+                        }
                     } catch (Throwable e) {
                         rollbackForFailure(borrowed, conn, e, entered);
                         if (e instanceof SQLException sql) {
@@ -1148,8 +1198,35 @@ public final class SqlBackend
                     restoreAutoCommitAfterCommit(borrowed, conn, "Apply reversal");
                     return null;
                 });
+            } catch (PersistenceException e) {
+                if (e.isCommitted() || committedFlag.get()) {
+                    if (!e.isCommitted()) {
+                        throw new PersistenceException(e.getMessage(), e.getCause() != null ? e.getCause() : e, true);
+                    }
+                    throw e;
+                }
+                throw e;
             } catch (SQLException e) {
+                if (committedFlag.get()) {
+                    throw new PersistenceException(
+                            "Apply reversal committed successfully, but post-commit cleanup failed; the data is committed — do not treat this as a rollback.",
+                            e, true);
+                }
                 throw new PersistenceException("Failed to apply reversal atomically", e);
+            } catch (RuntimeException | Error e) {
+                if (committedFlag.get()) {
+                    Throwable cause = e.getCause();
+                    Throwable committedCause = cause != null ? cause : e;
+                    if (e instanceof PersistenceException pe && pe.isCommitted()) {
+                        throw pe;
+                    }
+                    // BorrowedConnection.close failure after commit is wrapped as SQLException above,
+                    // but RuntimeException/Error post-commit must still be marked committed.
+                    throw new PersistenceException(
+                            "Apply reversal committed successfully, but post-commit cleanup failed; the data is committed — do not treat this as a rollback.",
+                            committedCause, true);
+                }
+                throw e;
             }
         } finally {
             access.unlock();
@@ -1233,6 +1310,7 @@ public final class SqlBackend
             throws PersistenceException {
         Lock access = accessLock();
         access.lock();
+        java.util.concurrent.atomic.AtomicBoolean committedFlag = new java.util.concurrent.atomic.AtomicBoolean(false);
         try {
             ensureInitialized();
             try {
@@ -1278,6 +1356,7 @@ public final class SqlBackend
                         }
                         conn.commit();
                         committed = true;
+                        committedFlag.set(true);
                     } catch (Throwable e) {
                         if (!replayPath && !committed) {
                             rollbackForFailure(borrowed, conn, e, entered);
@@ -1296,8 +1375,249 @@ public final class SqlBackend
                     restoreAutoCommitAfterCommit(borrowed, conn, "Redeem banknote");
                     return RedemptionResult.committed(beforeHolder, afterHolder, transaction.id());
                 });
+            } catch (PersistenceException e) {
+                if (e.isCommitted() || committedFlag.get()) {
+                    if (!e.isCommitted()) {
+                        throw new PersistenceException(e.getMessage(), e.getCause() != null ? e.getCause() : e, true);
+                    }
+                    throw e;
+                }
+                throw e;
             } catch (SQLException e) {
+                if (committedFlag.get()) {
+                    throw new PersistenceException(
+                            "Redeem banknote committed successfully, but post-commit cleanup failed; the data is committed — do not treat this as a rollback.",
+                            e, true);
+                }
                 throw new PersistenceException("Failed to redeem banknote " + nonce, e);
+            } catch (RuntimeException | Error e) {
+                if (committedFlag.get()) {
+                    if (e instanceof PersistenceException pe && pe.isCommitted()) {
+                        throw pe;
+                    }
+                    Throwable cause = e.getCause();
+                    Throwable committedCause = cause != null ? cause : e;
+                    throw new PersistenceException(
+                            "Redeem banknote committed successfully, but post-commit cleanup failed; the data is committed — do not treat this as a rollback.",
+                            committedCause, true);
+                }
+                throw e;
+            }
+        } finally {
+            access.unlock();
+        }
+    }
+
+    @Override
+    public RedemptionResult redeemPrepared(UUID nonce, Account account, Transaction transaction,
+                                           DebtPolicy debtPolicy) throws PersistenceException {
+        Lock access = accessLock();
+        access.lock();
+        java.util.concurrent.atomic.AtomicBoolean committedFlag = new java.util.concurrent.atomic.AtomicBoolean(false);
+        try {
+            ensureInitialized();
+            try {
+                return withBorrowed((borrowed, conn) -> {
+                    boolean entered = false;
+                    boolean replayPath = false;
+                    boolean committed = false;
+                    Amount beforeHolder = null;
+                    Amount afterHolder = null;
+                    try {
+                        conn.setAutoCommit(false);
+                        entered = true;
+                        Optional<Account> existing = loadForUpdateWithConnection(transaction.accountId(), conn);
+                        if (existing.isEmpty()) {
+                            cleanupMissingAccount(borrowed, conn);
+                            return RedemptionResult.accountMissing();
+                        }
+                        Amount current = existing.get().balanceOf(transaction.currencyId());
+                        Amount before = current == null
+                                ? Amount.zero(transaction.amount().scale()) : current;
+                        Account updated = existing.get().deposit(transaction.currencyId(), transaction.amount());
+                        Amount after = updated.balanceOf(transaction.currencyId());
+                        if (debtPolicy != null && !debtPolicy.allows(after)) {
+                            cleanupMissingAccount(borrowed, conn);
+                            return RedemptionResult.debtLimitExceeded();
+                        }
+                        Transaction authoritative = new Transaction(transaction.id(), transaction.accountId(),
+                                transaction.counterparty(), Currency.normalizeId(transaction.currencyId()),
+                                transaction.amount(), TransactionType.DEPOSIT, before, after,
+                                transaction.timestamp(), transaction.reason());
+                        beforeHolder = before;
+                        afterHolder = after;
+                        saveAccountRows(updated, conn);
+                        insertTransactionRow(authoritative, false, conn);
+                        try (PreparedStatement ps = conn.prepareStatement(
+                                V2Schema.nonceInsertSql(dialect))) {
+                            ps.setString(1, nonce.toString());
+                            ps.setString(2, Instant.now().toString());
+                            if (ps.executeUpdate() != 1) {
+                                replayPath = true;
+                                cleanupReplay(borrowed, conn);
+                                return RedemptionResult.replay();
+                            }
+                        }
+                        conn.commit();
+                        committed = true;
+                        committedFlag.set(true);
+                    } catch (Throwable e) {
+                        if (!replayPath && !committed) {
+                            rollbackForFailure(borrowed, conn, e, entered);
+                        }
+                        if (e instanceof SQLException sql) {
+                            throw sql;
+                        }
+                        if (e instanceof RuntimeException re) {
+                            throw re;
+                        }
+                        if (e instanceof Error err) {
+                            throw err;
+                        }
+                        throw new RuntimeException(e);
+                    }
+                    restoreAutoCommitAfterCommit(borrowed, conn, "Redeem banknote");
+                    return RedemptionResult.committed(beforeHolder, afterHolder, transaction.id());
+                });
+            } catch (PersistenceException e) {
+                if (e.isCommitted() || committedFlag.get()) {
+                    if (!e.isCommitted()) {
+                        throw new PersistenceException(e.getMessage(), e.getCause() != null ? e.getCause() : e, true);
+                    }
+                    throw e;
+                }
+                throw e;
+            } catch (SQLException e) {
+                if (committedFlag.get()) {
+                    throw new PersistenceException(
+                            "Redeem banknote committed successfully, but post-commit cleanup failed; the data is committed — do not treat this as a rollback.",
+                            e, true);
+                }
+                throw new PersistenceException("Failed to redeem banknote " + nonce, e);
+            } catch (RuntimeException | Error e) {
+                if (committedFlag.get()) {
+                    if (e instanceof PersistenceException pe && pe.isCommitted()) {
+                        throw pe;
+                    }
+                    Throwable cause = e.getCause();
+                    Throwable committedCause = cause != null ? cause : e;
+                    throw new PersistenceException(
+                            "Redeem banknote committed successfully, but post-commit cleanup failed; the data is committed — do not treat this as a rollback.",
+                            committedCause, true);
+                }
+                throw e;
+            }
+        } finally {
+            access.unlock();
+        }
+    }
+
+    @Override
+    public TransferResult transfer(UUID from, UUID to, String currencyId, Amount amount,
+                                   DebtPolicy debtPolicy) throws PersistenceException {
+        String cid = Currency.normalizeId(currencyId);
+        Lock access = accessLock();
+        access.lock();
+        java.util.concurrent.atomic.AtomicBoolean committedFlag = new java.util.concurrent.atomic.AtomicBoolean(false);
+        try {
+            ensureInitialized();
+            try {
+                return withBorrowed((borrowed, conn) -> {
+                    boolean entered = false;
+                    boolean committed = false;
+                    Amount fromAfterHolder = null;
+                    Amount toAfterHolder = null;
+                    UUID outIdHolder = null;
+                    UUID inIdHolder = null;
+                    try {
+                        conn.setAutoCommit(false);
+                        entered = true;
+                        // lock both accounts in deterministic order
+                        java.util.Set<UUID> ordered = new java.util.TreeSet<>();
+                        ordered.add(from);
+                        ordered.add(to);
+                        java.util.Map<UUID, Account> live = new java.util.LinkedHashMap<>();
+                        for (UUID id : ordered) {
+                            Optional<Account> acc = loadForUpdateWithConnection(id, conn);
+                            if (acc.isEmpty()) {
+                                conn.rollback();
+                                try { conn.setAutoCommit(true); } catch (Throwable t) { borrowed.markUnsafe(); }
+                                throw new PersistenceException("account not found for transfer: " + id);
+                            }
+                            live.put(id, acc.get());
+                        }
+                        Account fromAcc = live.get(from);
+                        Account toAcc = live.get(to);
+                        Amount fromBefore = fromAcc.balanceOf(cid);
+                        if (fromBefore == null) fromBefore = Amount.zero(amount.scale());
+                        Amount toBefore = toAcc.balanceOf(cid);
+                        if (toBefore == null) toBefore = Amount.zero(amount.scale());
+                        Amount fromAfter = fromBefore.subtract(amount);
+                        if (debtPolicy != null && !debtPolicy.allows(fromAfter)) {
+                            conn.rollback();
+                            try { conn.setAutoCommit(true); } catch (Throwable t) { borrowed.markUnsafe(); }
+                            throw new AtomicTransferStore.DebtLimitExceededException("debt limit exceeded");
+                        }
+                        Amount toAfter = toBefore.add(amount);
+                        Account updatedFrom = fromAcc.withdraw(cid, amount);
+                        Account updatedTo = toAcc.deposit(cid, amount);
+                        saveAccountRows(updatedFrom, conn);
+                        saveAccountRows(updatedTo, conn);
+                        UUID outId = UUID.randomUUID();
+                        UUID inId = UUID.randomUUID();
+                        Instant now = Instant.now();
+                        Transaction outTx = new Transaction(outId, from, to, cid, amount,
+                                TransactionType.TRANSFER_OUT, fromBefore, fromAfter, now, "transfer-out");
+                        Transaction inTx = new Transaction(inId, to, from, cid, amount,
+                                TransactionType.TRANSFER_IN, toBefore, toAfter, now, "transfer-in");
+                        insertTransactionRow(outTx, false, conn);
+                        insertTransactionRow(inTx, false, conn);
+                        conn.commit();
+                        committed = true;
+                        committedFlag.set(true);
+                        fromAfterHolder = fromAfter;
+                        toAfterHolder = toAfter;
+                        outIdHolder = outId;
+                        inIdHolder = inId;
+                    } catch (Throwable e) {
+                        if (!committed) {
+                            rollbackForFailure(borrowed, conn, e, entered);
+                        }
+                        if (e instanceof SQLException sql) throw sql;
+                        if (e instanceof RuntimeException re) throw re;
+                        if (e instanceof Error err) throw err;
+                        throw new RuntimeException(e);
+                    }
+                    restoreAutoCommitAfterCommit(borrowed, conn, "Transfer");
+                    return new TransferResult(from, to, fromAfterHolder, toAfterHolder, outIdHolder, inIdHolder);
+                });
+            } catch (PersistenceException e) {
+                if (e.isCommitted() || committedFlag.get()) {
+                    if (!e.isCommitted()) {
+                        throw new PersistenceException(e.getMessage(), e.getCause() != null ? e.getCause() : e, true);
+                    }
+                    throw e;
+                }
+                throw e;
+            } catch (SQLException e) {
+                if (committedFlag.get()) {
+                    throw new PersistenceException(
+                            "Transfer committed successfully, but post-commit cleanup failed; the data is committed — do not treat this as a rollback.",
+                            e, true);
+                }
+                throw new PersistenceException("Failed to transfer", e);
+            } catch (RuntimeException | Error e) {
+                if (committedFlag.get()) {
+                    if (e instanceof PersistenceException pe && pe.isCommitted()) {
+                        throw pe;
+                    }
+                    Throwable cause = e.getCause();
+                    Throwable committedCause = cause != null ? cause : e;
+                    throw new PersistenceException(
+                            "Transfer committed successfully, but post-commit cleanup failed; the data is committed — do not treat this as a rollback.",
+                            committedCause, true);
+                }
+                throw e;
             }
         } finally {
             access.unlock();

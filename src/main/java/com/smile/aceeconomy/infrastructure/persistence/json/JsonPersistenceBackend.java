@@ -1,13 +1,16 @@
 package com.smile.aceeconomy.infrastructure.persistence.json;
 
+import com.smile.aceeconomy.application.TransferResult;
 import com.smile.aceeconomy.domain.Account;
 import com.smile.aceeconomy.domain.Amount;
 import com.smile.aceeconomy.domain.Currency;
+import com.smile.aceeconomy.domain.DebtPolicy;
 import com.smile.aceeconomy.domain.Transaction;
 import com.smile.aceeconomy.domain.TransactionType;
 import com.smile.aceeconomy.ports.AccountRepository;
 import com.smile.aceeconomy.ports.persistence.AtomicRedemptionStore;
 import com.smile.aceeconomy.ports.persistence.AtomicReversalStore;
+import com.smile.aceeconomy.ports.persistence.AtomicTransferStore;
 import com.smile.aceeconomy.ports.persistence.NonceStore;
 import com.smile.aceeconomy.ports.persistence.PersistenceException;
 import com.smile.aceeconomy.ports.persistence.PersistenceLifecycle;
@@ -42,16 +45,23 @@ import java.util.concurrent.locks.ReentrantLock;
  *       transfer's out+in records are persisted together or not at all.</li>
  *   <li>{@link #restore} parses and validates the incoming snapshot fully before any live state is
  *       touched, so a corrupt backup cannot destroy existing data.</li>
- *   <li>Concurrency scope is a single backend instance / single JVM ({@code ReentrantLock} +
- *       copy-on-write). It does not provide cross-process first-writer-wins without an OS
- *       file lock or CAS; that remains a release gate.</li>
+ *   <li>Concurrency scope is strictly a single {@code JsonPersistenceBackend} instance within a
+ *       single JVM ({@code ReentrantLock} + copy-on-write). v2.2 does not provide cross-process or
+ *       multi-instance file locking / CAS; two backends on the same file (even in one JVM) or in
+ *       separate processes have no first-writer-wins guarantee. Deploy only one live instance per
+ *       file.</li>
  * </ul>
+ *
+ * <p>Honest boundary: the instance-local lock makes concurrent {@code save(expected, updated)} on
+ * the same object linearizable; callers must not share a file across backends and must not rely on
+ * this backend for distributed coordination.</p>
  */
 public final class JsonPersistenceBackend
         implements AccountRepository, TransactionRepository, PersistenceLifecycle,
-        AtomicReversalStore, AtomicRedemptionStore, NonceStore {
+        AtomicReversalStore, AtomicRedemptionStore, AtomicTransferStore, NonceStore {
 
     private final Path dataFile;
+    /** Instance-local only: not a file lock, not cross-process. See class javadoc. */
     private final ReentrantLock lock = new ReentrantLock();
     private JsonModel model = new JsonModel();
     private volatile boolean initialized = false;
@@ -493,6 +503,39 @@ public final class JsonPersistenceBackend
         lock.lock();
         try {
             ensureInitialized();
+            // Idempotency: all reverted => no-op; none reverted => full apply;
+            // partial (some reverted) => reject to avoid duplicating the already-committed leg.
+            if (!revertMarkerIds.isEmpty()) {
+                boolean anyReverted = false;
+                boolean anyNotReverted = false;
+                for (UUID markerId : revertMarkerIds) {
+                    String id = markerId.toString();
+                    boolean found = false;
+                    boolean reverted = false;
+                    for (JsonModel.JsonTransaction t : model.transactions) {
+                        if (t.id.equals(id)) {
+                            found = true;
+                            reverted = t.reverted;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        throw new PersistenceException("Cannot mark unknown transaction reverted: " + markerId);
+                    }
+                    if (reverted) {
+                        anyReverted = true;
+                    } else {
+                        anyNotReverted = true;
+                    }
+                }
+                if (anyReverted && anyNotReverted) {
+                    throw new PersistenceException(
+                            "partial reversal markers already reverted: markers=" + revertMarkerIds);
+                }
+                if (anyReverted && !anyNotReverted) {
+                    return;
+                }
+            }
             JsonModel previous = model;
             JsonModel next = shallowCopy(previous);
             model = next;
@@ -581,6 +624,12 @@ public final class JsonPersistenceBackend
     @Override
     public RedemptionResult redeemPrepared(UUID nonce, Account account, Transaction transaction)
             throws PersistenceException {
+        return redeemPrepared(nonce, account, transaction, null);
+    }
+
+    @Override
+    public RedemptionResult redeemPrepared(UUID nonce, Account account, Transaction transaction,
+                                           DebtPolicy debtPolicy) throws PersistenceException {
         lock.lock();
         try {
             ensureInitialized();
@@ -593,20 +642,19 @@ public final class JsonPersistenceBackend
             if (stored == null) {
                 return RedemptionResult.accountMissing();
             }
-            // The Account argument and balance fields on the Transaction are prepared snapshots.
-            // Re-read the live model while holding the backend lock and build the audit record from
-            // that live balance, matching the SQL backend's transaction-before-read contract.
             Account live = toAccount(stored);
             Amount current = live.balanceOf(transaction.currencyId());
             Amount before = current == null ? Amount.zero(transaction.amount().scale()) : current;
             Account updated = live.deposit(transaction.currencyId(), transaction.amount());
             Amount after = updated.balanceOf(transaction.currencyId());
+            if (debtPolicy != null && !debtPolicy.allows(after)) {
+                return RedemptionResult.debtLimitExceeded();
+            }
             Transaction authoritative = new Transaction(transaction.id(), transaction.accountId(),
                     transaction.counterparty(), Currency.normalizeId(transaction.currencyId()),
                     transaction.amount(), TransactionType.DEPOSIT, before, after,
                     transaction.timestamp(), transaction.reason());
 
-            // All-or-none copy-on-write with the live account, authoritative transaction and nonce.
             JsonModel previous = model;
             JsonModel next = shallowCopy(previous);
             next.accounts.put(updated.owner().toString(), toJsonAccount(updated));
@@ -620,6 +668,57 @@ public final class JsonPersistenceBackend
                 throw new PersistenceException("Failed to persist banknote redemption " + nonce, e);
             }
             return RedemptionResult.committed(before, after, transaction.id());
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    @Override
+    public TransferResult transfer(UUID from, UUID to, String currencyId, Amount amount,
+                                   DebtPolicy debtPolicy) throws PersistenceException {
+        String cid = Currency.normalizeId(currencyId);
+        lock.lock();
+        try {
+            ensureInitialized();
+            JsonModel.JsonAccount fromStored = model.accounts.get(from.toString());
+            JsonModel.JsonAccount toStored = model.accounts.get(to.toString());
+            if (fromStored == null || toStored == null) {
+                throw new PersistenceException("account not found for transfer");
+            }
+            Account fromAcc = toAccount(fromStored);
+            Account toAcc = toAccount(toStored);
+            Amount fromBefore = fromAcc.balanceOf(cid);
+            if (fromBefore == null) fromBefore = Amount.zero(amount.scale());
+            Amount toBefore = toAcc.balanceOf(cid);
+            if (toBefore == null) toBefore = Amount.zero(amount.scale());
+            Amount fromAfter = fromBefore.subtract(amount);
+            if (debtPolicy != null && !debtPolicy.allows(fromAfter)) {
+                throw new AtomicTransferStore.DebtLimitExceededException("debt limit exceeded");
+            }
+            Amount toAfter = toBefore.add(amount);
+            Account updatedFrom = fromAcc.withdraw(cid, amount);
+            Account updatedTo = toAcc.deposit(cid, amount);
+            UUID outId = UUID.randomUUID();
+            UUID inId = UUID.randomUUID();
+            java.time.Instant now = java.time.Instant.now();
+            Transaction outTx = new Transaction(outId, from, to, cid, amount,
+                    TransactionType.TRANSFER_OUT, fromBefore, fromAfter, now, "transfer-out");
+            Transaction inTx = new Transaction(inId, to, from, cid, amount,
+                    TransactionType.TRANSFER_IN, toBefore, toAfter, now, "transfer-in");
+            JsonModel previous = model;
+            JsonModel next = shallowCopy(previous);
+            next.accounts.put(updatedFrom.owner().toString(), toJsonAccount(updatedFrom));
+            next.accounts.put(updatedTo.owner().toString(), toJsonAccount(updatedTo));
+            next.transactions.add(JsonModel.JsonTransaction.fromDomain(outTx));
+            next.transactions.add(JsonModel.JsonTransaction.fromDomain(inTx));
+            model = next;
+            try {
+                persist();
+            } catch (IOException e) {
+                model = previous;
+                throw new PersistenceException("Failed to persist transfer", e);
+            }
+            return new TransferResult(from, to, fromAfter, toAfter, outId, inId);
         } finally {
             lock.unlock();
         }

@@ -62,6 +62,7 @@ dependencies {
     testImplementation("org.yaml:snakeyaml:2.2") // For testing YAML files
     testImplementation("org.mockito:mockito-core:5.23.0")
     testImplementation("org.mockito:mockito-junit-jupiter:5.23.0")
+    testImplementation("com.h2database:h2:2.2.224")
     testImplementation("com.github.MilkBowl:VaultAPI:1.7.1") // Vault on test classpath for Mockito inline mock maker
     // AceLib on the test classpath so the consumer-foundation smoke test can exercise the public API surface.
     // This is test-only and is NOT part of the production/runtime classpath, so it is never shaded into the plugin JAR.

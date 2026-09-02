@@ -16,7 +16,7 @@ import java.util.UUID;
  */
 public final class RedemptionResult {
 
-    private enum Kind { COMMITTED, REPLAY, ACCOUNT_MISSING }
+    private enum Kind { COMMITTED, REPLAY, ACCOUNT_MISSING, DEBT_LIMIT_EXCEEDED }
 
     private final Kind kind;
     private final Amount balanceBefore;
@@ -47,6 +47,11 @@ public final class RedemptionResult {
         return new RedemptionResult(Kind.ACCOUNT_MISSING, null, null, null);
     }
 
+    /** Debt policy violation; no state changed and nonce remains unconsumed. */
+    public static RedemptionResult debtLimitExceeded() {
+        return new RedemptionResult(Kind.DEBT_LIMIT_EXCEEDED, null, null, null);
+    }
+
     public boolean isCommitted() {
         return kind == Kind.COMMITTED;
     }
@@ -57,6 +62,10 @@ public final class RedemptionResult {
 
     public boolean isAccountMissing() {
         return kind == Kind.ACCOUNT_MISSING;
+    }
+
+    public boolean isDebtLimitExceeded() {
+        return kind == Kind.DEBT_LIMIT_EXCEEDED;
     }
 
     public @NotNull Kind kind() {

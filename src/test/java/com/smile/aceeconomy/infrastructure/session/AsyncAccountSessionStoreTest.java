@@ -52,11 +52,14 @@ class AsyncAccountSessionStoreTest {
     @Test
     void flushPersistsAccount() throws Exception {
         InMemoryAccountRepository repo = new InMemoryAccountRepository();
-        AsyncAccountSessionStore store = new AsyncAccountSessionStore(repo, Runnable::run);
         UUID uuid = UUID.randomUUID();
-        Account a = account(uuid);
-        store.flush(a).get();
+        repo.save(account(uuid));
+        AsyncAccountSessionStore store = new AsyncAccountSessionStore(repo, Runnable::run);
+        Account loaded = store.load(uuid).get();
+        Account updated = loaded.deposit("coin", Amount.of(1L, 2));
+        store.flush(updated).get();
         assertTrue(repo.exists(uuid));
+        assertEquals(updated.balances().get("coin"), repo.load(uuid).orElseThrow().balances().get("coin"));
     }
 
     @Test
