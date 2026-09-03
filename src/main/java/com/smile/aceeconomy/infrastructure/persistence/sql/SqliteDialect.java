@@ -7,4 +7,9 @@ public final class SqliteDialect implements SqlDialect {
     public boolean isMySQL() {
         return false;
     }
+
+    @Override
+    public String leaderboardAmountOrderExpression() {
+        return "CAST(b.amount AS REAL)";
+    }
 }

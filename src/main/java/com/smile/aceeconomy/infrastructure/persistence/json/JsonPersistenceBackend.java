@@ -8,6 +8,8 @@ import com.smile.aceeconomy.domain.DebtPolicy;
 import com.smile.aceeconomy.domain.Transaction;
 import com.smile.aceeconomy.domain.TransactionType;
 import com.smile.aceeconomy.ports.AccountRepository;
+import com.smile.aceeconomy.ports.operations.LeaderboardRepository;
+import com.smile.aceeconomy.ports.operations.LeaderboardRow;
 import com.smile.aceeconomy.ports.persistence.AtomicRedemptionStore;
 import com.smile.aceeconomy.ports.persistence.AtomicReversalStore;
 import com.smile.aceeconomy.ports.persistence.AtomicTransferStore;
@@ -58,7 +60,8 @@ import java.util.concurrent.locks.ReentrantLock;
  */
 public final class JsonPersistenceBackend
         implements AccountRepository, TransactionRepository, PersistenceLifecycle,
-        AtomicReversalStore, AtomicRedemptionStore, AtomicTransferStore, NonceStore {
+        AtomicReversalStore, AtomicRedemptionStore, AtomicTransferStore, NonceStore,
+        LeaderboardRepository {
 
     private final Path dataFile;
     /** Instance-local only: not a file lock, not cross-process. See class javadoc. */
@@ -860,6 +863,36 @@ public final class JsonPersistenceBackend
         c.reason = t.reason;
         c.reverted = true;
         return c;
+    }
+
+    // ---------------- leaderboard (native, constant-query for JSON too) ----------------
+
+    @Override
+    public List<LeaderboardRow> leaderboardRows(String currencyId) {
+        lock.lock();
+        try {
+            ensureInitialized();
+            String cid = Currency.normalizeId(currencyId);
+            List<LeaderboardRow> rows = new java.util.ArrayList<>();
+            for (JsonModel.JsonAccount a : model.accounts.values()) {
+                String balStr = a.balances.get(cid);
+                if (balStr == null) continue;
+                Amount bal = JsonModel.stringToAmount(balStr);
+                rows.add(new LeaderboardRow(UUID.fromString(a.owner), a.ownerName, bal));
+            }
+            rows.sort(java.util.Comparator.comparing((LeaderboardRow r) -> r.balance().value()).reversed()
+                    .thenComparing(LeaderboardRow::accountId));
+            return List.copyOf(rows);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    @Override
+    public List<LeaderboardRow> leaderboardTop(String currencyId, int limit) {
+        if (limit <= 0) throw new IllegalArgumentException("limit must be > 0");
+        List<LeaderboardRow> all = leaderboardRows(currencyId);
+        return all.size() <= limit ? all : List.copyOf(all.subList(0, limit));
     }
 
     private JsonModel loadFromFile() throws IOException {

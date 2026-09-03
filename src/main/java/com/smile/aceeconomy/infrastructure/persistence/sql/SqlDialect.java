@@ -14,4 +14,14 @@ public interface SqlDialect {
     default String forUpdateClause() {
         return "";
     }
+
+    /**
+     * Numeric ORDER BY expression for leaderboard amount. Amounts are stored as decimal
+     * strings; lexicographic ordering would be wrong (e.g. "100" &lt; "20").
+     * MySQL needs DECIMAL with sufficient precision; SQLite uses REAL.
+     * The expression is used as {@code ORDER BY <expr> DESC, owner ASC}.
+     */
+    default String leaderboardAmountOrderExpression() {
+        return isMySQL() ? "CAST(b.amount AS DECIMAL(65,30))" : "CAST(b.amount AS REAL)";
+    }
 }

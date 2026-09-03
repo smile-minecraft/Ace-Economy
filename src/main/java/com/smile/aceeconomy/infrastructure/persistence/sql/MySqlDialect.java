@@ -18,4 +18,9 @@ public final class MySqlDialect implements SqlDialect {
     public String forUpdateClause() {
         return " FOR UPDATE";
     }
+
+    @Override
+    public String leaderboardAmountOrderExpression() {
+        return "CAST(b.amount AS DECIMAL(65,30))";
+    }
 }

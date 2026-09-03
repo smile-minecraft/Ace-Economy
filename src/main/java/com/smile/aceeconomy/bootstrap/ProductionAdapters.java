@@ -295,9 +295,15 @@ final class ProductionAdapters {
     static final class RepositoryLeaderboardSource implements LeaderboardSource {
         private final AccountRepository accounts;
         RepositoryLeaderboardSource(AccountRepository accounts) { this.accounts = accounts; }
-        public List<LeaderboardRow> rows(String c) { return accounts.listAll().stream().map(a -> {
-            Amount amount = a.balanceOf(c); return amount == null ? null : new LeaderboardRow(a.owner(), a.ownerName(), amount);
-        }).filter(java.util.Objects::nonNull).toList(); }
+        public List<LeaderboardRow> rows(String c) {
+            String cid = com.smile.aceeconomy.domain.Currency.normalizeId(c);
+            if (accounts instanceof com.smile.aceeconomy.ports.operations.LeaderboardRepository repo) {
+                return repo.leaderboardRows(cid);
+            }
+            return accounts.listAll().stream().map(a -> {
+                Amount amount = a.balanceOf(c); return amount == null ? null : new LeaderboardRow(a.owner(), a.ownerName(), amount);
+            }).filter(java.util.Objects::nonNull).toList();
+        }
     }
 
     private static BanknoteClaim claim(UUID id, Currency c, long value) {

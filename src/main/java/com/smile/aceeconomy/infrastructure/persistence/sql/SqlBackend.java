@@ -10,6 +10,8 @@ import com.smile.aceeconomy.domain.TransactionType;
 import com.smile.aceeconomy.infrastructure.persistence.json.JsonModel;
 import com.smile.aceeconomy.infrastructure.persistence.json.SnapshotPreflight;
 import com.smile.aceeconomy.ports.AccountRepository;
+import com.smile.aceeconomy.ports.operations.LeaderboardRepository;
+import com.smile.aceeconomy.ports.operations.LeaderboardRow;
 import com.smile.aceeconomy.ports.persistence.AtomicRedemptionStore;
 import com.smile.aceeconomy.ports.persistence.AtomicReversalStore;
 import com.smile.aceeconomy.ports.persistence.AtomicTransferStore;
@@ -117,7 +119,8 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  */
 public final class SqlBackend
         implements AccountRepository, TransactionRepository, PersistenceLifecycle,
-        AtomicReversalStore, AtomicRedemptionStore, AtomicTransferStore, NonceStore {
+        AtomicReversalStore, AtomicRedemptionStore, AtomicTransferStore, NonceStore,
+        LeaderboardRepository {
 
     private final SqlConnectionProvider provider;
     private final SqlDialect dialect;
@@ -1060,6 +1063,67 @@ public final class SqlBackend
             }
         } finally {
             access.unlock();
+        }
+    }
+
+    // ---------------- leaderboard (native, constant-query) ----------------
+
+    @Override
+    public List<LeaderboardRow> leaderboardRows(String currencyId) {
+        String cid = Currency.normalizeId(currencyId);
+        Lock access = accessLock();
+        access.lock();
+        try {
+            ensureInitialized();
+            try {
+                return withBorrowed((borrowed, conn) -> leaderboardQuery(conn, cid, -1));
+            } catch (SQLException e) {
+                throw new PersistenceException("Failed to load leaderboard for " + cid, e);
+            }
+        } finally {
+            access.unlock();
+        }
+    }
+
+    @Override
+    public List<LeaderboardRow> leaderboardTop(String currencyId, int limit) {
+        if (limit <= 0) throw new IllegalArgumentException("limit must be > 0");
+        String cid = Currency.normalizeId(currencyId);
+        Lock access = accessLock();
+        access.lock();
+        try {
+            ensureInitialized();
+            try {
+                return withBorrowed((borrowed, conn) -> leaderboardQuery(conn, cid, limit));
+            } catch (SQLException e) {
+                throw new PersistenceException("Failed to load leaderboard top for " + cid, e);
+            }
+        } finally {
+            access.unlock();
+        }
+    }
+
+    private List<LeaderboardRow> leaderboardQuery(Connection conn, String currencyId, int limit)
+            throws SQLException {
+        String amountExpr = dialect.leaderboardAmountOrderExpression();
+        String sql = "SELECT a.owner, a.owner_name, b.amount FROM " + V2Schema.accountsTable() + " a"
+                + " JOIN " + V2Schema.balancesTable() + " b ON a.owner = b.owner"
+                + " WHERE b.currency_id = ?"
+                + " ORDER BY " + amountExpr + " DESC, a.owner ASC"
+                + (limit > 0 ? " LIMIT ?" : "");
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, currencyId);
+            if (limit > 0) ps.setInt(2, limit);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<LeaderboardRow> rows = new java.util.ArrayList<>();
+                while (rs.next()) {
+                    UUID owner = UUID.fromString(rs.getString(1));
+                    String ownerName = rs.getString(2);
+                    Amount balance = stringToAmount(rs.getString(3));
+                    rows.add(new LeaderboardRow(owner, ownerName, balance));
+                }
+                return List.copyOf(rows);
+            }
         }
     }
 
