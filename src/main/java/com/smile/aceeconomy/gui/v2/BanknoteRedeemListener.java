@@ -140,27 +140,36 @@ public final class BanknoteRedeemListener implements Listener {
             notifyFailed(player);
             return;
         }
-        ItemStack current = fromMainHand
-                ? player.getInventory().getItemInMainHand()
-                : player.getInventory().getItemInOffHand();
-        if (!isCandidate(current) || !matches(current, snapshot)) {
-            audit.log(Level.SEVERE, () -> "AceEconomy banknote credit retained: nonce=" + claim.nonce()
-                    + " player=" + player.getUniqueId()
-                    + " value=" + claim.value()
-                    + " currency=" + claim.currency()
-                    + " — hand no longer matches the redeemed note; item left untouched for manual review");
-            try {
-                messages.sendChatWithFallback(player, messages.renderMessage("banknote.redeem-retained",
-                        Map.of("amount", Long.toString(result.value()))), null);
-            } catch (Throwable ignored) {
-            }
+        // The credit above already committed the nonce and the balance together, so from here on
+        // the note must never vanish silently: any Bukkit inventory touch that throws (hand read,
+        // similarity check, decrement or slot write) keeps the physical item and leaves a retained
+        // audit record plus a player-facing pointer for manual review, instead of letting the
+        // exception escape the scheduled work with the credited note still in hand.
+        ItemStack current;
+        try {
+            current = fromMainHand
+                    ? player.getInventory().getItemInMainHand()
+                    : player.getInventory().getItemInOffHand();
+        } catch (Throwable t) {
+            notifyRetained(player, claim, result.value(), "hand read failed: " + t, t);
             return;
         }
-        if (current.getAmount() <= 1) {
-            setHeld(player, fromMainHand, null);
-        } else {
-            current.setAmount(current.getAmount() - 1);
-            setHeld(player, fromMainHand, current);
+        if (!isCandidate(current) || !matches(current, snapshot)) {
+            notifyRetained(player, claim, result.value(),
+                    "hand no longer matches the redeemed note; item left untouched for manual review", null);
+            return;
+        }
+        try {
+            if (current.getAmount() <= 1) {
+                setHeld(player, fromMainHand, null);
+            } else {
+                current.setAmount(current.getAmount() - 1);
+                setHeld(player, fromMainHand, current);
+            }
+        } catch (Throwable t) {
+            notifyRetained(player, claim, result.value(),
+                    "item could not be removed after credit; item left untouched for manual review: " + t, t);
+            return;
         }
         try {
             messages.sendChatWithFallback(player, messages.renderMessage("banknote.redeem-success",
@@ -173,6 +182,28 @@ public final class BanknoteRedeemListener implements Listener {
     private void notifyFailed(Player player) {
         try {
             messages.sendChatWithFallback(player, messages.renderMessage("banknote.redeem-failed", Map.of()), null);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private void notifyRetained(Player player, BanknoteClaim claim, long creditedValue,
+                                String detail, Throwable cause) {
+        if (cause == null) {
+            audit.log(Level.SEVERE, () -> "AceEconomy banknote credit retained: nonce=" + claim.nonce()
+                    + " player=" + player.getUniqueId()
+                    + " value=" + claim.value()
+                    + " currency=" + claim.currency()
+                    + " — " + detail);
+        } else {
+            audit.log(Level.SEVERE, cause, () -> "AceEconomy banknote credit retained: nonce=" + claim.nonce()
+                    + " player=" + player.getUniqueId()
+                    + " value=" + claim.value()
+                    + " currency=" + claim.currency()
+                    + " — " + detail);
+        }
+        try {
+            messages.sendChatWithFallback(player, messages.renderMessage("banknote.redeem-retained",
+                    Map.of("amount", Long.toString(creditedValue))), null);
         } catch (Throwable ignored) {
         }
     }

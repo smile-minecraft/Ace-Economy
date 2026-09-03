@@ -25,9 +25,15 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -75,8 +81,11 @@ class BanknoteRedeemListenerTest {
     }
 
     private BanknoteRedeemListener listener(FoliaContextExecutor folia) {
-        return new BanknoteRedeemListener(useCase, banknotes, folia, messages,
-                java.util.logging.Logger.getLogger("BanknoteRedeemListenerTest"));
+        return listener(folia, java.util.logging.Logger.getLogger("BanknoteRedeemListenerTest"));
+    }
+
+    private BanknoteRedeemListener listener(FoliaContextExecutor folia, Logger audit) {
+        return new BanknoteRedeemListener(useCase, banknotes, folia, messages, audit);
     }
 
     private FoliaContextExecutor immediate() {
@@ -324,6 +333,111 @@ class BanknoteRedeemListenerTest {
 
         assertEquals(0, useCase.depositCalls);
         verify(inv, never()).setItemInMainHand(any());
+    }
+
+    @Test
+    @DisplayName("decrement failure after a committed credit retains the note with audit, not a silent duplicate")
+    void decrementFailureAfterCreditRetainsNote() {
+        ItemStack held = stack(false, 2);
+        ItemStack snapshot = stack(false, 2);
+        Mockito.when(held.clone()).thenReturn(snapshot);
+        Mockito.when(held.isSimilar(snapshot)).thenReturn(true);
+        Mockito.when(inv.getItemInMainHand()).thenReturn(held);
+        Mockito.when(inv.getItemInOffHand()).thenReturn(air);
+        Mockito.doThrow(new IllegalStateException("injected inventory outage"))
+                .when(held).setAmount(any(int.class));
+        RecordingHandler auditLog = installAuditLog();
+
+        listener(immediate(), auditLog.logger)
+                .onInteract(interact(EquipmentSlot.HAND, Action.RIGHT_CLICK_AIR, false));
+
+        assertEquals(1, useCase.depositCalls, "the credit already committed before the mutation failed");
+        verify(messages).renderMessage(eq("banknote.redeem-retained"), anyMap());
+        verify(messages, never()).renderMessage(eq("banknote.redeem-success"), anyMap());
+        assertTrue(auditLog.hasSevere(),
+                "a retained credit must leave an audit record for manual review, never fail silently");
+    }
+
+    @Test
+    @DisplayName("slot-clear failure after a committed credit retains the note with audit")
+    void slotClearFailureAfterCreditRetainsNote() {
+        ItemStack held = stack(false, 1);
+        ItemStack snapshot = stack(false, 1);
+        Mockito.when(held.clone()).thenReturn(snapshot);
+        Mockito.when(held.isSimilar(snapshot)).thenReturn(true);
+        Mockito.when(inv.getItemInMainHand()).thenReturn(held);
+        Mockito.when(inv.getItemInOffHand()).thenReturn(air);
+        Mockito.doThrow(new IllegalStateException("injected slot outage"))
+                .when(inv).setItemInMainHand(any());
+        RecordingHandler auditLog = installAuditLog();
+
+        listener(immediate(), auditLog.logger)
+                .onInteract(interact(EquipmentSlot.HAND, Action.RIGHT_CLICK_AIR, false));
+
+        assertEquals(1, useCase.depositCalls, "the credit already committed before the mutation failed");
+        verify(messages).renderMessage(eq("banknote.redeem-retained"), anyMap());
+        verify(messages, never()).renderMessage(eq("banknote.redeem-success"), anyMap());
+        assertTrue(auditLog.hasSevere(),
+                "a retained credit must leave an audit record for manual review, never fail silently");
+    }
+
+    @Test
+    @DisplayName("hand-read failure after a committed credit retains the note with audit")
+    void handReadFailureAfterCreditRetainsNote() {
+        ItemStack held = stack(false, 1);
+        ItemStack snapshot = stack(false, 1);
+        Mockito.when(held.clone()).thenReturn(snapshot);
+        Mockito.when(inv.getItemInMainHand())
+                .thenReturn(held)
+                .thenThrow(new IllegalStateException("injected hand-read outage"));
+        Mockito.when(inv.getItemInOffHand()).thenReturn(air);
+        RecordingHandler auditLog = installAuditLog();
+
+        listener(immediate(), auditLog.logger)
+                .onInteract(interact(EquipmentSlot.HAND, Action.RIGHT_CLICK_AIR, false));
+
+        assertEquals(1, useCase.depositCalls, "the credit already committed before the hand read failed");
+        verify(messages).renderMessage(eq("banknote.redeem-retained"), anyMap());
+        verify(messages, never()).renderMessage(eq("banknote.redeem-success"), anyMap());
+        assertTrue(auditLog.hasSevere(),
+                "a retained credit must leave an audit record for manual review, never fail silently");
+    }
+
+    private RecordingHandler installAuditLog() {
+        Logger logger = Logger.getLogger("BanknoteRedeemRetainedTest-" + UUID.randomUUID());
+        logger.setUseParentHandlers(false);
+        logger.setLevel(Level.ALL);
+        RecordingHandler handler = new RecordingHandler(logger);
+        handler.setLevel(Level.ALL);
+        logger.addHandler(handler);
+        return handler;
+    }
+
+    /** Captures audit records so tests can prove a retained credit is never silent. */
+    private static final class RecordingHandler extends Handler {
+        final Logger logger;
+        final List<LogRecord> records = new ArrayList<>();
+
+        RecordingHandler(Logger logger) {
+            this.logger = logger;
+        }
+
+        @Override
+        public void publish(LogRecord record) {
+            records.add(record);
+        }
+
+        @Override
+        public void flush() {
+        }
+
+        @Override
+        public void close() {
+        }
+
+        boolean hasSevere() {
+            return records.stream().anyMatch(r -> r.getLevel().intValue() >= Level.SEVERE.intValue());
+        }
     }
 
     /** Deterministic factory fake: decode succeeds only for programmed items. */
