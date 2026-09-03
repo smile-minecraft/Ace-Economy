@@ -110,7 +110,7 @@ The current GUI action contract is:
 - `WITHDRAW`: the existing slots `11` and `13` (the `100` and `500` withdrawal buttons).
 - `CLOSE`: slot `15`.
 
-For a valid v2 banknote, durable replay protection and credit complete before the banknote is removed or its stack is reduced. Invalid, replayed, or credit-failed banknotes remain in the player's inventory. Right-click redemption is not implemented.
+For a valid v2 banknote, durable replay protection and credit complete before the banknote is removed or its stack is reduced. Invalid, replayed, or credit-failed banknotes remain in the player's inventory. Right-clicking while holding a banknote redeems it through the same atomic path as the bank dashboard deposit button.
 
 ## For administrators
 

@@ -189,3 +189,4 @@ banknote:
   voided: "<red>此支票已被銀行註銷 (Voided Check)！</red>"
   redeem-success: "<green>已兌換支票：<yellow>{amount}</yellow> <gray>(簽發人：{issuer})</gray></green>"
   redeem-failed: "<red>兌換失敗，交易被取消！</red>"
+  redeem-retained: "<yellow>支票已入帳 <yellow>{amount}</yellow>，但物品無法移除。請保留支票並聯絡管理員。</yellow>"

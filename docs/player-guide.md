@@ -99,9 +99,7 @@ AceEconomy removes the amount from your balance and gives you a physical banknot
 
 ### Redeem a banknote
 
-Open the bank dashboard with `/bank open`, hold the banknote in your main hand, and click the deposit button (the top-middle slot). The amount is credited to your account and the banknote disappears from your hand. A banknote can be redeemed only once — the server remembers every redeemed note even after a restart. If the deposit is refused (invalid, already used, or unknown currency), the banknote stays in your hand; keep it and ask a server administrator for help rather than trying to duplicate the transaction.
-
-Right-clicking a banknote to redeem it is not implemented yet; the bank dashboard deposit button is the only redemption path.
+Open the bank dashboard with `/bank open`, hold the banknote in your main hand, and click the deposit button (the top-middle slot). The amount is credited to your account and the banknote disappears from your hand. Right-clicking while holding a banknote redeems it too; both paths share the same atomic credit. A banknote can be redeemed only once — the server remembers every redeemed note even after a restart. If the deposit is refused (invalid, already used, or unknown currency), the banknote stays in your hand; keep it and ask a server administrator for help rather than trying to duplicate the transaction.
 
 ## I want to see the richest players
 

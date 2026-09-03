@@ -189,3 +189,4 @@ banknote:
   voided: "<red>This banknote has been voided!</red>"
   redeem-success: "<green>Redeemed banknote: <yellow>{amount}</yellow> <gray>(Issuer: {issuer})</gray></green>"
   redeem-failed: "<red>Redemption failed!</red>"
+  redeem-retained: "<yellow>Banknote redeemed for <yellow>{amount}</yellow>, but the item could not be removed. Keep it and contact an administrator.</yellow>"

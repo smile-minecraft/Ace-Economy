@@ -46,6 +46,7 @@ import com.smile.aceeconomy.infrastructure.persistence.StorageConfigParser;
 import com.smile.aceeconomy.infrastructure.session.AsyncAccountSessionStore;
 import com.smile.aceeconomy.infrastructure.session.PlayerSessionManager;
 import com.smile.aceeconomy.gui.v2.BankGuiAction;
+import com.smile.aceeconomy.gui.v2.BanknoteRedeemListener;
 import com.smile.aceeconomy.gui.v2.V2BankGuiSession;
 import com.smile.aceeconomy.operations.HistoryService;
 import com.smile.aceeconomy.operations.BackupRestoreService;
@@ -281,6 +282,13 @@ public final class CompositionRoot {
             case 15 -> BankGuiAction.close();
             default -> BankGuiAction.none();
         });
+        // Right-click redemption reuses the same atomic bank use case as the GUI deposit button
+        // (durable nonce consumption + credit commit together); the listener owns its click-time
+        // snapshot and region-context removal, so no other slice needs to know about interact events.
+        BanknoteRedeemListener redeemListener = new BanknoteRedeemListener(
+                bankUseCase, banknotes, folia, config, plugin.getLogger());
+        Bukkit.getPluginManager().registerEvents(redeemListener, plugin);
+        resources.register(() -> HandlerList.unregisterAll(redeemListener));
 
         ProductionAdapters.Economy economyCommands =
                 new ProductionAdapters.Economy(api, currencies, ioExecutor);

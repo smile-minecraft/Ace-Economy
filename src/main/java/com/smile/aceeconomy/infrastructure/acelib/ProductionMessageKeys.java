@@ -92,6 +92,7 @@ public final class ProductionMessageKeys {
             "banknote.lore-value",
             "banknote.name",
             "banknote.redeem-failed",
+            "banknote.redeem-retained",
             "banknote.redeem-success",
             "banknote.voided",
             "command.amount-format",
