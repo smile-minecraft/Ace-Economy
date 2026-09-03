@@ -9,6 +9,8 @@ import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileTime;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -143,14 +145,23 @@ public final class ImportPathGate {
      * directory, file turned into a directory or a symlink) no longer matches
      * this identity and is refused instead of parsed.
      *
+     * <p>Metadata alone (identity, size, timestamp) cannot tell an in-place
+     * rewrite with a restored timestamp apart from the approved content, so
+     * regular files also carry the SHA-256 of the bytes seen at gate time.
+     * The secure readers hash what they actually read and refuse the content
+     * when the two digests differ.</p>
+     *
      * @param path      the validated absolute real path returned by the gate
      * @param fileKey   filesystem identity at gate time, may be null when the
      *                  filesystem does not provide one
      * @param directory whether the path was a directory at gate time
      * @param size      file size at gate time, {@code -1} for directories
      * @param modified  last-modified time at gate time, null for directories
+     * @param contentHash SHA-256 hex of the file bytes at gate time, null for
+     *                  directories
      */
-    public record GatedImport(Path path, Object fileKey, boolean directory, long size, FileTime modified) {
+    public record GatedImport(Path path, Object fileKey, boolean directory, long size, FileTime modified,
+            String contentHash) {
     }
 
     /**
@@ -182,8 +193,35 @@ public final class ImportPathGate {
             throw new ImportPathRejectedException(
                     "import path is not a regular file or directory: " + displayName);
         }
-        return new GatedImport(real, attrs.fileKey(), dir, dir ? -1 : attrs.size(),
-                dir ? null : attrs.lastModifiedTime());
+        if (dir) {
+            return new GatedImport(real, attrs.fileKey(), true, -1, null, null);
+        }
+        if (attrs.size() > MAX_FILE_BYTES) {
+            throw new ImportPathRejectedException("import file is too large (max "
+                    + MAX_FILE_BYTES + " bytes): " + displayName);
+        }
+        byte[] bytes;
+        try {
+            bytes = readBytesSecure(real, displayName);
+        } catch (IOException e) {
+            throw new ImportPathRejectedException(
+                    displayName + ": cannot read import file; refusing to read");
+        }
+        // The content was read in a separate step from the first stat, so
+        // re-stat and fail closed when the file moved underneath the snapshot;
+        // otherwise the digest below could bind bytes from a different version
+        // than the recorded size and timestamp.
+        if (Files.isSymbolicLink(real)) {
+            throw new ImportPathRejectedException(
+                    "import path must not be a symbolic link: " + displayName);
+        }
+        BasicFileAttributes again = readAttributes(real, displayName);
+        if (!again.isRegularFile() || !sameIdentity(attrs, again) || bytes.length != again.size()) {
+            throw new ImportPathRejectedException(
+                    displayName + ": import path changed during approval; refusing to read");
+        }
+        return new GatedImport(real, again.fileKey(), false, again.size(),
+                again.lastModifiedTime(), sha256Hex(bytes));
     }
 
     /**
@@ -225,8 +263,9 @@ public final class ImportPathGate {
         }
         if (!gated.directory()) {
             // Filesystem without identity keys: fall back to size plus timestamp.
-            // A same-size, same-timestamp replacement slips through here; the
-            // pre/post read bracket below still bars symlinks and escapes.
+            // A same-size, same-timestamp replacement passes this metadata check;
+            // the digest comparison in the secure readers still refuses it, so
+            // this stays a fast pre-check, never the final word on content.
             if (gated.size() != now.size() || !gated.modified().equals(now.lastModifiedTime())) {
                 throw new ImportPathRejectedException(
                         displayName + ": import path was replaced after approval; refusing to read");
@@ -253,10 +292,7 @@ public final class ImportPathGate {
         }
         List<GatedImport> members = new ArrayList<>(names.size());
         for (Path name : names) {
-            BasicFileAttributes attrs = readAttributes(name, displayName);
-            boolean dir = attrs.isDirectory();
-            members.add(new GatedImport(name, attrs.fileKey(), dir,
-                    dir ? -1 : attrs.size(), dir ? null : attrs.lastModifiedTime()));
+            members.add(snapshot(name, displayName));
         }
         verifyUnchanged(root, displayName);
         return members;
@@ -265,7 +301,9 @@ public final class ImportPathGate {
     /**
      * Read a gate-approved single file, bracketed by identity checks so a swap
      * to a symlink, a directory, or a different file during the read is
-     * refused and the foreign content is discarded.
+     * refused and the foreign content is discarded. The bytes actually read
+     * are hashed and compared with the gate-time digest, so an in-place
+     * rewrite that keeps the size and timestamp is refused as well.
      *
      * @throws ImportPathRejectedException when the file no longer matches
      * @throws IOException                 when the read itself fails
@@ -276,9 +314,11 @@ public final class ImportPathGate {
             throw new ImportPathRejectedException("import file is too large (max "
                     + MAX_FILE_BYTES + " bytes): " + displayName);
         }
-        String content = Files.readString(gated.path(), StandardCharsets.UTF_8);
+        byte[] bytes = readBytesSecure(gated.path(), displayName);
+        verifyContentHash(gated, bytes,
+                displayName + ": import file changed after approval; refusing to read");
         verifyUnchanged(gated, displayName);
-        return content;
+        return new String(bytes, StandardCharsets.UTF_8);
     }
 
     /**
@@ -286,9 +326,11 @@ public final class ImportPathGate {
      * itself is re-verified before and after the read, and the member must
      * still match the identity captured at enumeration time, be a plain
      * regular file both before and after the read, still be contained in the
-     * directory, and stay within the size bound. A whole-directory swap after
-     * the listing, or a member swapped or rewritten in place, is refused and
-     * the content is discarded, never parsed.
+     * directory, and stay within the size bound. The bytes actually read are
+     * hashed against the enumeration-time digest, so a member rewritten in
+     * place with the same size and timestamp is refused as well. A
+     * whole-directory swap after the listing, or a member swapped or rewritten
+     * in place, is refused and the content is discarded, never parsed.
      *
      * @param root     the gate identity of the approved directory
      * @param expected the member identity captured by {@link #listMembersSecure}
@@ -303,7 +345,8 @@ public final class ImportPathGate {
         if (!matchesSnapshot(expected, before)) {
             throw new ImportPathRejectedException(displayName + ": import entry changed after listing; refusing");
         }
-        String content = Files.readString(member, StandardCharsets.UTF_8);
+        byte[] bytes = readBytesSecure(member, displayName);
+        verifyContentHash(expected, bytes, displayName + ": import entry changed after listing; refusing");
         if (Files.isSymbolicLink(member)) {
             throw new ImportPathRejectedException(displayName + ": import entry changed during read; refusing");
         }
@@ -323,7 +366,7 @@ public final class ImportPathGate {
             throw new ImportPathRejectedException(displayName + ": import entry left the import directory; refusing");
         }
         verifyUnchanged(root, displayName);
-        return content;
+        return new String(bytes, StandardCharsets.UTF_8);
     }
 
     private static BasicFileAttributes preCheckMember(GatedImport root, Path member, String displayName)
@@ -353,6 +396,11 @@ public final class ImportPathGate {
         return attrs;
     }
 
+    /**
+     * Metadata pre-check before the read: identity, size and timestamp still
+     * match the snapshot. Content equality is established separately by
+     * {@link #verifyContentHash} over the bytes actually read.
+     */
     private static boolean matchesSnapshot(GatedImport expected, BasicFileAttributes actual) {
         if (expected.directory() || !actual.isRegularFile()) {
             return false;
@@ -366,6 +414,11 @@ public final class ImportPathGate {
                 && expected.modified().equals(actual.lastModifiedTime());
     }
 
+    /**
+     * Metadata post-check around the read: the file was not swapped or
+     * rewritten with a visible size or timestamp change while being read.
+     * A rewrite that preserves both is caught by {@link #verifyContentHash}.
+     */
     private static boolean sameFile(BasicFileAttributes before, BasicFileAttributes after) {
         if (before.fileKey() != null && after.fileKey() != null) {
             // Same identity is not enough: an in-place rewrite keeps the
@@ -376,6 +429,69 @@ public final class ImportPathGate {
         }
         return before.size() == after.size()
                 && before.lastModifiedTime().equals(after.lastModifiedTime());
+    }
+
+    private static boolean sameIdentity(BasicFileAttributes before, BasicFileAttributes after) {
+        if (before.fileKey() != null && after.fileKey() != null
+                && !before.fileKey().equals(after.fileKey())) {
+            return false;
+        }
+        return before.size() == after.size()
+                && before.lastModifiedTime().equals(after.lastModifiedTime());
+    }
+
+    /**
+     * Read the whole file after a symlink and size pre-check. Symlinks are
+     * still rejected before and after by the callers; this keeps the read
+     * itself bounded so a file grown past the limit mid-read fails closed
+     * instead of exhausting memory.
+     */
+    private static byte[] readBytesSecure(Path path, String displayName) throws IOException {
+        if (Files.isSymbolicLink(path)) {
+            throw new ImportPathRejectedException(
+                    displayName + ": import path must not be a symbolic link; refusing to read");
+        }
+        if (Files.size(path) > MAX_FILE_BYTES) {
+            throw new ImportPathRejectedException("import file is too large (max "
+                    + MAX_FILE_BYTES + " bytes): " + displayName);
+        }
+        byte[] bytes = Files.readAllBytes(path);
+        if (bytes.length > MAX_FILE_BYTES) {
+            throw new ImportPathRejectedException("import file is too large (max "
+                    + MAX_FILE_BYTES + " bytes): " + displayName);
+        }
+        return bytes;
+    }
+
+    /**
+     * Refuse bytes whose digest no longer matches the gate-time snapshot. This
+     * is the check that catches an in-place rewrite which keeps the file
+     * identity, size and timestamp: the metadata still matches, but the
+     * content does not.
+     */
+    private static void verifyContentHash(GatedImport expected, byte[] bytes, String message) {
+        if (expected.directory() || expected.contentHash() == null) {
+            return;
+        }
+        if (!expected.contentHash().equals(sha256Hex(bytes))) {
+            throw new ImportPathRejectedException(message);
+        }
+    }
+
+    private static String sha256Hex(byte[] bytes) {
+        final MessageDigest digest;
+        try {
+            digest = MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 digest unavailable", e);
+        }
+        byte[] out = digest.digest(bytes);
+        StringBuilder hex = new StringBuilder(out.length * 2);
+        for (byte b : out) {
+            hex.append(Character.forDigit((b >> 4) & 0xF, 16));
+            hex.append(Character.forDigit(b & 0xF, 16));
+        }
+        return hex.toString();
     }
 
     private static BasicFileAttributes readAttributes(Path path, String displayName) {

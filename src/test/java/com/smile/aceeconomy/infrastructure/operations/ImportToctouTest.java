@@ -9,6 +9,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
 import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
@@ -188,8 +189,7 @@ class ImportToctouTest {
     }
 
     @Test
-    void fileSwappedToSymlinkMustNotReadOutside(@TempDir Path dataFolder) throws Exception {
-        Path dir = importDir(dataFolder);
+    void fileSwappedToSymlinkMustNotReadOutside(@TempDir Path dataFolder) throws Exception {        Path dir = importDir(dataFolder);
         Path target = dir.resolve("balances.csv");
         Files.writeString(target,
                 "uuid,name,balance\n" + VICTIM + ",Victim,10\n", StandardCharsets.UTF_8);
@@ -216,5 +216,52 @@ class ImportToctouTest {
                         + result.records());
         assertEquals(0, result.records().size(),
                 "swapped symlink must yield no records, got: " + result.records());
+    }
+
+    @Test
+    void fileRewrittenSameSizeAndTimestampMustNotParseAttackerContent(@TempDir Path dataFolder)
+            throws Exception {
+        Path dir = importDir(dataFolder);
+        Path target = dir.resolve("balances.csv");
+        // Both lines are 52 bytes before the newline: same inode, same size,
+        // same timestamp after the restore, but different content.
+        Files.writeString(target,
+                "uuid,name,balance\n" + VICTIM + ",Victim,000010  \n", StandardCharsets.UTF_8);
+        FileTime stamped = Files.getLastModifiedTime(target);
+
+        ImportPathGate.GatedImport gated = ImportPathGate.gate(dataFolder, "balances.csv", ImportSource.CMI);
+
+        Files.writeString(target,
+                "uuid,name,balance\n" + ATTACKER + ",Attacker,999999\n", StandardCharsets.UTF_8);
+        Files.setLastModifiedTime(target, stamped);
+
+        ImportParseResult result = CmiParser.parse(gated, "coin", 2);
+
+        assertFalse(containsAttacker(result),
+                "same-size rewrite with restored timestamp must not be parsed as approved content, got: "
+                        + result.records());
+        assertTrue(!result.failures().isEmpty(), "the rewrite must be reported, got: " + result);
+    }
+
+    @Test
+    void memberRewrittenSameSizeAndTimestampMustBeRefused(@TempDir Path dataFolder) throws Exception {
+        Path dir = importDir(dataFolder);
+        Path sheets = dir.resolve("sheets");
+        Files.createDirectories(sheets);
+        Files.writeString(sheets.resolve("benign.csv"),
+                "uuid,name,balance\n" + VICTIM + ",Victim,000010  \n", StandardCharsets.UTF_8);
+        FileTime stamped = Files.getLastModifiedTime(sheets.resolve("benign.csv"));
+
+        ImportPathGate.GatedImport gated = ImportPathGate.gate(dataFolder, "sheets", ImportSource.CMI);
+        List<ImportPathGate.GatedImport> members = ImportPathGate.listMembersSecure(gated, "sheets");
+        assertEquals(1, members.size());
+
+        // Same member rewritten in place with identical size and timestamp.
+        Files.writeString(sheets.resolve("benign.csv"),
+                "uuid,name,balance\n" + ATTACKER + ",Attacker,999999\n", StandardCharsets.UTF_8);
+        Files.setLastModifiedTime(sheets.resolve("benign.csv"), stamped);
+
+        assertThrows(ImportPathRejectedException.class,
+                () -> ImportPathGate.readMemberSecure(gated, members.get(0), "sheets/benign.csv"));
     }
 }
