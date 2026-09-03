@@ -27,6 +27,8 @@ public final class StubBankGuiUseCase implements BankGuiUseCase {
 
     public DepositMode depositMode = DepositMode.SUCCESS;
     public String depositReason = "business.rejected";
+    /** Actually-credited value, deliberately settable apart from the note face value in tests. */
+    public long depositValue = 100L;
     public UUID lastDepositPlayer;
     public ItemStack lastDepositItem;
     public int depositCalls;
@@ -54,6 +56,6 @@ public final class StubBankGuiUseCase implements BankGuiUseCase {
         if (depositMode == DepositMode.REJECTED) {
             return DepositResult.rejected(depositReason);
         }
-        return DepositResult.success(100L, "dollar");
+        return DepositResult.success(depositValue, "dollar");
     }
 }

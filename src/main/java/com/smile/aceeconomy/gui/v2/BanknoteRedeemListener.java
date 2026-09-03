@@ -39,10 +39,13 @@ import java.util.logging.Logger;
  *       swap between click and execution never removes the wrong item.</li>
  *   <li>Every Bukkit touch after the event thread (decode of the snapshot, credit, removal and
  *       player feedback) runs inside the player's region context via {@link FoliaContextExecutor}.</li>
-  *   <li>Exactly one item is consumed, and only after a committed credit. Any rejection, replay,
-  *       snapshot mismatch, unclonable item or removal failure keeps the physical item untouched:
-  *       removal decrements a clone and writes the slot back once, so a failed write leaves the
-  *       full stack in hand with a retained audit record for manual reissue.</li>
+  *   <li>Exactly one item is consumed, and only after a committed credit. Rejections, replays,
+  *       snapshot mismatches and unclonable items never touch the inventory. Once the credit has
+  *       committed, a multi-note stack is decremented on a clone and written back with one slot
+  *       write, so a failed write leaves the full stack in hand; clearing the final note is a
+  *       single Bukkit slot write whose failure leaves the slot in an unknown state, so that path
+  *       guarantees an audit record (nonce, player, credited value) for manual reissue instead of
+  *       promising the item is intact.</li>
  * </ul>
  *
  * <p>The interaction event is cancelled as soon as a banknote is accepted for redemption (before
@@ -144,17 +147,20 @@ public final class BanknoteRedeemListener implements Listener {
         }
         // The credit above already committed the nonce and the balance together, so from here on
         // the note must never vanish silently: any Bukkit inventory touch that throws (hand read,
-        // similarity check, clone, decrement or slot write) keeps the physical item and leaves a
-        // retained audit record plus a player-facing pointer for manual review, instead of letting
-        // the exception escape the scheduled work with the credited note still in hand.
+        // similarity check, clone, decrement or slot write) leaves a retained audit record plus a
+        // player-facing pointer for manual review, instead of letting the exception escape the
+        // scheduled work with the credited note still in hand.
         //
         // Bukkit offers no atomic hand update, so removal is a single clone-then-write: the live
-        // stack is never mutated in place. A multi-note stack is decremented on a clone and written
-        // back with one slot write, so a failed write still leaves the full stack in hand. The
-        // retained audit record carries the nonce, player and credited value, the player is told to
-        // keep the note and contact an administrator, and the administrator verifies the nonce in
-        // the audit log and compensates manually (for example with /aceeco give) after removing or
-        // invalidating the duplicate note.
+        // stack is never mutated in place. A multi-note stack is decremented on a clone and
+        // written back with one slot write, so a failed write still leaves the full stack in
+        // hand. Clearing a single note is one Bukkit slot write: the live item is still never
+        // mutated in place, but a failed clear may leave the slot itself in an unknown state, so
+        // the contract on that path is the audit record, not the item. Every retained path logs
+        // the nonce, the player and the actually-credited value; the player is told to keep the
+        // note stub and contact an administrator, who verifies the nonce in the audit log and
+        // compensates manually (for example with /aceeco give) after removing or invalidating
+        // the duplicate note.
         ItemStack current;
         try {
             current = fromMainHand
@@ -207,13 +213,13 @@ public final class BanknoteRedeemListener implements Listener {
         if (cause == null) {
             audit.log(Level.SEVERE, () -> "AceEconomy banknote credit retained: nonce=" + claim.nonce()
                     + " player=" + player.getUniqueId()
-                    + " value=" + claim.value()
+                    + " value=" + creditedValue
                     + " currency=" + claim.currency()
                     + " — " + detail);
         } else {
             audit.log(Level.SEVERE, cause, () -> "AceEconomy banknote credit retained: nonce=" + claim.nonce()
                     + " player=" + player.getUniqueId()
-                    + " value=" + claim.value()
+                    + " value=" + creditedValue
                     + " currency=" + claim.currency()
                     + " — " + detail);
         }
