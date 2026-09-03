@@ -48,6 +48,24 @@ Use the console command for ordinary configuration or language changes:
 
 The reload reports `AceEconomy reloaded` on success and keeps the last valid in-memory snapshot if the new configuration or language files cannot be loaded. After changing `storage.type`, the SQLite path, MySQL connection values, plugin JARs, AceLib, or optional plugins, stop and restart the full server instead.
 
+Reload runs as a single transaction: the configuration, language, currency, and bank-GUI candidates are each validated first, and the plugin swaps them in together only when all of them pass. If any candidate fails, nothing is swapped and the server keeps running on the previous configuration.
+
+Currency edits are sorted before the swap:
+
+| Change | What reload does | Why |
+| --- | --- | --- |
+| Nothing changed | Reload succeeds; nothing is swapped. | There is nothing to apply. |
+| Only `name` or `symbol` changed | Hot-applied: the new display text takes effect everywhere at once. | Display text never affects stored amounts, scales, or the default currency. |
+| A currency was added | Reload is refused with a reason naming the new ID; the server keeps running on the old set. Restart to apply. | Existing accounts need batch initialization with rollback support, which no storage backend currently offers. |
+| A currency was removed, or a `scale` or `default` flag changed | Reload is refused with a reason naming the affected ID; the server keeps running on the old set. Restart to apply. | Those changes would reinterpret or orphan stored balances. |
+| The candidate section is invalid | Reload is refused with the parser reason; nothing is swapped. | An unparsable candidate must never replace the live registry. |
+
+Three settings are restart-only and are never applied by reload. If `settings.main-command-alias`, `storage.type`, or `leaderboard.enabled` differs from the running value, the reload still succeeds but the reply carries a restart note naming it; the live value stays unchanged until the next full restart.
+
+The reply tells you what happened. A failure shows the refusal reason — for example which currency ID was added or which scale changed — so you know whether to fix the file or schedule a restart. A success appends notes: what was hot-applied (display text, layout, configuration and language) and what still needs a restart.
+
+A successful reload also closes every open bank session before the new layout takes effect, so no click can run with half old, half new rules; affected players simply reopen `/bank`.
+
 A successful reload also drops the whole synchronous balance cache. That is accepted behaviour, not a bug: Vault reads never block on storage, so until the next persisted read or successful write re-primes an entry, a balance query falls back to the safe default `0.0`. There is no synchronous refill, because refilling on the calling thread would reintroduce the blocking I/O the cache exists to avoid.
 
 Do not use Bukkit `/reload` as a maintenance or upgrade shortcut.

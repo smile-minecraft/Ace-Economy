@@ -154,7 +154,17 @@ Validation rules that apply to every entry:
 
 A config that violates these rules stops the plugin at startup with an error naming the problem; nothing is partially applied. Changing a name or symbol affects presentation. Changing an ID, scale, or default currency affects how later operations interpret amounts, so make a backup and plan the change before applying it to a live economy.
 
-The currency set is read once at startup. The administrative reload action refreshes the configuration snapshot but does not rebuild the running registry, commands, Vault bridge, or placeholder expansion; adding, removing, or editing currencies takes effect after a restart.
+The reload path classifies the candidate `currencies` section before touching anything live:
+
+| Change | What reload does | Why |
+| --- | --- | --- |
+| Nothing changed | Reload succeeds; nothing is swapped. | There is nothing to apply. |
+| Only `name` or `symbol` changed | Hot-applied: the new display text takes effect everywhere at once. | Display text never affects stored amounts, scales, or the default currency. |
+| A currency was added | Reload is refused with a reason naming the new ID; the server keeps running on the old set. Restart to apply. | Existing accounts need batch initialization with rollback support, which no storage backend currently offers. |
+| A currency was removed, or a `scale` or `default` flag changed | Reload is refused with a reason naming the affected ID; the server keeps running on the old set. Restart to apply. | Those changes would reinterpret or orphan stored balances. |
+| The candidate section is invalid | Reload is refused with the parser reason; nothing is swapped. | An unparsable candidate must never replace the live registry. |
+
+A refused reload leaves the running server exactly as it was: fix the file, or schedule a restart for the structural change, and run `/aceeco reload` again. Only the display-only case updates the registry, commands, Vault bridge, and placeholder expansion without a restart.
 
 ## Locale and retained command setting
 
@@ -249,7 +259,7 @@ bank-gui:
 
 A config that violates these rules stops the plugin at startup with an error naming the exact path (for example `bank-gui.actions.withdraw100.amount`); nothing is partially applied. A config without `bank-gui` keeps loading under schema `2.0` and receives the legacy slot behaviour.
 
-The layout is read once at startup. The administrative reload action refreshes the configuration snapshot but open bank sessions keep the previous layout; changing the layout takes effect for newly opened inventories after a restart (or after every viewer reopens, as documented by the reload-scope task).
+A valid `bank-gui` candidate is accepted as part of the reload: open bank sessions are closed first so no click can run with half old, half new rules, and sessions opened afterwards resolve clicks against the new layout. An invalid layout refuses the whole reload and leaves the previous configuration untouched. The `bank-gui.enabled` toggle itself still takes effect only at startup; restart after changing it.
 
 ## Discord and secret boundaries
 
@@ -273,4 +283,4 @@ Never publish a real webhook URL, database password, or connection details with 
 3. Edit `config.yml` without changing the YAML structure.
 4. Start the server and check the startup log for configuration or connection errors.
 
-The administrative reload action reloads the configuration and language snapshots. It does not move data between backends or reopen the storage backend. Settings that are captured while services are created — storage selection, currencies, `settings.main-command-alias`, and `leaderboard.enabled` — keep their startup values until the next restart; a reload never rebuilds the currency registry, re-registers commands, or rewires Vault and placeholder integrations.
+The administrative reload action reloads the configuration and language snapshots. It does not move data between backends or reopen the storage backend. Settings that are captured while services are created — storage selection, `settings.main-command-alias`, and `leaderboard.enabled` — keep their startup values until the next restart and are reported as restart notes instead of being applied; a reload never re-registers commands. Currency display changes (`name`, `symbol`) are hot-applied, including the Vault bridge and placeholder expansion; structural currency changes are refused and need a restart.

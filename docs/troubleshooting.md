@@ -122,21 +122,21 @@ Verify the URL locally and check surrounding Discord messages. Never include the
 
 ## Configuration reload fails
 
-**Possible causes:** invalid YAML, a wrong v2 key shape, an invalid value, or a language file that cannot be loaded.
+**Possible causes:** invalid YAML, a wrong v2 key shape, an invalid value, a language file that cannot be loaded, or a currency or bank-GUI change the reload refused on purpose.
 
-**Check first:** review the last edit in `plugins/AceEconomy/config.yml` and the selected file in `plugins/AceEconomy/lang/`. Ensure the config still contains `version: "2.0"` and that `storage.sqlite` and `storage.mysql` are maps when used.
+**Check first:** review the last edit in `plugins/AceEconomy/config.yml` and the selected file in `plugins/AceEconomy/lang/`. Ensure the config still contains `version: "2.0"` and that `storage.sqlite` and `storage.mysql` are maps when used. When the reply names a currency ID, note what changed: display text (`name`, `symbol`) versus structure (an added or removed ID, `scale`, `default`).
 
-**Fix:** restore the last known-good edit and run `/aceeco reload` again. A failed reload keeps the last valid in-memory configuration; do not assume a partially edited file is active. Use a full restart only after the file is valid or when the changed setting belongs to startup storage or dependency setup.
+**Fix:** restore the last known-good edit and run `/aceeco reload` again. A failed reload keeps the last valid in-memory configuration; do not assume a partially edited file is active. If the refusal names a structural currency change, revert the file to make reloads succeed again, then apply the real change during a maintenance restart: back up first, stop the server, verify the file, start, and check the startup log for configuration errors. Display-only changes need no restart and succeed on the next reload. Use a full restart only after the file is valid or when the changed setting belongs to startup storage or dependency setup.
 
 ## Reload, restart, or stop behaves unexpectedly
 
 Distinguish the three operations:
 
-- `/aceeco reload` reloads configuration and language files.
+- `/aceeco reload` reloads configuration and language files. A failure reply names the refusal reason; a success reply appends hot-applied and restart-deferred notes.
 - A full server restart reopens the storage backend and reloads plugin dependencies.
 - `stop` performs a normal server shutdown; allow saving to finish.
 
-**Fix:** use a full restart after changing JARs, AceLib, `storage.type`, database connection values, or optional plugin availability. Do not use Bukkit `/reload` for a production upgrade or recovery.
+**Fix:** use a full restart after changing JARs, AceLib, `storage.type`, database connection values, or optional plugin availability. The same applies to `settings.main-command-alias`, `storage.type`, `leaderboard.enabled`, and structural currency changes flagged in the reload reply: they only take effect after a full restart. Expect open bank sessions to be closed by a successful reload; players reopen `/bank` to continue. Do not use Bukkit `/reload` for a production upgrade or recovery.
 
 ## A balance or transaction looks wrong
 

@@ -56,9 +56,15 @@ final class ProductionAdapters {
     private ProductionAdapters() { }
 
     static final class Economy implements EconomyCommandService {
-        private final EconomyApi api; private final CurrencyRegistry currencies; private final Executor executor;
+        private final EconomyApi api; private volatile CurrencyRegistry currencies; private final Executor executor;
         Economy(EconomyApi api, CurrencyRegistry currencies, Executor executor) {
             this.api = api; this.currencies = currencies; this.executor = executor;
+        }
+        /** Hot-swap display-only currency metadata after a validated reload. */
+        void replaceCurrencyDisplay(CurrencyRegistry candidate) {
+            com.smile.aceeconomy.infrastructure.acelib.CurrencyReloadPlan
+                    .requireDisplayOnlyChange(this.currencies, candidate);
+            this.currencies = candidate;
         }
         public CompletableFuture<EconomyResult<Amount>> getBalance(UUID id, String c) {
             return CompletableFuture.supplyAsync(() -> api.getBalance(id, c), executor);
@@ -83,8 +89,10 @@ final class ProductionAdapters {
     }
 
     static final class Admin implements AdminCommandService {
-        private final EconomyApi api; private final Executor executor; private final Supplier<Boolean> reload;
-        Admin(EconomyApi api, Executor executor, Supplier<Boolean> reload) {
+        private final EconomyApi api; private final Executor executor;
+        private final Supplier<com.smile.aceeconomy.infrastructure.acelib.ReloadResult> reload;
+        Admin(EconomyApi api, Executor executor,
+              Supplier<com.smile.aceeconomy.infrastructure.acelib.ReloadResult> reload) {
             this.api = api; this.executor = executor; this.reload = reload;
         }
         public CompletableFuture<EconomyResult<Amount>> give(UUID id, String c, Amount a) {
@@ -97,8 +105,13 @@ final class ProductionAdapters {
             return CompletableFuture.supplyAsync(() -> api.setBalance(id, c, a), executor);
         }
         public CompletableFuture<EconomyResult<Void>> reload() {
-            return CompletableFuture.supplyAsync(() -> reload.get() ? EconomyResult.success(null)
-                    : EconomyResult.failure(EconomyError.INVALID_AMOUNT, "configuration reload failed"), executor);
+            return CompletableFuture.supplyAsync(() -> {
+                com.smile.aceeconomy.infrastructure.acelib.ReloadResult result = reload.get();
+                if (result.success()) {
+                    return EconomyResult.success(null);
+                }
+                return EconomyResult.failure(EconomyError.INVALID_AMOUNT, result.detail());
+            }, executor);
         }
     }
 
@@ -117,10 +130,16 @@ final class ProductionAdapters {
     }
 
     static final class Withdrawals implements WithdrawCommandService {
-        private final EconomyApi api; private final CurrencyRegistry currencies; private final BanknoteFactory banknotes;
+        private final EconomyApi api; private volatile CurrencyRegistry currencies; private final BanknoteFactory banknotes;
         private final Executor executor;
         Withdrawals(EconomyApi api, CurrencyRegistry currencies, BanknoteFactory banknotes, Executor executor) {
             this.api = api; this.currencies = currencies; this.banknotes = banknotes; this.executor = executor;
+        }
+        /** Hot-swap display-only currency metadata after a validated reload. */
+        void replaceCurrencyDisplay(CurrencyRegistry candidate) {
+            com.smile.aceeconomy.infrastructure.acelib.CurrencyReloadPlan
+                    .requireDisplayOnlyChange(this.currencies, candidate);
+            this.currencies = candidate;
         }
         public CompletableFuture<EconomyResult<CommandModels.WithdrawReceipt>> withdraw(UUID id, String c, Amount a) {
             return CompletableFuture.supplyAsync(() -> {

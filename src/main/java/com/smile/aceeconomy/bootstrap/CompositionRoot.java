@@ -125,6 +125,12 @@ public final class CompositionRoot {
     // always read the same cached ranking (same instance, same TTL).
     private LeaderboardCache leaderboardCache;
     private Duration leaderboardTtl;
+    // Display-holding collaborators, kept so a validated display-only reload can swap the
+    // immutable registry reference in every holder inside one atomic window.
+    private ProductionAdapters.Economy economyCommands;
+    private ProductionAdapters.Withdrawals withdrawalCommands;
+    private VaultEconomyProvider vaultProvider;
+    private PlaceholderResolver papiResolver;
 
     public CompositionRoot(JavaPlugin plugin) {
         this.plugin = java.util.Objects.requireNonNull(plugin, "plugin");
@@ -301,6 +307,8 @@ public final class CompositionRoot {
                 new ProductionAdapters.Economy(api, currencies, ioExecutor);
         ProductionAdapters.Withdrawals withdrawalCommands =
                 new ProductionAdapters.Withdrawals(api, currencies, banknotes, ioExecutor);
+        this.economyCommands = economyCommands;
+        this.withdrawalCommands = withdrawalCommands;
         // Hoisted so the backup/restore service can invalidate the SAME leaderboard cache
         // after a successful restore (single instance, single invalidation boundary).
         // The fields keep the instance and TTL alive for the PAPI resolver wiring below,
@@ -317,13 +325,14 @@ public final class CompositionRoot {
                 new ProductionAdapters.Bank(bankGui, bankGuiLayout, config, ioExecutor);
         ProductionAdapters.Admin adminCommands = new ProductionAdapters.Admin(api, ioExecutor,
                 () -> {
-                    boolean ok = config.reload().success();
+                    com.smile.aceeconomy.infrastructure.acelib.ReloadResult result =
+                            config.reloadWithRuntime(reloadRuntime());
                     // Reload invalidation: configuration (currencies, balances) may have changed,
                     // so cached balances are dropped and re-primed by later persisted reads.
-                    if (ok && economy != null) {
+                    if (result.success() && economy != null) {
                         economy.invalidateAllBalances();
                     }
-                    return ok;
+                    return result;
                 });
         ProductionAdapters.History historyCommands = new ProductionAdapters.History(
                 new HistoryService(transactions), ioExecutor);
@@ -403,6 +412,7 @@ public final class CompositionRoot {
         AceLibApi ready = requireApi();
         if (Bukkit.getPluginManager().isPluginEnabled("Vault")) {
             VaultEconomyProvider provider = new VaultEconomyProvider(api, currencies);
+            vaultProvider = provider;
             modules.add(new VaultIntegrationModule("vault", "vault",
                     new VaultEconomyLifecycle(new BukkitVaultRegistration(plugin, ServicePriority.Normal), provider)));
         }
@@ -419,6 +429,7 @@ public final class CompositionRoot {
             } else {
                 resolver = new PlaceholderResolver(api, currencies);
             }
+            papiResolver = resolver;
             AceEconomyExpansion expansion = new AceEconomyExpansion(resolver, plugin.getDescription().getVersion());
             modules.add(new PlaceholderIntegrationModule("placeholderapi", "placeholderapi",
                     new PlaceholderLifecycle(new BukkitPlaceholderRegistration(), expansion)));
@@ -445,6 +456,63 @@ public final class CompositionRoot {
         // parser validates the whole section before constructing a registry, so a malformed
         // config aborts startup instead of leaving a partially applied economy behind.
         return CurrencyConfigParser.parse(value("currencies"));
+    }
+
+    /**
+     * Production side of the reload transaction. Only identical or display-only currency
+     * plans are approved: added ids need batch account initialization no backend offers,
+     * and removed ids / scale / default changes would reinterpret stored balances, so both
+     * are refused with a restart notice instead of a silent half-application.
+     */
+    private com.smile.aceeconomy.infrastructure.acelib.ReloadRuntime reloadRuntime() {
+        return new com.smile.aceeconomy.infrastructure.acelib.ReloadRuntime() {
+            @Override
+            public CurrencyRegistry liveCurrencies() {
+                return currencies;
+            }
+
+            @Override
+            public java.util.List<String> reviewCurrencyCandidate(
+                    com.smile.aceeconomy.infrastructure.acelib.CurrencyReloadPlan.Classification plan) {
+                return switch (plan.disposition()) {
+                    case IDENTICAL, DISPLAY_ONLY -> java.util.List.of();
+                    case ADDED, DANGEROUS, INVALID -> java.util.List.of(
+                            plan.summary() + " :: " + String.join("; ", plan.details()));
+                };
+            }
+
+            @Override
+            public void applyApproved(
+                    com.smile.aceeconomy.infrastructure.acelib.CurrencyReloadPlan.Classification plan,
+                    BankGuiLayout layout) {
+                if (plan.disposition()
+                        == com.smile.aceeconomy.infrastructure.acelib.CurrencyReloadPlan.Disposition
+                                .DISPLAY_ONLY) {
+                    CurrencyRegistry candidate = plan.candidate();
+                    economy.replaceCurrencyDisplay(candidate);
+                    if (economyCommands != null) {
+                        economyCommands.replaceCurrencyDisplay(candidate);
+                    }
+                    if (withdrawalCommands != null) {
+                        withdrawalCommands.replaceCurrencyDisplay(candidate);
+                    }
+                    if (vaultProvider != null) {
+                        vaultProvider.replaceCurrencyDisplay(candidate);
+                    }
+                    if (papiResolver != null) {
+                        papiResolver.replaceCurrencyDisplay(candidate);
+                    }
+                    currencies = candidate;
+                }
+                // The layout candidate was fully parsed before the swap window: re-resolve for
+                // sessions opened from now on, then drop every open session so no pre-reload
+                // generation can act under the new rules.
+                if (bankGui != null && layout != null) {
+                    bankGui.replaceLayout(BankGuiActions.resolver(layout));
+                    bankGui.invalidateAll();
+                }
+            }
+        };
     }
 
     private Object value(String path) {

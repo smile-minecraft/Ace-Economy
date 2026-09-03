@@ -69,6 +69,7 @@ public final class ConfigLangAdapter {
     private volatile MessageService messageService;
     private volatile BedrockService bedrockService;
     private volatile BedrockDetector bedrockDetector;
+    private volatile ReloadResult lastReloadResult;
     private final Locale defaultLocale;
     private final Object lock = new Object();
 
@@ -933,6 +934,38 @@ public final class ConfigLangAdapter {
     }
 
     public ReloadResult reload() {
+        return reloadWithRuntime(null);
+    }
+
+    /**
+     * Reload with a production runtime hook for the currency/GUI transaction.
+     *
+     * <p>The name is deliberately distinct from {@link #reload()} so existing method
+     * references ({@code adapter::reload}) keep resolving to the no-arg form.</p>
+     *
+     * <p>The candidate config, lang, currencies and bank-gui layout are all parsed and
+     * validated before anything is swapped: any failure keeps the previous runtime
+     * untouched (all-or-nothing). A {@code null} runtime keeps the legacy behaviour of
+     * validating the candidate sections but only approves an identical currency set —
+     * any currency diff without a runtime hook fails instead of reporting success while
+     * silently ignoring the change.</p>
+     */
+    public ReloadResult reloadWithRuntime(ReloadRuntime runtime) {
+        ReloadResult result = reloadLocked(runtime);
+        lastReloadResult = result;
+        return result;
+    }
+
+    /**
+     * Last reload outcome, for success-note feedback on the {@code /aceeco reload} reply.
+     * Informational only: concurrent reloads may interleave, but every stored value is a
+     * complete transaction result, never a half-applied state.
+     */
+    public ReloadResult lastReloadResult() {
+        return lastReloadResult;
+    }
+
+    private ReloadResult reloadLocked(ReloadRuntime runtime) {
         synchronized (lock) {
             java.nio.file.Path configPath = plugin.getDataFolder().toPath().resolve("config.yml");
             FileState configBefore = snapshotFile(configPath);
@@ -989,6 +1022,82 @@ public final class ConfigLangAdapter {
                 return new ReloadResult(false, false, null, langError);
             }
 
+            // --- currency + GUI candidates: parse before any swap (all-or-nothing) ---
+            com.smile.aceeconomy.domain.CurrencyRegistry candidateCurrencies;
+            try {
+                candidateCurrencies = CurrencyConfigParser.parse(candidateConfig.get("currencies"));
+            } catch (IllegalArgumentException | IllegalStateException e) {
+                String currencyError = sanitizeDiagnostic(e.getMessage());
+                if (currencyError == null) {
+                    currencyError = "currencies invalid";
+                }
+                logWarning("Config reload failed: {0}", currencyError);
+                String restoreErr = restoreFile(configBefore);
+                if (restoreErr != null) {
+                    String combined = currencyError + "; restore failed: " + restoreErr;
+                    logWarning("Config restore failed: {0}", restoreErr);
+                    return new ReloadResult(false, false, combined, null,
+                            "currencies invalid", List.of(), List.of());
+                }
+                return new ReloadResult(false, false, currencyError, null,
+                        "currencies invalid", List.of(), List.of());
+            }
+            BankGuiLayout candidateLayout;
+            try {
+                java.util.Set<String> candidateIds = new java.util.LinkedHashSet<>();
+                for (com.smile.aceeconomy.domain.Currency c : candidateCurrencies.all()) {
+                    candidateIds.add(c.id());
+                }
+                candidateLayout = BankGuiConfigParser.parse(
+                        candidateConfig.get("bank-gui"), java.util.Set.copyOf(candidateIds));
+            } catch (IllegalArgumentException | IllegalStateException e) {
+                String layoutError = sanitizeDiagnostic(e.getMessage());
+                if (layoutError == null) {
+                    layoutError = "bank-gui invalid";
+                }
+                logWarning("Config reload failed: {0}", layoutError);
+                String restoreErr = restoreFile(configBefore);
+                if (restoreErr != null) {
+                    String combined = layoutError + "; restore failed: " + restoreErr;
+                    logWarning("Config restore failed: {0}", restoreErr);
+                    return new ReloadResult(false, false, combined, null,
+                            "bank-gui invalid", List.of(), List.of());
+                }
+                return new ReloadResult(false, false, layoutError, null,
+                        "bank-gui invalid", List.of(), List.of());
+            }
+
+            // --- classify the currency diff against the live registry ---
+            CurrencyReloadPlan.Classification plan = classifyAgainstLive(runtime, candidateCurrencies);
+            if (plan.disposition() == CurrencyReloadPlan.Disposition.INVALID) {
+                String liveError = "live currencies unreadable: "
+                        + String.join("; ", plan.details());
+                logWarning("Config reload failed: {0}", liveError);
+                String restoreErr = restoreFile(configBefore);
+                if (restoreErr != null) {
+                    liveError = liveError + "; restore failed: " + restoreErr;
+                    logWarning("Config restore failed: {0}", restoreErr);
+                }
+                return new ReloadResult(false, false, liveError, null,
+                        plan.summary(), List.of(), List.of());
+            }
+            java.util.List<String> rejection = reviewCandidate(runtime, plan);
+            if (!rejection.isEmpty()) {
+                String combined = plan.summary() + " :: " + String.join("; ", rejection);
+                logWarning("Config reload failed: {0}", combined);
+                String restoreErr = restoreFile(configBefore);
+                if (restoreErr != null) {
+                    combined = combined + "; restore failed: " + restoreErr;
+                    logWarning("Config restore failed: {0}", restoreErr);
+                }
+                return new ReloadResult(false, false, combined, null,
+                        combined, List.of(), List.of());
+            }
+
+            // --- restart-only scalars: detected precisely, applied never ---
+            java.util.List<String> restartNotes =
+                    diffRestartOnlySettings(configManager, candidateConfig);
+
             // --- lang candidate ---
             java.nio.file.Path langPath = plugin.getDataFolder().toPath().resolve("lang").resolve(localeToFileName(target));
             FileState langBefore = snapshotFile(langPath);
@@ -1039,12 +1148,137 @@ public final class ConfigLangAdapter {
                 return new ReloadResult(false, false, null, combined);
             }
 
+            // Every candidate validated — hot-apply the approved runtime slice first.
+            // Display/layout swaps are infallible volatile writes plus best-effort session
+            // closes, but a defensive catch keeps the config/lang swap from landing alone.
+            if (runtime != null) {
+                try {
+                    runtime.applyApproved(plan, candidateLayout);
+                } catch (Throwable t) {
+                    String applyError = "runtime apply failed: " + safeErrorSummary(t);
+                    logWarning("Config reload failed: {0}", applyError);
+                    String r1 = restoreFile(configBefore);
+                    String r2 = restoreFile(langBefore);
+                    String combined = applyError;
+                    if (r1 != null) {
+                        combined += "; config restore failed: " + r1;
+                        logWarning("Config restore failed: {0}", r1);
+                    }
+                    if (r2 != null) {
+                        combined += "; lang restore failed: " + r2;
+                        logWarning("Lang restore failed: {0}", r2);
+                    }
+                    return new ReloadResult(false, false, combined, null,
+                            plan.summary(), List.of(), List.of());
+                }
+            }
             // Both candidates succeeded — single atomic swap (keep candidate side-effect files as persisted)
             MessageService candidateService = newMessageService(candidateLang);
             this.configManager = candidateConfig;
             this.langManager = candidateLang;
             this.messageService = candidateService;
-            return new ReloadResult(true, true, null, null);
+            java.util.List<String> appliedNotes = appliedNotesFor(plan);
+            return new ReloadResult(true, true, null, null,
+                    plan.summary(), appliedNotes, restartNotes);
+        }
+    }
+
+    private CurrencyReloadPlan.Classification classifyAgainstLive(
+            ReloadRuntime runtime, com.smile.aceeconomy.domain.CurrencyRegistry candidate) {
+        com.smile.aceeconomy.domain.CurrencyRegistry live;
+        if (runtime != null) {
+            live = runtime.liveCurrencies();
+        } else {
+            try {
+                live = CurrencyConfigParser.parse(configManager.get("currencies"));
+            } catch (IllegalArgumentException | IllegalStateException e) {
+                return new CurrencyReloadPlan.Classification(
+                        CurrencyReloadPlan.Disposition.INVALID, null,
+                        List.of(e.getMessage() == null ? "unparseable" : e.getMessage()));
+            }
+        }
+        if (live == null) {
+            return new CurrencyReloadPlan.Classification(
+                    CurrencyReloadPlan.Disposition.INVALID, null, List.of("no live registry"));
+        }
+        return CurrencyReloadPlan.classify(live, toRawCurrencies(candidate));
+    }
+
+    private static Object toRawCurrencies(com.smile.aceeconomy.domain.CurrencyRegistry registry) {
+        Map<String, Object> raw = new java.util.LinkedHashMap<>();
+        for (com.smile.aceeconomy.domain.Currency c : registry.all()) {
+            Map<String, Object> fields = new java.util.LinkedHashMap<>();
+            fields.put("name", c.displayName());
+            fields.put("symbol", c.symbol());
+            fields.put("scale", c.scale());
+            fields.put("default", c.isDefault());
+            raw.put(c.id(), fields);
+        }
+        return raw;
+    }
+
+    private java.util.List<String> reviewCandidate(
+            ReloadRuntime runtime, CurrencyReloadPlan.Classification plan) {
+        if (runtime != null) {
+            java.util.List<String> reasons = runtime.reviewCurrencyCandidate(plan);
+            return reasons == null ? List.of() : List.copyOf(reasons);
+        }
+        // Legacy path without a runtime hook: only an identical set may pass, so a
+        // currency change can never report success while being silently ignored.
+        return switch (plan.disposition()) {
+            case IDENTICAL -> List.of();
+            case DISPLAY_ONLY, ADDED, DANGEROUS, INVALID ->
+                    List.of(plan.summary() + " :: " + String.join("; ", plan.details()));
+        };
+    }
+
+    private static java.util.List<String> appliedNotesFor(CurrencyReloadPlan.Classification plan) {
+        if (plan.disposition() == CurrencyReloadPlan.Disposition.DISPLAY_ONLY) {
+            java.util.List<String> changed = plan.details().stream()
+                    .map(String::valueOf)
+                    .toList();
+            return List.of("currencies display updated (hot-applied): " + String.join(", ", changed));
+        }
+        return List.of();
+    }
+
+    /**
+     * Startup-wired settings the reload path must never re-wire: the main-command alias
+     * (Bukkit routes statically declared labels), the storage backend (pools and files are
+     * already open) and the leaderboard toggle (the executable baltop spec set is fixed).
+     * Differences are reported, never applied.
+     */
+    private java.util.List<String> diffRestartOnlySettings(
+            ConfigManager live, ConfigManager candidate) {
+        java.util.List<String> notes = new java.util.ArrayList<>();
+        Object liveAlias = readScalar(live, "settings.main-command-alias");
+        Object candidateAlias = readScalar(candidate, "settings.main-command-alias");
+        if (!Objects.equals(liveAlias, candidateAlias)) {
+            notes.add("main-command-alias changed to '" + candidateAlias
+                    + "': restart required (commands are registered at startup)");
+        }
+        Object liveStorage = readScalar(live, "storage.type");
+        Object candidateStorage = readScalar(candidate, "storage.type");
+        if (!Objects.equals(liveStorage, candidateStorage)) {
+            notes.add("storage backend changed: restart required (persistence is wired at startup)");
+        }
+        Object liveBoard = readScalar(live, "leaderboard.enabled");
+        Object candidateBoard = readScalar(candidate, "leaderboard.enabled");
+        if (!Objects.equals(liveBoard, candidateBoard)) {
+            notes.add("leaderboard.enabled changed: restart required (command set is fixed at startup)");
+        }
+        return notes;
+    }
+
+    private static Object readScalar(ConfigManager manager, String path) {
+        try {
+            Object value = manager.get(path);
+            if (value instanceof ConfigManager || value instanceof java.util.Map<?, ?>) {
+                return String.valueOf(value);
+            }
+            return value;
+        } catch (Throwable t) {
+            return null;
         }
     }
 

@@ -59,7 +59,7 @@ public final class PlaceholderResolver {
     private static final int MAX_TOP_N = 100;
 
     private final EconomyApi api;
-    private final CurrencyRegistry currencies;
+    private volatile CurrencyRegistry currencies;
     private final LeaderboardCache leaderboard;
     private final Duration leaderboardTtl;
     private final Clock clock;
@@ -85,6 +85,17 @@ public final class PlaceholderResolver {
         this.leaderboard = leaderboard;
         this.leaderboardTtl = leaderboardTtl;
         this.clock = clock;
+    }
+
+    /**
+     * Hot-swap display-only currency metadata (name / symbol) after a validated reload.
+     * The guard rejects structural changes so placeholders can never diverge from
+     * the transactional registry.
+     */
+    public void replaceCurrencyDisplay(CurrencyRegistry candidate) {
+        com.smile.aceeconomy.infrastructure.acelib.CurrencyReloadPlan
+                .requireDisplayOnlyChange(this.currencies, candidate);
+        this.currencies = candidate;
     }
 
     /**

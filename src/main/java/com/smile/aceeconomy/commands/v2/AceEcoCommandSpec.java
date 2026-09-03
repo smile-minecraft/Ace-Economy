@@ -71,11 +71,7 @@ public final class AceEcoCommandSpec {
                         .consoleOnly()
                         .minArgs(0)
                         .maxArgs(0)
-                        .handler(context -> V2CommandSupport.replyLocalized(context, messages,
-                                services.admin().reload(),
-                                ignored -> messages != null
-                                        ? messages.renderMessage("general.reload-success", Map.of())
-                                        : Component.text("general.reload-success")))
+                        .handler(context -> reloadWithReport(context, services, messages))
                         .build());
         if (!effective.isEmpty()) {
             builder.aliases(effective.toArray(String[]::new));
@@ -83,8 +79,44 @@ public final class AceEcoCommandSpec {
         return builder.build();
     }
 
-    private static SubCommandSpec mutation(CommandServices services, String operation) {
-        return SubCommandSpec.builder(operation)
+    /**
+     * Reload reply with a full transaction report. Failures carry the refusal reason
+     * (currency danger, invalid candidate) verbatim instead of a generic type-mapped
+     * error; successes append hot-applied and restart-deferred notes as plain text so
+     * operator-controlled values are never re-parsed as MiniMessage.
+     */
+    private static void reloadWithReport(CommandContext context, CommandServices services,
+                                         ConfigLangAdapter messages) {
+        services.admin().reload().whenComplete((result, failure) -> {
+            if (failure != null) {
+                CommandReply.replyError(context, failure);
+                return;
+            }
+            if (result == null) {
+                String msg = messages != null
+                        ? messages.plainMessage("command.empty-result", Map.of())
+                        : "command.empty-result";
+                CommandReply.replyError(context, CommandException.custom("ACELIB-CMD-EMPTY-RESULT", msg));
+                return;
+            }
+            if (result.isFailure()) {
+                String detail = result.message() == null ? "reload failed" : result.message();
+                CommandReply.replyError(context,
+                        CommandException.custom("ACELIB-CMD-RELOAD-FAILED", detail));
+                return;
+            }
+            Component base = messages != null
+                    ? messages.renderMessage("general.reload-success", Map.of())
+                    : Component.text("general.reload-success");
+            String notes = messages != null && messages.lastReloadResult() != null
+                    ? messages.lastReloadResult().detail()
+                    : "";
+            Component reply = notes.isEmpty() ? base : base.append(Component.text("\n" + notes));
+            CommandReply.replyComponent(context, messages, reply);
+        });
+    }
+
+    private static SubCommandSpec mutation(CommandServices services, String operation) {        return SubCommandSpec.builder(operation)
                 .description(operation + " a player's balance")
                 .usage("<player> <amount> [currency]")
                 .permission("aceeconomy.admin." + operation)

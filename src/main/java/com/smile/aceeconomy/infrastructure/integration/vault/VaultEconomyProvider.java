@@ -46,11 +46,22 @@ public final class VaultEconomyProvider implements Economy {
     private static final Logger LOG = Logger.getLogger(VaultEconomyProvider.class.getName());
 
     private final EconomyApi api;
-    private final CurrencyRegistry currencies;
+    private volatile CurrencyRegistry currencies;
     private final PlayerIdentityResolver identities;
 
     public VaultEconomyProvider(EconomyApi api, CurrencyRegistry currencies) {
         this(api, currencies, new BukkitPlayerIdentityResolver());
+    }
+
+    /**
+     * Hot-swap display-only currency metadata (name / symbol) after a validated reload.
+     * The guard rejects structural changes so Vault formatting can never diverge from
+     * the transactional registry.
+     */
+    public void replaceCurrencyDisplay(CurrencyRegistry candidate) {
+        com.smile.aceeconomy.infrastructure.acelib.CurrencyReloadPlan
+                .requireDisplayOnlyChange(this.currencies, candidate);
+        this.currencies = candidate;
     }
 
     public VaultEconomyProvider(EconomyApi api, CurrencyRegistry currencies,

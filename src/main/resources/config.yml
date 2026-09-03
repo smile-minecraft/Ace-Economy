@@ -61,7 +61,7 @@ economy:
 # ID 是本層的 key，去除前後空白並轉小寫後只能使用 a-z、0-9 與 _；
 # 僅大小寫或空白差異的 ID 視為重複。任何缺欄位、型別錯誤、重複、
 # 空區塊或預設貨幣數量不為一，都會讓插件啟動失敗且不半套用。
-# 貨幣組合只在啟動時讀取一次；reload 不會重建 registry，修改後請重啟。
+# reload 會先把候選貨幣分類：只改 name/symbol 才熱套用；新增、移除、改 scale、改 default 或格式無效都會整筆拒絕並沿用舊組合，要生效請重啟。
 currencies:
   dollar: # 內部 ID
     name: "金幣"
@@ -92,7 +92,7 @@ currencies:
 #     currency  僅 withdraw 需要，已知幣別 ID；缺省為預設幣別
 #     material  顯示物品材質（type 為 none 時免填；air 會被拒絕）
 #     name-key / lore-keys 按鈕顯示文字的語言鍵
-# 任何格式錯誤都會讓插件啟動失敗且不半套用；修改後請重啟，已開啟的介面維持舊版面。
+# 任何格式錯誤都會讓插件啟動失敗且不半套用；合法版面隨 reload 熱套用，已開啟的介面會先關閉；格式錯誤的 reload 整筆拒絕不半套用。bank-gui.enabled 改動只在啟動時生效，仍需重啟。
 bank-gui:
   enabled: true
   title-key: "gui.bank-title"

@@ -46,7 +46,7 @@ import java.util.concurrent.locks.ReentrantLock;
  */
 public final class EconomyService {
 
-    private final CurrencyRegistry currencies;
+    private volatile CurrencyRegistry currencies;
     private final DebtPolicy debtPolicy;
     private final Amount startBalance;
     private final AccountRepository accounts;
@@ -82,6 +82,33 @@ public final class EconomyService {
     }
 
     // ---------- account lifecycle ----------
+
+    /**
+     * Hot-swap display-only currency metadata (name / symbol) after a validated reload.
+     * Ids, scales and the default currency must be identical; the guard rejects anything
+     * else so transactional behaviour can never change under a reload.
+     */
+    public void replaceCurrencyDisplay(CurrencyRegistry candidate) {
+        java.util.Objects.requireNonNull(candidate, "candidate");
+        if (!currencies.defaultCurrencyId().equals(candidate.defaultCurrencyId())) {
+            throw new IllegalArgumentException("refusing currency swap: default currency changed");
+        }
+        for (Currency c : currencies.all()) {
+            if (!candidate.contains(c.id())) {
+                throw new IllegalArgumentException("refusing currency swap: removed " + c.id());
+            }
+            Currency next = candidate.get(c.id());
+            if (next.scale() != c.scale() || next.isDefault() != c.isDefault()) {
+                throw new IllegalArgumentException("refusing currency swap: structural change " + c.id());
+            }
+        }
+        for (Currency c : candidate.all()) {
+            if (!currencies.contains(c.id())) {
+                throw new IllegalArgumentException("refusing currency swap: added " + c.id());
+            }
+        }
+        this.currencies = candidate;
+    }
 
     public EconomyResult<AccountSnapshot> createAccount(UUID uuid, String ownerName) {
         Optional<Account> existing = accounts.load(uuid);

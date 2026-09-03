@@ -41,7 +41,7 @@ public final class V2BankGuiSession {
     private final GuiService guiService;
     private final FoliaContextExecutor folia;
     private final BankGuiUseCase useCase;
-    private final Function<Integer, BankGuiAction> actionResolver;
+    private volatile Function<Integer, BankGuiAction> actionResolver;
 
     private final Map<UUID, Player> players = new ConcurrentHashMap<>();
     private final Map<UUID, GuiSession> sessions = new ConcurrentHashMap<>();
@@ -340,6 +340,45 @@ public final class V2BankGuiSession {
             return Optional.of(result.session());
         }
         return Optional.empty();
+    }
+
+    /**
+     * Hot-swap the layout resolver after a validated reload. Sessions opened afterwards
+     * resolve slots against the new layout; sessions already open keep working until
+     * {@link #invalidateAll()} drops them.
+     */
+    public void replaceLayout(@NotNull Function<Integer, BankGuiAction> resolver) {
+        this.actionResolver = Objects.requireNonNull(resolver, "resolver");
+    }
+
+    /**
+     * Drop every open session so no pre-reload generation can act under post-reload rules.
+     * Each known session is closed through {@link GuiService} best-effort, then local
+     * bookkeeping is cleared unconditionally: even if a remote close throws, later clicks
+     * find no session and are rejected instead of running against mixed versions.
+     *
+     * @return the number of locally tracked sessions dropped
+     */
+    public int invalidateAll() {
+        java.util.List<Map.Entry<UUID, GuiSession>> snapshot =
+                new java.util.ArrayList<>(sessions.entrySet());
+        int dropped = 0;
+        for (Map.Entry<UUID, GuiSession> entry : snapshot) {
+            UUID uuid = entry.getKey();
+            GuiSession known = entry.getValue();
+            try {
+                if (known != null) {
+                    guiService.closeInventory(uuid, known.generation());
+                }
+            } catch (Throwable ignored) {
+                // Local state below is still cleared; the stale generation can no longer act.
+            } finally {
+                players.remove(uuid);
+                sessions.remove(uuid);
+                dropped++;
+            }
+        }
+        return dropped;
     }
 
     // ---- outcomes -------------------------------------------------------------
