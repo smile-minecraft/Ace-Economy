@@ -13,6 +13,7 @@
 - [MySQL 或 Hikari 連線失敗](#mysql-或-hikari-連線失敗)
 - [Discord 沒有收到通知](#discord-沒有收到通知)
 - [Vault 或 PlaceholderAPI 整合不可用](#vault-或-placeholderapi-整合不可用)
+- [基岩版提示沒有出現](#基岩版提示沒有出現)
 - [設定重新載入失敗](#設定重新載入失敗)
 - [重新載入、重啟或停服行為不如預期](#重新載入重啟或停服行為不如預期)
 - [餘額或交易結果不對](#餘額或交易結果不對)
@@ -110,6 +111,14 @@ discord:
 **先檢查：** 確認選用插件本身已經啟用，然後重啟伺服器讓 AceEconomy 跟著重啟。Vault 使用設定裡指定的預設貨幣。PlaceholderAPI 使用 `aceeco` 這個命名空間，包括 `%aceeco_balance%`、`%aceeco_balance_formatted%`、`%aceeco_balance_<currency>%` 與 `%aceeco_balance_<currency>_formatted%`。
 
 **修正：** 安裝或啟用對應的選用插件，然後重啟。如果經濟核心指令正常、只是整合失效，就保持核心服務開著，單獨去排查那個選用插件。
+
+## 基岩版提示沒有出現
+
+**可能原因：** Floodgate 沒裝或被停用、該玩家是 Java 客戶端，或者查詢失敗、訊息退回原始版本。
+
+**先檢查：** 確認 Floodgate 已經安裝並啟用，且受影響的玩家確實是用基岩版加入的。Java 玩家本來就會保留可點擊按鈕，永遠看不到提示。
+
+**修正：** 安裝或啟用 Floodgate，然後重啟。不要宣稱完整基岩版支援：hover 文字不保證顯示，只有點擊動作會降級。Floodgate 不在時看到原始訊息是預期行為，不是錯誤。
 
 ## 設定重新載入失敗
 

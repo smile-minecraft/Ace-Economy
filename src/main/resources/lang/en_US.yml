@@ -6,6 +6,13 @@
 
 message:
   prefix: "<gold>[AceEconomy]</gold> <gray>"
+  bedrock:
+    fallback:
+      run_command: "<gray>[Bedrock: buttons do not work here — run manually: <white><payload></white>]</gray>"
+      suggest_command: "<gray>[Bedrock: suggested command — copy it and run manually: <white><payload></white>]</gray>"
+      open_url: "<gray>[Bedrock: links cannot be opened in game — URL: <white><payload></white>]</gray>"
+      copy_to_clipboard: "<gray>[Bedrock: copy this text manually: <white><payload></white>]</gray>"
+      unknown: "<gray>[Bedrock: this action is not supported here: <white><payload></white>]</gray>"
 
 general:
   no-permission: "<red>You do not have permission to use this command!</red>"

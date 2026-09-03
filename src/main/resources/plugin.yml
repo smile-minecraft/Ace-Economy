@@ -10,6 +10,7 @@ depend:
 softdepend:
   - Vault
   - PlaceholderAPI
+  - Floodgate
 
 commands:
   money:

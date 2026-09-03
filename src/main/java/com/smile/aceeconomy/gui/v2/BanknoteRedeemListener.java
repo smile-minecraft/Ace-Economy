@@ -150,8 +150,8 @@ public final class BanknoteRedeemListener implements Listener {
                     + " currency=" + claim.currency()
                     + " — hand no longer matches the redeemed note; item left untouched for manual review");
             try {
-                player.sendMessage(messages.renderMessage("banknote.redeem-retained",
-                        Map.of("amount", Long.toString(result.value()))));
+                messages.sendChatWithFallback(player, messages.renderMessage("banknote.redeem-retained",
+                        Map.of("amount", Long.toString(result.value()))), null);
             } catch (Throwable ignored) {
             }
             return;
@@ -163,16 +163,16 @@ public final class BanknoteRedeemListener implements Listener {
             setHeld(player, fromMainHand, current);
         }
         try {
-            player.sendMessage(messages.renderMessage("banknote.redeem-success",
+            messages.sendChatWithFallback(player, messages.renderMessage("banknote.redeem-success",
                     Map.of("amount", Long.toString(result.value()),
-                            "issuer", String.valueOf(claim.issuer()))));
+                            "issuer", String.valueOf(claim.issuer()))), null);
         } catch (Throwable ignored) {
         }
     }
 
     private void notifyFailed(Player player) {
         try {
-            player.sendMessage(messages.renderMessage("banknote.redeem-failed", Map.of()));
+            messages.sendChatWithFallback(player, messages.renderMessage("banknote.redeem-failed", Map.of()), null);
         } catch (Throwable ignored) {
         }
     }

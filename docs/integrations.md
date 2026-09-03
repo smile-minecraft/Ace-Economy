@@ -2,7 +2,7 @@
 
 English · [简体中文](integrations.zh-CN.md) · [繁體中文](integrations.zh-TW.md)
 
-Use this guide when a server administrator needs AceEconomy to work with another plugin or with Discord. It covers the required AceLib dependency and the optional Vault, PlaceholderAPI, and Discord integrations. Plugin authors should use [Integration API](integration-api.md); language-file work is covered in [Localization](localization.md).
+Use this guide when a server administrator needs AceEconomy to work with another plugin or with Discord. It covers the required AceLib dependency and the optional Vault, PlaceholderAPI, Floodgate, and Discord integrations. Plugin authors should use [Integration API](integration-api.md); language-file work is covered in [Localization](localization.md).
 
 ## Contents
 
@@ -11,13 +11,14 @@ Use this guide when a server administrator needs AceEconomy to work with another
 - [Vault](#vault)
 - [PlaceholderAPI](#placeholderapi)
 - [Discord notifications](#discord-notifications)
+- [Bedrock players (Floodgate)](#bedrock-players-floodgate)
 - [Related guides](#related-guides)
 
 ## Before you start
 
 AceEconomy requires AceLib `v1.2.0` at runtime. Install it before AceEconomy; `plugin.yml` declares AceLib as a hard dependency, so AceEconomy will not start without a ready AceLib service. It also requires Java 25 and a Paper/Folia server matching the release baseline.
 
-Vault and PlaceholderAPI are optional soft dependencies. AceEconomy skips the corresponding integration when either plugin is absent or disabled. Discord does not require a separate server plugin; it uses the webhook configured in `config.yml`.
+Vault, PlaceholderAPI, and Floodgate are optional soft dependencies. AceEconomy skips the corresponding integration when any of these plugins is absent or disabled. Discord does not require a separate server plugin; it uses the webhook configured in `config.yml`.
 
 ## AceLib
 
@@ -127,6 +128,22 @@ After saving, run `/aceeco reload` from the server console or restart the server
 - **Nothing arrives:** check `discord.enabled`, the webhook URL, and server network access to Discord. Then make one new transaction; notifications are sent for committed events.
 - **The transaction succeeds but Discord does not:** this is an expected best-effort delivery failure. Fix the webhook or network path without treating Discord as the source of truth for the balance.
 - **A secret appears in a payload field:** remove it from the transaction text and rotate the secret. Webhook credentials belong only in local configuration.
+
+## Bedrock players (Floodgate)
+
+Floodgate is an optional soft dependency. When it is installed and AceLib identifies a player as a Bedrock client, AceEconomy replaces click actions (run command, suggested command, open URL, copy to clipboard) in chat messages with a readable hint such as `[Bedrock: buttons do not work here — run manually: /baltop 1]`. Java players always receive the original message with working buttons.
+
+### Install and check
+
+1. Install Geyser with Floodgate on the server or proxy, following the Floodgate documentation.
+2. Start the server; AceEconomy picks up the Bedrock lookup automatically. No AceEconomy configuration is needed.
+3. On a Bedrock client, run a command whose reply contains buttons (for example `/baltop`) and confirm the hint text is readable.
+
+### Limits
+
+- Only click actions degrade; hover text is not guaranteed on Bedrock.
+- When Floodgate is absent, disabled, or a lookup fails, every player receives the original message — startup and Java behaviour do not change.
+- The hint wording comes from the `message.bedrock.fallback.*` keys in `lang/<locale>.yml`; the payload is inserted as plain text and never parsed as formatting.
 
 ## Related guides
 

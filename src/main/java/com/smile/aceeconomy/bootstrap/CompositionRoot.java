@@ -1,6 +1,7 @@
 package com.smile.aceeconomy.bootstrap;
 
 import com.smile.acelib.AceLibApi;
+import com.smile.acelib.bedrock.BedrockService;
 import com.smile.acelib.command.BukkitCommandBridge;
 import com.smile.acelib.command.BukkitReplySink;
 import com.smile.acelib.command.CommandRegistryImpl;
@@ -453,6 +454,18 @@ public final class CompositionRoot {
                                SafeEventRegistry events) {
             CompositionRoot.this.scheduler = scheduler;
             runtimeGui = api.getGuiService();
+            // Bedrock click-fallback wiring: hand the ready facade to the message
+            // adapter so player chat degrades click actions for Bedrock clients.
+            // Floodgate absent (or any lookup failure) keeps the original
+            // Components — attach is null-safe and reload preserves it.
+            try {
+                BedrockService bedrock = api.getBedrockService();
+                config.attachBedrockService(bedrock);
+            } catch (Throwable failure) {
+                plugin.getLogger().warning("Bedrock lookup unavailable, messages keep Java behaviour: "
+                        + failure.getClass().getSimpleName());
+                config.attachBedrockService(null);
+            }
             if (runtimeGui.getListener() != null) {
                 Listener listener = runtimeGui.getListener();
                 Bukkit.getPluginManager().registerEvents(listener, plugin);

@@ -2,7 +2,7 @@
 
 [English](integrations.md) · [简体中文](integrations.zh-CN.md) · 繁體中文
 
-當伺服器管理員需要讓 AceEconomy 和其他插件或 Discord 協作時，請使用本指南。內容涵蓋必需的 AceLib，以及選用的 Vault、PlaceholderAPI 與 Discord 整合。插件作者請看[整合 API](integration-api.zh-TW.md)；語言檔請看[在地化](localization.zh-TW.md)。
+當伺服器管理員需要讓 AceEconomy 和其他插件或 Discord 協作時，請使用本指南。內容涵蓋必需的 AceLib，以及選用的 Vault、PlaceholderAPI、Floodgate 與 Discord 整合。插件作者請看[整合 API](integration-api.zh-TW.md)；語言檔請看[在地化](localization.zh-TW.md)。
 
 ## 目錄
 
@@ -11,13 +11,14 @@
 - [Vault](#vault)
 - [PlaceholderAPI](#placeholderapi)
 - [Discord 通知](#discord-通知)
+- [基岩版玩家（Floodgate）](#基岩版玩家floodgate)
 - [相關指南](#相關指南)
 
 ## 開始前
 
 AceEconomy 執行時需要 AceLib `v1.2.0`。請先裝好 AceLib，再啟動 AceEconomy。`plugin.yml` 把 AceLib 列為硬依賴；如果沒有一個就緒的 AceLib 服務，AceEconomy 根本不會啟動。執行環境還需要 Java 25，以及符合本版本基準的 Paper/Folia 伺服器。
 
-Vault 與 PlaceholderAPI 是選用的軟依賴。插件沒裝或沒啟用時，AceEconomy 會跳過對應的整合。Discord 不需要另外裝伺服器插件，它用的是 `config.yml` 裡設定的 webhook。
+Vault、PlaceholderAPI 與 Floodgate 是選用的軟依賴。插件沒裝或沒啟用時，AceEconomy 會跳過對應的整合。Discord 不需要另外裝伺服器插件，它用的是 `config.yml` 裡設定的 webhook。
 
 ## AceLib
 
@@ -127,6 +128,22 @@ discord:
 - **沒有訊息：** 檢查 `discord.enabled`、webhook 網址，以及伺服器到 Discord 的網路連通性，然後做一筆新交易；通知是針對已提交的事件發送的。
 - **交易成功但 Discord 沒訊息：** 這就是盡力而為投遞失敗的正常情況。去修 webhook 或網路路徑，不要把 Discord 當成餘額的真正來源。
 - **負載內容裡出現了密鑰：** 從交易文字裡移除那個值，並輪換密鑰。webhook 憑證只能放在本機設定裡。
+
+## 基岩版玩家（Floodgate）
+
+Floodgate 是選用的軟依賴。當它已安裝、且 AceLib 判定某位玩家是基岩版客戶端時，AceEconomy 會把聊天訊息裡的點擊動作（執行指令、建議指令、開啟連結、複製文字）換成可讀提示，例如 `[基岩版：此處按鈕無法使用，請手動執行：/baltop 1]`。Java 玩家永遠收到帶可點擊按鈕的原始訊息。
+
+### 安裝與確認
+
+1. 依照 Floodgate 文件，在伺服器或代理上裝好 Geyser + Floodgate。
+2. 啟動伺服器；AceEconomy 會自動接上基岩版偵測，不需要額外設定。
+3. 用基岩版客戶端執行一個回覆帶按鈕的指令（例如 `/baltop`），確認提示文字可讀。
+
+### 限制
+
+- 只有點擊動作會降級；hover 文字在基岩版不保證顯示。
+- Floodgate 沒裝、被停用或查詢失敗時，所有玩家都收到原始訊息——啟動流程與 Java 行為完全不變。
+- 提示文字來自 `lang/<locale>.yml` 的 `message.bedrock.fallback.*` 鍵；payload 以純文字插入，不會被當成格式解析。
 
 ## 相關指南
 

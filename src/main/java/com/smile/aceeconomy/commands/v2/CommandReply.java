@@ -18,7 +18,9 @@ import java.util.Map;
  * region-safe dispatch.</p>
  *
  * <p>Localized replies: player messages are rendered as Adventure Components via
- * {@link ConfigLangAdapter#renderMessage(String, Map)} (MiniMessage with user-value escaping);
+ * {@link ConfigLangAdapter#renderMessage(String, Map)} (MiniMessage with user-value escaping)
+ * and delivered through {@link ConfigLangAdapter#sendChatWithFallback} so Bedrock
+ * players get readable click hints while Java players receive the original Component;
  * console messages use {@link ConfigLangAdapter#plainMessage(String, Map)} so the output is
  * plain text without MiniMessage tags.</p>
  */
@@ -53,7 +55,7 @@ public final class CommandReply {
                 }
                 if (bukkitPlayer != null && bukkitPlayer.isOnline()) {
                     try {
-                        bukkitPlayer.sendMessage(comp);
+                        messages.sendChatWithFallback(bukkitPlayer, comp, null);
                         return;
                     } catch (IllegalStateException | UnsupportedOperationException ignored) {
                     }
@@ -84,7 +86,7 @@ public final class CommandReply {
                 }
                 if (bukkitPlayer != null && bukkitPlayer.isOnline()) {
                     try {
-                        bukkitPlayer.sendMessage(component);
+                        messages.sendChatWithFallback(bukkitPlayer, component, null);
                         return;
                     } catch (IllegalStateException | UnsupportedOperationException ignored) {
                     }

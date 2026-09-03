@@ -13,6 +13,7 @@ Start with the symptom visible in the server console or in-game. Copy the releva
 - [MySQL or Hikari connection failure](#mysql-or-hikari-connection-failure)
 - [Discord notifications do not arrive](#discord-notifications-do-not-arrive)
 - [Vault or PlaceholderAPI integration is unavailable](#vault-or-placeholderapi-integration-is-unavailable)
+- [Bedrock hints do not appear](#bedrock-hints-do-not-appear)
 - [Configuration reload fails](#configuration-reload-fails)
 - [Reload, restart, or stop behaves unexpectedly](#reload-restart-or-stop-behaves-unexpectedly)
 - [A balance or transaction looks wrong](#a-balance-or-transaction-looks-wrong)
@@ -110,6 +111,14 @@ Verify the URL locally and check surrounding Discord messages. Never include the
 **Check first:** confirm the optional plugin itself is enabled, then restart the server so AceEconomy restarts. Vault uses the configured default currency. PlaceholderAPI uses the `aceeco` namespace, including `%aceeco_balance%`, `%aceeco_balance_formatted%`, `%aceeco_balance_<currency>%`, and `%aceeco_balance_<currency>_formatted%`.
 
 **Fix:** install or enable the matching optional plugin and restart. If core economy commands work while the integration does not, keep the core service open and troubleshoot the optional plugin separately.
+
+## Bedrock hints do not appear
+
+**Possible causes:** Floodgate is missing or disabled, the player is a Java client, or the lookup failed and the message fell back to the original.
+
+**Check first:** confirm Floodgate is installed and enabled, and that the affected player joins through Bedrock. Java players intentionally keep working buttons and never see the hint.
+
+**Fix:** install or enable Floodgate and restart. Do not claim full Bedrock support: hover text is not guaranteed, and only click actions degrade. If Floodgate is absent, the original messages are the expected behaviour, not an error.
 
 ## Configuration reload fails
 

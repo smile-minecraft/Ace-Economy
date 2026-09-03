@@ -4,21 +4,26 @@ import com.smile.acelib.config.ConfigManager;
 import com.smile.acelib.config.ConfigSchema;
 import com.smile.acelib.config.LangManager;
 import com.smile.acelib.message.MessageService;
+import com.smile.acelib.bedrock.BedrockService;
+import com.smile.aceeconomy.ports.BedrockDetector;
 
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.TextComponent;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 
+import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.logging.Level;
 
 /**
@@ -37,6 +42,11 @@ import java.util.logging.Level;
  *   <li>render messages through {@link MessageService#formatComponent} (typed
  *       substitution with user-value escaping and MiniMessage parsing); plain text
  *       is projected from the resulting Component without a second parse;</li>
+ *   <li>deliver player chat through the Bedrock-aware
+ *       {@code sendChatWithFallback} path when a {@link BedrockService} is
+ *       attached, so Bedrock click actions degrade to readable hints while
+ *       Java output stays untouched; without an attached service every player
+ *       keeps the original Component (Floodgate-absent behaviour);</li>
  *   <li>resolve the active locale from {@code settings.locale} (only
  *       {@code en_US}, {@code zh_TW}, {@code zh_CN});</li>
  *   <li>reload while preserving the last valid snapshot and returning a
@@ -57,16 +67,116 @@ public final class ConfigLangAdapter {
     private volatile ConfigManager configManager;
     private volatile LangManager langManager;
     private volatile MessageService messageService;
+    private volatile BedrockService bedrockService;
+    private volatile BedrockDetector bedrockDetector;
     private final Locale defaultLocale;
     private final Object lock = new Object();
 
     public ConfigLangAdapter(@NotNull JavaPlugin plugin, @NotNull Locale defaultLocale) {
+        this(plugin, defaultLocale, null);
+    }
+
+    /**
+     * Build the adapter with an already-resolved {@link BedrockService}.
+     *
+     * <p>A {@code null} service means Bedrock lookup is unavailable (Floodgate
+     * absent or AceLib not ready yet): the two-parameter {@link MessageService}
+     * is used and every player receives the original Component. Use
+     * {@link #attachBedrockService(BedrockService)} once the ready facade is
+     * available; {@link #load()} and {@link #reload()} keep the attached
+     * service across snapshot swaps.</p>
+     */
+    public ConfigLangAdapter(@NotNull JavaPlugin plugin, @NotNull Locale defaultLocale,
+                             @Nullable BedrockService bedrockService) {
         this.plugin = Objects.requireNonNull(plugin, "plugin");
         this.defaultLocale = Objects.requireNonNull(defaultLocale, "defaultLocale");
+        this.bedrockService = bedrockService;
+        this.bedrockDetector = new AceLibBedrockDetector(bedrockService);
         ConfigSchema schema = V2ConfigSchema.build();
         this.configManager = new ConfigManager(plugin, "config.yml", schema, V2ConfigSchema.V2);
         this.langManager = new LangManager(plugin, defaultLocale);
-        this.messageService = new MessageService(plugin, langManager);
+        this.messageService = newMessageService(langManager);
+    }
+
+    private MessageService newMessageService(LangManager lang) {
+        BedrockService bedrock = bedrockService;
+        if (bedrock == null) {
+            return new MessageService(plugin, lang);
+        }
+        return new MessageService(plugin, lang, bedrock);
+    }
+
+    /**
+     * Attach (or detach with {@code null}) the Bedrock lookup service and
+     * rebuild the message pipeline on the current language snapshot.
+     *
+     * <p>Used when the ready AceLib facade becomes available after this
+     * adapter was constructed; safe to call at any time and idempotent.</p>
+     */
+    public void attachBedrockService(@Nullable BedrockService bedrock) {
+        synchronized (lock) {
+            this.bedrockService = bedrock;
+            this.bedrockDetector = new AceLibBedrockDetector(bedrock);
+            this.messageService = newMessageService(langManager);
+        }
+    }
+
+    /** Return the currently attached Bedrock service, or {@code null} when unavailable. */
+    @Nullable
+    public BedrockService bedrockService() {
+        return bedrockService;
+    }
+
+    /**
+     * Return the injectable Bedrock predicate backing {@link #isBedrockPlayer(UUID)}.
+     * Command and GUI surfaces can depend on this port instead of Floodgate types.
+     */
+    public BedrockDetector bedrockDetector() {
+        return bedrockDetector;
+    }
+
+    /**
+     * Return {@code true} only when the player is positively identified as a
+     * Bedrock client. Any lookup failure — including no attached service —
+     * fails closed to {@code false}.
+     */
+    public boolean isBedrockPlayer(@Nullable UUID playerId) {
+        try {
+            return bedrockDetector.isBedrock(playerId);
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    /**
+     * Send a chat Component to one player, degrading click actions to readable
+     * locale hints for positively identified Bedrock players. Java players,
+     * unknown players and the Floodgate-absent state receive the original
+     * Component untouched. Null player/message and offline players are silent
+     * no-ops, matching the underlying service contract.
+     */
+    public void sendChatWithFallback(@Nullable Player player, @Nullable Component message,
+                                     @Nullable Locale localeOverride) {
+        messageService.sendChatWithFallback(player, message, localeOverride);
+    }
+
+    /**
+     * Action-bar variant of {@link #sendChatWithFallback(Player, Component, Locale)};
+     * same Bedrock degradation and same no-op contract.
+     */
+    public void sendActionBarWithFallback(@Nullable Player player, @Nullable Component message,
+                                          @Nullable Locale localeOverride) {
+        messageService.sendActionBarWithFallback(player, message, localeOverride);
+    }
+
+    /**
+     * Title variant of {@link #sendChatWithFallback(Player, Component, Locale)};
+     * title and subtitle are degraded independently for Bedrock players.
+     */
+    public void sendTitleWithFallback(@Nullable Player player, @Nullable Component title,
+                                      @Nullable Component subtitle,
+                                      @Nullable Locale localeOverride) {
+        messageService.sendTitleWithFallback(player, title, subtitle, localeOverride);
     }
 
     private ConfigManager newCandidateConfigManager() {
@@ -293,7 +403,7 @@ public final class ConfigLangAdapter {
                 } catch (Throwable ignored) {}
                 throw new IllegalStateException(summary);
             }
-            MessageService candidateService = new MessageService(plugin, candidateLang);
+            MessageService candidateService = newMessageService(candidateLang);
             this.configManager = candidate;
             this.langManager = candidateLang;
             this.messageService = candidateService;
@@ -896,7 +1006,7 @@ public final class ConfigLangAdapter {
             }
 
             // Both candidates succeeded — single atomic swap (keep candidate side-effect files as persisted)
-            MessageService candidateService = new MessageService(plugin, candidateLang);
+            MessageService candidateService = newMessageService(candidateLang);
             this.configManager = candidateConfig;
             this.langManager = candidateLang;
             this.messageService = candidateService;

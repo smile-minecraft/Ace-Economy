@@ -6,6 +6,13 @@
 
 message:
   prefix: "<gold>[AceEconomy]</gold> <gray>"
+  bedrock:
+    fallback:
+      run_command: "<gray>[基岩版：此处按钮无法使用，请手动执行：<white><payload></white>]</gray>"
+      suggest_command: "<gray>[基岩版：建议指令，请手动复制执行：<white><payload></white>]</gray>"
+      open_url: "<gray>[基岩版：游戏内无法打开链接 — 网址：<white><payload></white>]</gray>"
+      copy_to_clipboard: "<gray>[基岩版：请手动复制以下文字：<white><payload></white>]</gray>"
+      unknown: "<gray>[基岩版：此处不支持此操作：<white><payload></white>]</gray>"
 
 general:
   no-permission: "<red>您没有使用此指令的权限！</red>"
