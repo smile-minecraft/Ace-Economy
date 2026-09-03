@@ -35,9 +35,16 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -285,5 +292,105 @@ class ReloadDisplayRollbackTest {
         Mockito.when(inventory.addItem(Mockito.any(ItemStack.class)))
                 .thenReturn(new HashMap<>());
         return player;
+    }
+
+    /**
+     * Rollback interleave: a session built from the failed candidate after the
+     * layout swap but before the failing {@code invalidateAll} finishes must
+     * not survive the rollback. Otherwise a new-size session keeps acting
+     * under the restored old resolver. Sessions proven to predate the swap
+     * stay untouched.
+     */
+    @Test
+    void rollbackDropsSessionOpenedAfterSwapWhenInvalidateFails() throws Exception {
+        CompositionRoot root = newRoot();
+        EconomyTestHarness harness =
+                new EconomyTestHarness(DebtPolicy.disabled(), Amount.zero(2));
+        CurrencyRegistry oldReg = harness.currencies();
+        CurrencyRegistry newReg = CurrencyRegistry.of(List.of(
+                Currency.define("dollar", "Dollar", "€", 2, true),
+                Currency.define("token", "Token", "T", 0, false)));
+        CurrencyDisplayHolder holder = new CurrencyDisplayHolder(oldReg);
+        EconomyService realEconomy = harness.service();
+        FakeGuiService guiService = FakeGuiService.available();
+        RecordingFoliaContext folia = new RecordingFoliaContext();
+        StubBankGuiUseCase useCase = new StubBankGuiUseCase();
+        BankGuiLayout oldLayout =
+                BankGuiConfigParser.parse(null, Set.of("dollar", "token"));
+        BankGuiLayout newLayout = new36Layout();
+        V2BankGuiSession gui = Mockito.spy(new V2BankGuiSession(
+                guiService, folia, useCase, BankGuiActions.resolver(oldLayout)));
+        CountDownLatch invalidateEntered = new CountDownLatch(1);
+        CountDownLatch invalidateRelease = new CountDownLatch(1);
+        Mockito.doAnswer(invocation -> {
+            invalidateEntered.countDown();
+            assertTrue(invalidateRelease.await(10, TimeUnit.SECONDS),
+                    "the post-swap open must land while invalidateAll is parked");
+            throw new RuntimeException("invalidate down");
+        }).when(gui).invalidateAll();
+
+        setField(root, "currencies", oldReg);
+        setField(root, "displayHolder", holder);
+        setField(root, "economy", realEconomy);
+        setField(root, "bankGui", gui);
+        setField(root, "currentLayout", oldLayout);
+
+        // A pre-reload session proven to predate the swap.
+        Player oldPlayer = mockPlayer();
+        V2BankGuiSession.OpenOutcome oldOpen = gui.open(
+                oldPlayer, "Bank", oldLayout.size(), oldLayout.protectedSlots());
+        assertTrue(oldOpen.success());
+
+        ReloadRuntime runtime = runtimeOf(root);
+        ExecutorService reloader = Executors.newSingleThreadExecutor();
+        AtomicReference<Throwable> reloadError = new AtomicReference<>();
+        try {
+            Future<?> reloading = reloader.submit(() -> {
+                try {
+                    runtime.applyApproved(displayOnlyPlan(newReg), newLayout);
+                } catch (Throwable t) {
+                    reloadError.compareAndSet(null, t);
+                }
+                return null;
+            });
+            assertTrue(invalidateEntered.await(10, TimeUnit.SECONDS),
+                    "reload must reach invalidateAll");
+
+            // The interleaved open binds the swapped (failed) generation and
+            // completes after the invalidation snapshot but before its failure.
+            Player newPlayer = mockPlayer();
+            V2BankGuiSession.OpenOutcome leaked = gui.open(
+                    newPlayer, "Bank", newLayout.size(), newLayout.protectedSlots(),
+                    gui.layoutGeneration());
+            assertTrue(leaked.success(), "the interleaved open binds the swapped layout");
+            assertEquals(36, leaked.session().size());
+
+            invalidateRelease.countDown();
+            reloading.get(10, TimeUnit.SECONDS);
+            assertTrue(reloadError.get() instanceof RuntimeException
+                            && "invalidate down".equals(reloadError.get().getMessage()),
+                    "the post-swap failure must propagate, got " + reloadError.get());
+
+            // The rollback restores every reference and drops the leaked
+            // new-size session, while the pre-swap session keeps working under
+            // the restored old rules.
+            assertSame(oldReg, holder.get());
+            assertSame(oldReg, getField(root, "currencies"));
+            assertSame(oldLayout, getField(root, "currentLayout"));
+            assertFalse(guiService.getActiveSession(newPlayer.getUniqueId()).isSuccess(),
+                    "the session built from the failed candidate must be closed by the rollback");
+            V2BankGuiSession.ClickOutcome leakedClick = gui.handleClick(
+                    newPlayer.getUniqueId(), leaked.session().generation(), 13);
+            assertTrue(leakedClick.isRejected(),
+                    "the leaked generation must no longer act, got " + leakedClick.reason());
+            V2BankGuiSession.ClickOutcome oldClick = gui.handleClick(
+                    oldPlayer.getUniqueId(), oldOpen.session().generation(), 13);
+            assertTrue(oldClick.isSuccess(),
+                    "the pre-swap session must keep working under the restored layout, got "
+                            + oldClick.reason());
+            assertEquals(500L, useCase.lastAmount);
+        } finally {
+            reloader.shutdownNow();
+        }
     }
 }

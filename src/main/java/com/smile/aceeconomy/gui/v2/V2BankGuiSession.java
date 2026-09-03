@@ -51,6 +51,10 @@ public final class V2BankGuiSession {
 
     private final Map<UUID, Player> players = new ConcurrentHashMap<>();
     private final Map<UUID, GuiSession> sessions = new ConcurrentHashMap<>();
+    // Layout generation each locally tracked session was opened under. A reload
+    // bumps layoutGeneration, so a tag newer than the pre-reload value marks a
+    // session built from the failed candidate; rollback drops exactly those.
+    private final Map<UUID, Long> sessionLayoutGenerations = new ConcurrentHashMap<>();
 
     public V2BankGuiSession(@NotNull GuiService guiService,
                             @NotNull FoliaContextExecutor folia,
@@ -88,20 +92,46 @@ public final class V2BankGuiSession {
             return OpenOutcome.failed(result.errorCode(), result.detail());
         }
         if (layoutGeneration.get() != expectedLayoutGeneration) {
+            GuiSession staleSession = result.session();
             try {
-                guiService.closeInventory(player.getUniqueId(), result.session().generation());
+                guiService.closeInventory(player.getUniqueId(), staleSession.generation());
             } catch (Throwable ignored) {
                 // Local bookkeeping below is still cleared; without it a later
                 // click would resolve against the new layout with an old session.
             } finally {
-                players.remove(player.getUniqueId());
-                sessions.remove(player.getUniqueId());
+                dropStaleBookkeeping(player.getUniqueId(), staleSession);
             }
             return OpenOutcome.failed("stale-layout", "bank layout changed during open");
         }
-        players.put(player.getUniqueId(), player);
+        // Dependents last: a stale cleanup landing between these puts must
+        // already see the new session so it keeps the whole entry.
         sessions.put(player.getUniqueId(), result.session());
+        sessionLayoutGenerations.put(player.getUniqueId(), expectedLayoutGeneration);
+        players.put(player.getUniqueId(), player);
         return OpenOutcome.success(result.session());
+    }
+
+    /**
+     * Drop local bookkeeping for a stale open without touching a newer retry.
+     * A retry that already rebuilt a session carries a larger GuiService
+     * generation, so only entries at or below the stale generation are
+     * dropped; anything newer (same player, rebuilt after the swap) is kept,
+     * and the player entry is kept with it so the next click still dispatches.
+     */
+    private void dropStaleBookkeeping(UUID playerUuid, GuiSession staleSession) {
+        sessions.computeIfPresent(playerUuid, (key, current) -> {
+            if (current == staleSession) {
+                return null;
+            }
+            if (staleSession != null && current.generation() <= staleSession.generation()) {
+                return null;
+            }
+            return current;
+        });
+        if (!sessions.containsKey(playerUuid)) {
+            sessionLayoutGenerations.remove(playerUuid);
+            players.remove(playerUuid);
+        }
     }
 
     /**
@@ -373,8 +403,15 @@ public final class V2BankGuiSession {
         if (!result.isSuccess()) {
             return CloseOutcome.rejected(result.errorCode());
         }
-        players.remove(playerUuid);
-        sessions.remove(playerUuid);
+        // Conditional for the same reason as the stale-open cleanup: a
+        // concurrent reopen already replaced the entry with a larger
+        // generation, and the unconditional remove would delete it.
+        sessions.computeIfPresent(playerUuid, (key, current) ->
+                current.generation() == generation ? null : current);
+        if (!sessions.containsKey(playerUuid)) {
+            sessionLayoutGenerations.remove(playerUuid);
+            players.remove(playerUuid);
+        }
         return CloseOutcome.closed();
     }
 
@@ -417,6 +454,7 @@ public final class V2BankGuiSession {
     public int invalidateAll() {
         java.util.List<Map.Entry<UUID, GuiSession>> snapshot =
                 new java.util.ArrayList<>(sessions.entrySet());
+        java.util.Map<UUID, Long> knownTags = new java.util.HashMap<>(sessionLayoutGenerations);
         int dropped = 0;
         for (Map.Entry<UUID, GuiSession> entry : snapshot) {
             UUID uuid = entry.getKey();
@@ -428,9 +466,71 @@ public final class V2BankGuiSession {
             } catch (Throwable ignored) {
                 // Local state below is still cleared; the stale generation can no longer act.
             } finally {
-                players.remove(uuid);
-                sessions.remove(uuid);
+                // Conditional: an open that completed after the snapshot
+                // replaced the entry, and the unconditional remove would
+                // delete the fresh session. The player entry is kept with it.
+                if (sessions.remove(uuid, known)) {
+                    Long knownTag = knownTags.get(uuid);
+                    if (knownTag == null) {
+                        sessionLayoutGenerations.remove(uuid);
+                    } else {
+                        sessionLayoutGenerations.remove(uuid, knownTag);
+                    }
+                    dropped++;
+                }
+                if (!sessions.containsKey(uuid)) {
+                    players.remove(uuid);
+                }
+            }
+        }
+        return dropped;
+    }
+
+    /**
+     * Best-effort rollback cleanup after a failed layout swap. Closes every
+     * session opened from the failed candidate — tags newer than
+     * {@code keepThroughGeneration} up to {@code failedGeneration} — so no
+     * new-size session survives under the restored resolver. Sessions proven
+     * to predate the swap keep working; an untagged entry cannot be proven
+     * old, so it is dropped and the player reopens. Never throws: any failure
+     * is swallowed after clearing what can be cleared, and callers record it
+     * as a suppressed cause on the original failure.
+     *
+     * @return the number of sessions dropped
+     */
+    public int dropSessionsAfterFailedSwap(long keepThroughGeneration, long failedGeneration) {
+        if (failedGeneration <= keepThroughGeneration) {
+            return 0;
+        }
+        java.util.List<Map.Entry<UUID, GuiSession>> snapshot =
+                new java.util.ArrayList<>(sessions.entrySet());
+        int dropped = 0;
+        for (Map.Entry<UUID, GuiSession> entry : snapshot) {
+            UUID uuid = entry.getKey();
+            GuiSession known = entry.getValue();
+            if (sessions.get(uuid) != known) {
+                continue;
+            }
+            Long tag = sessionLayoutGenerations.get(uuid);
+            long vintage = (tag == null) ? Long.MAX_VALUE : tag;
+            if (vintage <= keepThroughGeneration || vintage > failedGeneration) {
+                continue;
+            }
+            try {
+                guiService.closeInventory(uuid, known.generation());
+            } catch (Throwable ignored) {
+                // Local state below is still cleared; the failed generation can no longer act.
+            }
+            if (sessions.remove(uuid, known)) {
+                if (tag == null) {
+                    sessionLayoutGenerations.remove(uuid);
+                } else {
+                    sessionLayoutGenerations.remove(uuid, tag);
+                }
                 dropped++;
+            }
+            if (!sessions.containsKey(uuid)) {
+                players.remove(uuid);
             }
         }
         return dropped;

@@ -37,6 +37,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
@@ -189,6 +190,107 @@ class BankOpenReloadRaceTest {
             assertEquals(36, active.session().size(),
                     "the queued open read the old 27-slot layout but ran after the reload: "
                             + "it must not build an old-version session");
+        } finally {
+            reloader.shutdownNow();
+        }
+    }
+
+    /**
+     * Post-check path: the reload lands while {@code openInventory} is still
+     * running, so the pre-check cannot see it. The just-created stale session
+     * must be dropped instead of left behind, and the single retry from the
+     * fresh layout must converge on the new size.
+     */
+    @Test
+    void openInventoryInFlightReloadIsDroppedAndRetriedFromFreshLayout() throws Exception {
+        EconomyTestHarness harness =
+                new EconomyTestHarness(DebtPolicy.disabled(), Amount.zero(2));
+        CurrencyRegistry oldReg = harness.currencies();
+        CurrencyDisplayHolder holder = new CurrencyDisplayHolder(oldReg);
+        FakeGuiService guiService = Mockito.spy(FakeGuiService.available());
+        // Park the first openInventory AFTER the session is created, so the
+        // reload lands strictly between session creation and the post-check.
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicBoolean first = new AtomicBoolean(true);
+        Mockito.doAnswer(invocation -> {
+            GuiResult result = (GuiResult) invocation.callRealMethod();
+            if (first.getAndSet(false)) {
+                entered.countDown();
+                assertTrue(release.await(10, TimeUnit.SECONDS),
+                        "reload must run while openInventory is in flight");
+            }
+            return result;
+        }).when(guiService).openInventory(Mockito.any());
+        RecordingFoliaContext folia = new RecordingFoliaContext();
+        StubBankGuiUseCase useCase = new StubBankGuiUseCase();
+        BankGuiLayout oldLayout = oldLayout();
+        BankGuiLayout newLayout = newLayout();
+        V2BankGuiSession session = new V2BankGuiSession(
+                guiService, folia, useCase, BankGuiActions.resolver(oldLayout));
+
+        CompositionRoot root = new CompositionRoot(Mockito.mock(JavaPlugin.class));
+        setField(root, "currencies", oldReg);
+        setField(root, "displayHolder", holder);
+        setField(root, "economy", harness.service());
+        setField(root, "bankGui", session);
+        setField(root, "currentLayout", oldLayout);
+        ReloadRuntime runtime = runtimeOf(root);
+
+        Supplier<BankGuiLayout> layouts = () -> {
+            try {
+                return (BankGuiLayout) getField(root, "currentLayout");
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        };
+
+        ConfigLangAdapter messages = Mockito.mock(ConfigLangAdapter.class);
+        Mockito.when(messages.plainMessage(Mockito.anyString(), Mockito.anyMap()))
+                .thenReturn("Bank");
+        UUID id = UUID.randomUUID();
+        Player player = Mockito.mock(Player.class);
+        Mockito.when(player.getUniqueId()).thenReturn(id);
+
+        ExecutorService reloader = Executors.newSingleThreadExecutor();
+        AtomicReference<Throwable> reloadError = new AtomicReference<>();
+        try (MockedStatic<Bukkit> bukkit = Mockito.mockStatic(Bukkit.class)) {
+            bukkit.when(() -> Bukkit.getPlayer(id)).thenReturn(player);
+            // Direct executor: the open runs on the test thread (where the
+            // static Bukkit stub is visible) and parks inside openInventory;
+            // the reload runs on the worker thread, which never touches
+            // Bukkit. The interleaving is the in-flight-open race.
+            ProductionAdapters.Bank bank =
+                    new ProductionAdapters.Bank(session, layouts, messages, Runnable::run);
+            Future<?> reloading = reloader.submit(() -> {
+                try {
+                    assertTrue(entered.await(10, TimeUnit.SECONDS));
+                    runtime.applyApproved(
+                            new CurrencyReloadPlan.Classification(
+                                    CurrencyReloadPlan.Disposition.DISPLAY_ONLY, newRegistry(),
+                                    List.of("currency display changed: dollar")),
+                            newLayout);
+                } catch (Throwable t) {
+                    reloadError.compareAndSet(null, t);
+                } finally {
+                    release.countDown();
+                }
+                return null;
+            });
+
+            bank.open(id, "someone");
+            reloading.get(10, TimeUnit.SECONDS);
+            assertTrue(reloadError.get() == null,
+                    "reload must succeed, got " + reloadError.get());
+
+            GuiResult active = guiService.getActiveSession(id);
+            assertTrue(active.isSuccess() && active.session() != null,
+                    "the retried open must converge on the new layout instead of vanishing");
+            assertEquals(36, active.session().size(),
+                    "the open was in flight when the reload swapped 27 slots for 36: "
+                            + "the stale session must be dropped and the retry must build new");
+            Mockito.verify(guiService, Mockito.times(2))
+                    .openInventory(Mockito.any());
         } finally {
             reloader.shutdownNow();
         }

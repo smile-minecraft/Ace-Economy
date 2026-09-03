@@ -64,7 +64,7 @@ Three settings are restart-only and are never applied by reload. If `settings.ma
 
 The reply tells you what happened. A failure shows the refusal reason — for example which currency ID was added or which scale changed — so you know whether to fix the file or schedule a restart. A success appends notes: what was hot-applied (display text, layout, configuration and language) and what still needs a restart.
 
-A successful reload also closes every open bank session before the new layout takes effect, so no click can run with half old, half new rules; affected players simply reopen `/bank`.
+A successful reload also closes every open bank session before the new layout takes effect, so no click can run with half old, half new rules; affected players simply reopen `/bank`. An open that races the reload is rejected and retried once from the fresh layout; if the retry also misses, the open fails and the player simply reopens `/bank`.
 
 A successful reload also drops the whole synchronous balance cache. That is accepted behaviour, not a bug: Vault reads never block on storage, so until the next persisted read or successful write re-primes an entry, a balance query falls back to the safe default `0.0`. There is no synchronous refill, because refilling on the calling thread would reintroduce the blocking I/O the cache exists to avoid.
 

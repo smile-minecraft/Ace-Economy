@@ -496,6 +496,7 @@ public final class CompositionRoot {
                 CurrencyRegistry oldDisplay = displayHolder.get();
                 CurrencyRegistry oldCurrencies = currencies;
                 BankGuiLayout oldLayout = currentLayout;
+                long layoutGenerationBefore = bankGui != null ? bankGui.layoutGeneration() : 0L;
                 boolean displaySwapped = false;
                 boolean economySwapped = false;
                 boolean layoutSwapped = false;
@@ -539,6 +540,10 @@ public final class CompositionRoot {
                     // back throws, the layout reference is still restored so later opens
                     // cannot keep reading the failed candidate.
                     if (layoutSwapped && bankGui != null && oldLayout != null) {
+                        // The failed candidate bumped the generation before it
+                        // failed; capture it now so the cleanup below can tell
+                        // candidate sessions apart from pre-swap ones.
+                        long failedGeneration = bankGui.layoutGeneration();
                         currentLayout = oldLayout;
                         try {
                             bankGui.replaceLayout(BankGuiActions.resolver(oldLayout));
@@ -547,6 +552,19 @@ public final class CompositionRoot {
                             // self-suppression is illegal, so only attach distinct causes.
                             if (rollbackFailure != failure) {
                                 failure.addSuppressed(rollbackFailure);
+                            }
+                        }
+                        // Sessions opened from the failed candidate after the
+                        // swap (in particular after the invalidation snapshot)
+                        // must not survive under the restored resolver with
+                        // their new size. Best-effort: it never masks the
+                        // original failure, which stays recorded below.
+                        try {
+                            bankGui.dropSessionsAfterFailedSwap(
+                                    layoutGenerationBefore, failedGeneration);
+                        } catch (Throwable cleanupFailure) {
+                            if (cleanupFailure != failure) {
+                                failure.addSuppressed(cleanupFailure);
                             }
                         }
                     }
