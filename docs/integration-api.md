@@ -62,6 +62,11 @@ The PAPI namespace is `aceeco`. Placeholder parameters are case-insensitive in t
 | `%aceeco_balance_formatted%` | Default-currency balance with its symbol. | `$100.00` |
 | `%aceeco_balance_<currency>%` | Raw balance in the named currency. | `%aceeco_balance_token%` → `7` |
 | `%aceeco_balance_<currency>_formatted%` | Named-currency balance with its symbol. | `%aceeco_balance_token_formatted%` → `ⓒ7` |
+| `%aceeco_rank%` / `%aceeco_rank_<currency>%` | 1-based rank of the requesting player in the default / named currency leaderboard. `null` when there is no fresh snapshot or the player is not on the board. | `%aceeco_rank%` → `3` |
+| `%aceeco_top_name_<n>%` / `%aceeco_top_name_<n>_<currency>%` | Owner name of the n-th leaderboard row (1-based, `1 <= n <= 100`). | `%aceeco_top_name_1%` → `Steve` |
+| `%aceeco_top_balance_<n>%` / `%aceeco_top_balance_<n>_<currency>%` | Raw balance of the n-th leaderboard row. | `%aceeco_top_balance_1%` → `950.00` |
+| `%aceeco_currency_name_<id>%` | Display name of a configured currency. | `%aceeco_currency_name_dollar%` → `Gold Coin` |
+| `%aceeco_currency_symbol_<id>%` | Symbol of a configured currency. | `%aceeco_currency_symbol_dollar%` → `$` |
 
 Replace `<currency>` with the internal currency ID, not the display name. For the default `config.yml`, these are ready to copy:
 
@@ -70,9 +75,19 @@ Replace `<currency>` with the internal currency ID, not the display name. For th
 %aceeco_balance_formatted%
 %aceeco_balance_token%
 %aceeco_balance_token_formatted%
+%aceeco_rank%
+%aceeco_rank_token%
+%aceeco_top_name_1%
+%aceeco_top_name_1_token%
+%aceeco_top_balance_1%
+%aceeco_top_balance_1_token%
+%aceeco_currency_name_dollar%
+%aceeco_currency_symbol_dollar%
 ```
 
 `<currency>` must match `[a-z0-9_]+`. Unknown IDs, malformed IDs, unknown placeholder names, missing players, and unavailable accounts resolve to `null`; PlaceholderAPI then keeps the original literal placeholder instead of displaying a false balance.
+
+Rank and top placeholders read the same cached leaderboard snapshot as `/baltop`, so they always sort identically and never trigger a database query. When the snapshot is missing or expired (for example right after startup, before the first refresh), they resolve to `null` — the placeholder stays literal until the next refresh. A player who is not on the board also resolves `rank` to `null`; no rank is ever guessed. `<n>` must be a plain positive integer from `1` to `100`; `0`, negative, non-numeric, or oversized values resolve to `null`, as do positions beyond the end of the board.
 
 ## Currency parameters
 
@@ -118,7 +133,7 @@ For a plugin integration, depend on the public contract rather than implementati
 1. Declare the relevant external plugin as optional when your plugin can run without it.
 2. Look up Vault `Economy` at runtime and handle `null`.
 3. Use `OfflinePlayer`/UUID-aware calls and inspect `EconomyResponse`.
-4. Put the four PAPI forms in user-facing configuration or messages exactly as documented.
+4. Put the PAPI forms in user-facing configuration or messages exactly as documented.
 5. Leave secrets and webhook URLs in local configuration only.
 
 ## Related guides

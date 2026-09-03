@@ -62,17 +62,32 @@ PAPI 的命名空间是 `aceeco`。解析器对参数不区分大小写，但配
 | `%aceeco_balance_formatted%` | 带符号的默认货币余额。 | `$100.00` |
 | `%aceeco_balance_<currency>%` | 具名货币的原始余额。 | `%aceeco_balance_token%` → `7` |
 | `%aceeco_balance_<currency>_formatted%` | 带符号的具名货币余额。 | `%aceeco_balance_token_formatted%` → `ⓒ7` |
+| `%aceeco_rank%` / `%aceeco_rank_<currency>%` | 请求玩家在默认／具名货币排行榜中的名次（从 1 开始）。没有有效快照，或玩家不在榜上时返回 `null`。 | `%aceeco_rank%` → `3` |
+| `%aceeco_top_name_<n>%` / `%aceeco_top_name_<n>_<currency>%` | 排行榜第 n 名的玩家名（从 1 开始，`1 <= n <= 100`）。 | `%aceeco_top_name_1%` → `Steve` |
+| `%aceeco_top_balance_<n>%` / `%aceeco_top_balance_<n>_<currency>%` | 排行榜第 n 名的原始余额。 | `%aceeco_top_balance_1%` → `950.00` |
+| `%aceeco_currency_name_<id>%` | 已配置货币的显示名称。 | `%aceeco_currency_name_dollar%` → `Gold Coin` |
+| `%aceeco_currency_symbol_<id>%` | 已配置货币的符号。 | `%aceeco_currency_symbol_dollar%` → `$` |
 
-把 `<currency>` 换成内部货币 ID，而不是显示名称。以默认的 `config.yml` 来说，下面这四种形式可以直接复制：
+把 `<currency>` 换成内部货币 ID，而不是显示名称。以默认的 `config.yml` 来说，下面这些形式可以直接复制：
 
 ```text
 %aceeco_balance%
 %aceeco_balance_formatted%
 %aceeco_balance_token%
 %aceeco_balance_token_formatted%
+%aceeco_rank%
+%aceeco_rank_token%
+%aceeco_top_name_1%
+%aceeco_top_name_1_token%
+%aceeco_top_balance_1%
+%aceeco_top_balance_1_token%
+%aceeco_currency_name_dollar%
+%aceeco_currency_symbol_dollar%
 ```
 
 `<currency>` 必须匹配 `[a-z0-9_]+`。未知的 ID、格式错误的 ID、未知的占位符名称、缺少玩家，以及不可用的账户，都会解析为 `null`；PlaceholderAPI 会保留原始文字，而不是显示一个假的余额。
+
+排名与前 N 名占位符读取的是与 `/baltop` 同一份排行榜缓存快照，因此排序永远一致，也永远不会触发数据库查询。快照缺失或过期时（例如刚启动、第一次刷新之前），它们会解析为 `null`，占位符保持原文直到下一次刷新。不在榜上的玩家，`rank` 也返回 `null`，绝不会猜测一个名次。`<n>` 必须是 `1` 到 `100` 的纯正整数；`0`、负数、非数字或超大数值都会返回 `null`，超出榜单长度的位置同样返回 `null`。
 
 ## 货币参数
 
@@ -118,7 +133,7 @@ currencies:
 1. 插件没有外部整合也能运行时，把相关的外部插件声明为可选依赖。
 2. 运行时查询 Vault 的 `Economy` 并处理 `null`。
 3. 使用 `OfflinePlayer`／UUID 相关的调用，并检查 `EconomyResponse`。
-4. 把四种 PAPI 形式，按文档原样放进面向用户的配置或消息里。
+4. 把 PAPI 形式，按文档原样放进面向用户的配置或消息里。
 5. 密钥和 webhook 网址只放在本机配置里。
 
 ## 相关指南

@@ -120,4 +120,180 @@ class PlaceholderResolverTest {
         assertEquals("1.5", gemResolver.resolve(player(uuid, "A"), "balance_gem"));
         assertEquals("*1.5", gemResolver.resolve(player(uuid, "A"), "balance_gem_formatted"));
     }
+
+    // --- Rank / top / currency placeholders (snapshot-backed, zero I/O) ---
+
+    private PlaceholderResolver snapshotResolver(
+            com.smile.aceeconomy.infrastructure.operations.LeaderboardCache cache,
+            java.time.Duration ttl,
+            com.smile.aceeconomy.ports.Clock clock,
+            EconomyApi boundApi) {
+        return new PlaceholderResolver(boundApi, harness.currencies(), cache, ttl, clock);
+    }
+
+    private com.smile.aceeconomy.infrastructure.operations.LeaderboardCache seededCache(
+            String currencyId, java.time.Instant now, UUID first, UUID second) {
+        com.smile.aceeconomy.infrastructure.operations.LeaderboardCache cache =
+                new com.smile.aceeconomy.infrastructure.operations.LeaderboardCache();
+        cache.put(currencyId, java.util.List.of(
+                new com.smile.aceeconomy.operations.LeaderboardEntry(1, first, "Alice",
+                        harness.currencies().get(currencyId).amountOf(new java.math.BigDecimal("300"))),
+                new com.smile.aceeconomy.operations.LeaderboardEntry(2, second, "Bob",
+                        harness.currencies().get(currencyId).amountOf(new java.math.BigDecimal("100")))),
+                now);
+        return cache;
+    }
+
+    @Test
+    void rankResolvesFromSnapshot() {
+        UUID first = UUID.randomUUID();
+        UUID second = UUID.randomUUID();
+        java.time.Instant now = java.time.Instant.EPOCH.plusSeconds(60);
+        PlaceholderResolver r = snapshotResolver(
+                seededCache("dollar", now, first, second),
+                java.time.Duration.ofMinutes(5), () -> now, api);
+        assertEquals("1", r.resolve(player(first, "Alice"), "rank"));
+        assertEquals("2", r.resolve(player(second, "Bob"), "rank"));
+    }
+
+    @Test
+    void rankNamedCurrencyResolvesFromSnapshot() {
+        UUID first = UUID.randomUUID();
+        UUID second = UUID.randomUUID();
+        java.time.Instant now = java.time.Instant.EPOCH.plusSeconds(60);
+        com.smile.aceeconomy.infrastructure.operations.LeaderboardCache cache =
+                new com.smile.aceeconomy.infrastructure.operations.LeaderboardCache();
+        cache.put("token", java.util.List.of(
+                new com.smile.aceeconomy.operations.LeaderboardEntry(1, first, "Alice",
+                        harness.currencies().get("token").amountOf(9)),
+                new com.smile.aceeconomy.operations.LeaderboardEntry(2, second, "Bob",
+                        harness.currencies().get("token").amountOf(3))),
+                now);
+        PlaceholderResolver r = snapshotResolver(
+                cache, java.time.Duration.ofMinutes(5), () -> now, api);
+        assertEquals("2", r.resolve(player(second, "Bob"), "rank_token"));
+    }
+
+    @Test
+    void rankPlayerAbsentFromSnapshotReturnsNull() {
+        UUID first = UUID.randomUUID();
+        UUID second = UUID.randomUUID();
+        java.time.Instant now = java.time.Instant.EPOCH.plusSeconds(60);
+        PlaceholderResolver r = snapshotResolver(
+                seededCache("dollar", now, first, second),
+                java.time.Duration.ofMinutes(5), () -> now, api);
+        assertNull(r.resolve(player(UUID.randomUUID(), "Ghost"), "rank"));
+    }
+
+    @Test
+    void topNameAndBalanceResolveFromSnapshot() {
+        UUID first = UUID.randomUUID();
+        UUID second = UUID.randomUUID();
+        java.time.Instant now = java.time.Instant.EPOCH.plusSeconds(60);
+        PlaceholderResolver r = snapshotResolver(
+                seededCache("dollar", now, first, second),
+                java.time.Duration.ofMinutes(5), () -> now, api);
+        assertEquals("Alice", r.resolve(player(first, "Alice"), "top_name_1"));
+        assertEquals("Bob", r.resolve(player(first, "Alice"), "top_name_2"));
+        assertEquals("300.00", r.resolve(player(first, "Alice"), "top_balance_1"));
+        assertEquals("100.00", r.resolve(player(first, "Alice"), "top_balance_2_dollar"));
+        assertEquals("Alice", r.resolve(player(first, "Alice"), "top_name_1_dollar"));
+    }
+
+    @Test
+    void topIndexOutOfRangeOrOversizedReturnsNull() {
+        UUID first = UUID.randomUUID();
+        UUID second = UUID.randomUUID();
+        java.time.Instant now = java.time.Instant.EPOCH.plusSeconds(60);
+        PlaceholderResolver r = snapshotResolver(
+                seededCache("dollar", now, first, second),
+                java.time.Duration.ofMinutes(5), () -> now, api);
+        OfflinePlayer p = player(first, "Alice");
+        assertNull(r.resolve(p, "top_name_0"));
+        assertNull(r.resolve(p, "top_name_3"));
+        assertNull(r.resolve(p, "top_name_101"));
+        assertNull(r.resolve(p, "top_balance_0"));
+        assertNull(r.resolve(p, "top_balance_999"));
+        assertNull(r.resolve(p, "top_name_abc"));
+        assertNull(r.resolve(p, "top_name_"));
+        assertNull(r.resolve(p, "top_balance_-1"));
+    }
+
+    @Test
+    void unknownCurrencyForRankAndTopReturnsNull() {
+        UUID first = UUID.randomUUID();
+        UUID second = UUID.randomUUID();
+        java.time.Instant now = java.time.Instant.EPOCH.plusSeconds(60);
+        PlaceholderResolver r = snapshotResolver(
+                seededCache("dollar", now, first, second),
+                java.time.Duration.ofMinutes(5), () -> now, api);
+        OfflinePlayer p = player(first, "Alice");
+        assertNull(r.resolve(p, "rank_gem"));
+        assertNull(r.resolve(p, "top_name_1_gem"));
+        assertNull(r.resolve(p, "top_balance_1_gem"));
+    }
+
+    @Test
+    void currencyNameAndSymbolResolve() {
+        java.time.Instant now = java.time.Instant.EPOCH.plusSeconds(60);
+        PlaceholderResolver r = snapshotResolver(
+                new com.smile.aceeconomy.infrastructure.operations.LeaderboardCache(),
+                java.time.Duration.ofMinutes(5), () -> now, api);
+        OfflinePlayer p = player(UUID.randomUUID(), "A");
+        assertEquals("Dollar", r.resolve(p, "currency_name_dollar"));
+        assertEquals("$", r.resolve(p, "currency_symbol_dollar"));
+        assertEquals("Token", r.resolve(p, "currency_name_token"));
+        assertEquals("T", r.resolve(p, "currency_symbol_token"));
+        assertNull(r.resolve(p, "currency_name_gem"));
+        assertNull(r.resolve(p, "currency_symbol_gem"));
+        assertNull(r.resolve(p, "currency_name_"));
+        assertNull(r.resolve(p, "currency_symbol_Bad-Id!"));
+    }
+
+    @Test
+    void rankAndTopCacheMissReturnsNullWithoutTouchingApi() {
+        EconomyApi apiMock = mock(EconomyApi.class);
+        java.time.Instant now = java.time.Instant.EPOCH.plusSeconds(60);
+        PlaceholderResolver r = snapshotResolver(
+                new com.smile.aceeconomy.infrastructure.operations.LeaderboardCache(),
+                java.time.Duration.ofMinutes(5), () -> now, apiMock);
+        OfflinePlayer p = player(UUID.randomUUID(), "A");
+        assertNull(r.resolve(p, "rank"));
+        assertNull(r.resolve(p, "top_name_1"));
+        assertNull(r.resolve(p, "top_balance_1"));
+        verifyNoInteractions(apiMock);
+    }
+
+    @Test
+    void expiredSnapshotReturnsNullWithoutTouchingApi() {
+        EconomyApi apiMock = mock(EconomyApi.class);
+        UUID first = UUID.randomUUID();
+        UUID second = UUID.randomUUID();
+        java.time.Instant then = java.time.Instant.EPOCH;
+        java.time.Instant now = then.plus(java.time.Duration.ofMinutes(6));
+        PlaceholderResolver r = snapshotResolver(
+                seededCache("dollar", then, first, second),
+                java.time.Duration.ofMinutes(5), () -> now, apiMock);
+        assertNull(r.resolve(player(first, "Alice"), "rank"));
+        assertNull(r.resolve(player(first, "Alice"), "top_name_1"));
+        verifyNoInteractions(apiMock);
+    }
+
+    @Test
+    void malformedRankAndTopPlaceholdersReturnNull() {
+        UUID first = UUID.randomUUID();
+        UUID second = UUID.randomUUID();
+        java.time.Instant now = java.time.Instant.EPOCH.plusSeconds(60);
+        PlaceholderResolver r = snapshotResolver(
+                seededCache("dollar", now, first, second),
+                java.time.Duration.ofMinutes(5), () -> now, api);
+        OfflinePlayer p = player(first, "Alice");
+        assertNull(r.resolve(p, "rank_"));
+        assertNull(r.resolve(p, "rank_Bad-Id!"));
+        assertNull(r.resolve(p, "top_name_1_Bad-Id!"));
+        assertNull(r.resolve(p, "top_names_1"));
+        assertNull(r.resolve(p, "tops_1"));
+        assertNull(r.resolve(p, "rank2"));
+        assertDoesNotThrow(() -> r.resolve(p, "top_name_1_dollar"));
+    }
 }

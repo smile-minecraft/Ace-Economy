@@ -115,6 +115,10 @@ public final class CompositionRoot {
     private V2BanknoteFactory banknotes;
     private RollbackService rollbacks;
     private BanknoteValidator banknoteValidator;
+    // Shared with the PlaceholderAPI resolver so /baltop and PAPI rank/top placeholders
+    // always read the same cached ranking (same instance, same TTL).
+    private LeaderboardCache leaderboardCache;
+    private Duration leaderboardTtl;
 
     public CompositionRoot(JavaPlugin plugin) {
         this.plugin = java.util.Objects.requireNonNull(plugin, "plugin");
@@ -284,10 +288,13 @@ public final class CompositionRoot {
                 new ProductionAdapters.Withdrawals(api, currencies, banknotes, ioExecutor);
         // Hoisted so the backup/restore service can invalidate the SAME leaderboard cache
         // after a successful restore (single instance, single invalidation boundary).
+        // The fields keep the instance and TTL alive for the PAPI resolver wiring below,
+        // so /baltop and rank/top placeholders sort from the same snapshot.
+        leaderboardCache = new LeaderboardCache();
+        leaderboardTtl = Duration.ofSeconds(integer("leaderboard.cache-time-seconds", 300));
         LeaderboardService leaderboardService = new LeaderboardService(
                 new ProductionAdapters.RepositoryLeaderboardSource(accounts),
-                () -> Instant.now(), new LeaderboardCache(),
-                Duration.ofSeconds(integer("leaderboard.cache-time-seconds", 300)));
+                () -> Instant.now(), leaderboardCache, leaderboardTtl);
         ProductionAdapters.Leaderboards leaderboards = new ProductionAdapters.Leaderboards(
                 leaderboardService,
                 integer("leaderboard.page-size", 10), ioExecutor);
@@ -359,7 +366,18 @@ public final class CompositionRoot {
                     new VaultEconomyLifecycle(new BukkitVaultRegistration(plugin, ServicePriority.Normal), provider)));
         }
         if (Bukkit.getPluginManager().isPluginEnabled("PlaceholderAPI")) {
-            PlaceholderResolver resolver = new PlaceholderResolver(api, currencies);
+            // The resolver shares the leaderboard cache instance (and TTL) with the
+            // /baltop command path, so PAPI rank/top placeholders sort exactly like
+            // the command output. Placeholder callbacks must never do storage I/O,
+            // so a missing snapshot simply resolves to null here.
+            PlaceholderResolver resolver;
+            if (leaderboardCache != null && leaderboardTtl != null) {
+                Clock leaderboardClock = () -> Instant.now();
+                resolver = new PlaceholderResolver(api, currencies, leaderboardCache,
+                        leaderboardTtl, leaderboardClock);
+            } else {
+                resolver = new PlaceholderResolver(api, currencies);
+            }
             AceEconomyExpansion expansion = new AceEconomyExpansion(resolver, plugin.getDescription().getVersion());
             modules.add(new PlaceholderIntegrationModule("placeholderapi", "placeholderapi",
                     new PlaceholderLifecycle(new BukkitPlaceholderRegistration(), expansion)));
