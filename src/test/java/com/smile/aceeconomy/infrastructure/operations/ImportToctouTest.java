@@ -10,10 +10,12 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
+import java.util.List;
 import java.util.UUID;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -118,6 +120,71 @@ class ImportToctouTest {
                 "a file approved by the gate must not turn into a parsed directory, got: "
                         + result.records());
         assertTrue(!result.failures().isEmpty(), "the swap must be reported, got: " + result);
+    }
+
+    @Test
+    void directorySwappedBetweenListAndReadMustBeRefused(@TempDir Path dataFolder) throws Exception {
+        Path dir = importDir(dataFolder);
+        Path sheets = dir.resolve("sheets");
+        Files.createDirectories(sheets);
+        Files.writeString(sheets.resolve("benign.csv"),
+                "uuid,name,balance\n" + VICTIM + ",Victim,10\n", StandardCharsets.UTF_8);
+
+        ImportPathGate.GatedImport gated = ImportPathGate.gate(dataFolder, "sheets", ImportSource.CMI);
+        List<ImportPathGate.GatedImport> members = ImportPathGate.listMembersSecure(gated, "sheets");
+        assertEquals(1, members.size());
+
+        // Whole directory is swapped after enumeration, keeping the same member
+        // name but with attacker content — the stale member snapshot must not be read.
+        deleteTree(sheets);
+        Files.createDirectories(sheets);
+        Files.writeString(sheets.resolve("benign.csv"),
+                "uuid,name,balance\n" + ATTACKER + ",Attacker,999999\n", StandardCharsets.UTF_8);
+
+        assertThrows(ImportPathRejectedException.class,
+                () -> ImportPathGate.readMemberSecure(gated, members.get(0), "sheets/benign.csv"));
+    }
+
+    @Test
+    void memberRewrittenInPlaceMustBeRefused(@TempDir Path dataFolder) throws Exception {
+        Path dir = importDir(dataFolder);
+        Path sheets = dir.resolve("sheets");
+        Files.createDirectories(sheets);
+        Files.writeString(sheets.resolve("benign.csv"),
+                "uuid,name,balance\n" + VICTIM + ",Victim,10\n", StandardCharsets.UTF_8);
+
+        ImportPathGate.GatedImport gated = ImportPathGate.gate(dataFolder, "sheets", ImportSource.CMI);
+        List<ImportPathGate.GatedImport> members = ImportPathGate.listMembersSecure(gated, "sheets");
+        assertEquals(1, members.size());
+
+        // Same member rewritten in place (identity kept, content changed).
+        Files.writeString(sheets.resolve("benign.csv"),
+                "uuid,name,balance\n" + ATTACKER + ",Attacker,999999\n", StandardCharsets.UTF_8);
+
+        assertThrows(ImportPathRejectedException.class,
+                () -> ImportPathGate.readMemberSecure(gated, members.get(0), "sheets/benign.csv"));
+    }
+
+    @Test
+    void fileRewrittenInPlaceMustNotParseAttackerContent(@TempDir Path dataFolder) throws Exception {
+        Path dir = importDir(dataFolder);
+        Path target = dir.resolve("balances.csv");
+        Files.writeString(target,
+                "uuid,name,balance\n" + VICTIM + ",Victim,10\n", StandardCharsets.UTF_8);
+
+        ImportPathGate.GatedImport gated = ImportPathGate.gate(dataFolder, "balances.csv", ImportSource.CMI);
+
+        // In-place rewrite keeps the same filesystem identity but changes the
+        // content (different size); the stale approval must not cover it.
+        Files.writeString(target,
+                "uuid,name,balance\n" + ATTACKER + ",Attacker,999999\n", StandardCharsets.UTF_8);
+
+        ImportParseResult result = CmiParser.parse(gated, "coin", 2);
+
+        assertFalse(containsAttacker(result),
+                "in-place rewrite must not be parsed as approved content, got: "
+                        + result.records());
+        assertTrue(!result.failures().isEmpty(), "the rewrite must be reported, got: " + result);
     }
 
     @Test

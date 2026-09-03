@@ -213,6 +213,14 @@ public final class ImportPathGate {
                 throw new ImportPathRejectedException(
                         displayName + ": import path was replaced after approval; refusing to read");
             }
+            if (!gated.directory()) {
+                // Same filesystem object, but the content may have been
+                // rewritten in place (truncate + write keeps the identity).
+                if (gated.size() != now.size() || !gated.modified().equals(now.lastModifiedTime())) {
+                    throw new ImportPathRejectedException(
+                            displayName + ": import path was replaced after approval; refusing to read");
+                }
+            }
             return;
         }
         if (!gated.directory()) {
@@ -228,22 +236,30 @@ public final class ImportPathGate {
 
     /**
      * List the members of a gate-approved directory, failing closed when the
-     * directory itself was swapped while being listed. Returned members are
-     * still unvalidated candidates: each one goes through
-     * {@link #readMemberSecure} before its content is used.
+     * directory itself was swapped while being listed. Each returned member
+     * carries the identity seen at enumeration time; {@link #readMemberSecure}
+     * refuses the member when it no longer matches that snapshot, so a file
+     * swapped in after the listing is never parsed.
      *
      * @throws ImportPathRejectedException when the directory no longer matches
      */
-    static List<Path> listMembersSecure(GatedImport root, String displayName) {
+    static List<GatedImport> listMembersSecure(GatedImport root, String displayName) {
         verifyUnchanged(root, displayName);
-        List<Path> members;
+        List<Path> names;
         try (Stream<Path> stream = Files.list(root.path())) {
-            members = stream.sorted(Comparator.comparing(path -> path.getFileName().toString())).toList();
+            names = stream.sorted(Comparator.comparing(path -> path.getFileName().toString())).toList();
         } catch (IOException e) {
             throw new ImportPathRejectedException(displayName + ": cannot list input; refusing to read");
         }
+        List<GatedImport> members = new ArrayList<>(names.size());
+        for (Path name : names) {
+            BasicFileAttributes attrs = readAttributes(name, displayName);
+            boolean dir = attrs.isDirectory();
+            members.add(new GatedImport(name, attrs.fileKey(), dir,
+                    dir ? -1 : attrs.size(), dir ? null : attrs.lastModifiedTime()));
+        }
         verifyUnchanged(root, displayName);
-        return new ArrayList<>(members);
+        return members;
     }
 
     /**
@@ -266,17 +282,27 @@ public final class ImportPathGate {
     }
 
     /**
-     * Read one member of a gate-approved directory: the member must be a plain
-     * regular file both before and after the read, still the same file, still
-     * contained in the directory, and within the size bound. Anything else is
-     * refused and the content is discarded, never parsed.
+     * Read one member of a gate-approved directory: the approved directory
+     * itself is re-verified before and after the read, and the member must
+     * still match the identity captured at enumeration time, be a plain
+     * regular file both before and after the read, still be contained in the
+     * directory, and stay within the size bound. A whole-directory swap after
+     * the listing, or a member swapped or rewritten in place, is refused and
+     * the content is discarded, never parsed.
      *
-     * @param rootReal the freshly resolved real path of the approved directory
+     * @param root     the gate identity of the approved directory
+     * @param expected the member identity captured by {@link #listMembersSecure}
      * @throws ImportPathRejectedException when the member is unsafe
      * @throws IOException                 when the read itself fails
      */
-    static String readMemberSecure(Path rootReal, Path member, String displayName) throws IOException {
-        BasicFileAttributes before = preCheckMember(rootReal, member, displayName);
+    static String readMemberSecure(GatedImport root, GatedImport expected, String displayName)
+            throws IOException {
+        verifyUnchanged(root, displayName);
+        Path member = expected.path();
+        BasicFileAttributes before = preCheckMember(root, member, displayName);
+        if (!matchesSnapshot(expected, before)) {
+            throw new ImportPathRejectedException(displayName + ": import entry changed after listing; refusing");
+        }
         String content = Files.readString(member, StandardCharsets.UTF_8);
         if (Files.isSymbolicLink(member)) {
             throw new ImportPathRejectedException(displayName + ": import entry changed during read; refusing");
@@ -285,8 +311,10 @@ public final class ImportPathGate {
         if (!after.isRegularFile() || !sameFile(before, after)) {
             throw new ImportPathRejectedException(displayName + ": import entry changed during read; refusing");
         }
+        Path rootReal;
         Path memberReal;
         try {
+            rootReal = root.path().toRealPath();
             memberReal = member.toRealPath();
         } catch (IOException e) {
             throw new ImportPathRejectedException(displayName + ": cannot resolve import entry; refusing");
@@ -294,10 +322,11 @@ public final class ImportPathGate {
         if (!memberReal.startsWith(rootReal)) {
             throw new ImportPathRejectedException(displayName + ": import entry left the import directory; refusing");
         }
+        verifyUnchanged(root, displayName);
         return content;
     }
 
-    private static BasicFileAttributes preCheckMember(Path rootReal, Path member, String displayName)
+    private static BasicFileAttributes preCheckMember(GatedImport root, Path member, String displayName)
             throws IOException {
         if (Files.isSymbolicLink(member)) {
             throw new ImportPathRejectedException(displayName + ": import entry is not a regular file; refusing");
@@ -306,8 +335,10 @@ public final class ImportPathGate {
         if (!attrs.isRegularFile()) {
             throw new ImportPathRejectedException(displayName + ": import entry is not a regular file; refusing");
         }
+        Path rootReal;
         Path memberReal;
         try {
+            rootReal = root.path().toRealPath();
             memberReal = member.toRealPath();
         } catch (IOException e) {
             throw new ImportPathRejectedException(displayName + ": cannot resolve import entry; refusing");
@@ -322,9 +353,26 @@ public final class ImportPathGate {
         return attrs;
     }
 
+    private static boolean matchesSnapshot(GatedImport expected, BasicFileAttributes actual) {
+        if (expected.directory() || !actual.isRegularFile()) {
+            return false;
+        }
+        if (expected.fileKey() != null && actual.fileKey() != null) {
+            return expected.fileKey().equals(actual.fileKey())
+                    && expected.size() == actual.size()
+                    && expected.modified().equals(actual.lastModifiedTime());
+        }
+        return expected.size() == actual.size()
+                && expected.modified().equals(actual.lastModifiedTime());
+    }
+
     private static boolean sameFile(BasicFileAttributes before, BasicFileAttributes after) {
         if (before.fileKey() != null && after.fileKey() != null) {
-            return before.fileKey().equals(after.fileKey());
+            // Same identity is not enough: an in-place rewrite keeps the
+            // identity while replacing the content.
+            return before.fileKey().equals(after.fileKey())
+                    && before.size() == after.size()
+                    && before.lastModifiedTime().equals(after.lastModifiedTime());
         }
         return before.size() == after.size()
                 && before.lastModifiedTime().equals(after.lastModifiedTime());

@@ -140,6 +140,26 @@ class ImportServiceTest {
     }
 
     @Test
+    void missingAccountWithoutCreateStaysRetryable() {
+        UUID acc = new UUID(0, 1);
+        InMemoryAccountRepository accounts = new InMemoryAccountRepository();
+        InMemoryTransactionRepository tx = new InMemoryTransactionRepository();
+        IdempotencyGuard guard = new InMemoryIdempotencyGuard();
+        ImportService svc = new ImportService(registry(), accounts, tx, new FixedClock(), guard);
+
+        ImportReport first = svc.importRecords(List.of(rec(acc, "r1", 500)), new ImportOptions(false, false));
+        assertEquals(1, first.failedCount());
+        assertFalse(guard.isConsumed(key("r1")),
+                "a non-writing validation failure must not consume the idempotency key");
+        assertEquals(0, tx.all().size());
+
+        ImportReport second = svc.importRecords(List.of(rec(acc, "r1", 500)), new ImportOptions(false, false));
+        assertEquals(1, second.failedCount());
+        assertEquals(0, second.skippedCount(),
+                "a retryable failure must stay FAILED, not become SKIPPED_DUPLICATE");
+    }
+
+    @Test
     void missingAccountWithoutCreateFails() {
         UUID acc = new UUID(0, 1);
         InMemoryAccountRepository accounts = new InMemoryAccountRepository();

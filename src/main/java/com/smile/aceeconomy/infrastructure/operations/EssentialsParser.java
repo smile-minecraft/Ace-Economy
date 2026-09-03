@@ -68,52 +68,46 @@ public final class EssentialsParser {
     public static ImportParseResult parse(ImportPathGate.GatedImport gated, String currencyId, int scale) {
         List<ImportRecord> records = new ArrayList<>();
         List<String> failures = new ArrayList<>();
-        List<Path> files;
+        List<ImportPathGate.GatedImport> files;
         try {
             files = collect(gated, failures);
         } catch (ImportPathRejectedException e) {
             failures.add(display(gated.path()) + ": " + e.getMessage());
             return new ImportParseResult(records, failures);
         }
-        Path rootReal;
-        try {
-            rootReal = gated.path().toRealPath();
-        } catch (IOException e) {
-            failures.add(display(gated.path()) + ": cannot resolve import path; refusing to read");
-            return new ImportParseResult(records, failures);
-        }
-        for (Path file : files) {
+        for (ImportPathGate.GatedImport file : files) {
             if (records.size() >= MAX_RECORDS) {
                 failures.add(display(gated.path()) + ": too many records (max " + MAX_RECORDS + ")");
                 break;
             }
-            parseFile(gated, rootReal, file, currencyId, scale, records, failures);
+            parseFile(gated, file, currencyId, scale, records, failures);
         }
         return new ImportParseResult(records, failures);
     }
 
-    private static List<Path> collect(ImportPathGate.GatedImport gated, List<String> failures) {
+    private static List<ImportPathGate.GatedImport> collect(ImportPathGate.GatedImport gated,
+                                                            List<String> failures) {
         Path root = gated.path();
         if (gated.directory()) {
             return ImportPathGate.listMembersSecure(gated, display(root)).stream()
-                    .filter(path -> !Files.isSymbolicLink(path))
-                    .filter(path -> Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS))
-                    .filter(path -> {
+                    .filter(member -> !Files.isSymbolicLink(member.path()))
+                    .filter(member -> Files.isRegularFile(member.path(), LinkOption.NOFOLLOW_LINKS))
+                    .filter(member -> {
                         String ext = ImportPathGate.extensionOf(
-                                path.getFileName().toString().toLowerCase(java.util.Locale.ROOT));
+                                member.path().getFileName().toString().toLowerCase(java.util.Locale.ROOT));
                         return ext.equals("yml") || ext.equals("yaml");
                     })
-                    .sorted(Comparator.comparing(path -> path.getFileName().toString()))
+                    .sorted(Comparator.comparing(member -> member.path().getFileName().toString()))
                     .toList();
         }
-        return List.of(root);
+        return List.of(gated);
     }
 
-    private static void parseFile(ImportPathGate.GatedImport gated, Path rootReal, Path file,
+    private static void parseFile(ImportPathGate.GatedImport gated, ImportPathGate.GatedImport file,
                                   String currencyId, int scale,
                                   List<ImportRecord> records, List<String> failures) {
         Path root = gated.path();
-        String name = file.getFileName().toString();
+        String name = file.path().getFileName().toString();
         UUID accountUuid;
         try {
             accountUuid = UUID.fromString(stripExtension(name));
@@ -123,10 +117,10 @@ public final class EssentialsParser {
         }
         String content;
         try {
-            if (!gated.directory() && file.equals(gated.path())) {
+            if (!gated.directory()) {
                 content = ImportPathGate.readRootFileSecure(gated, display(root, name));
             } else {
-                content = ImportPathGate.readMemberSecure(rootReal, file, display(root, name));
+                content = ImportPathGate.readMemberSecure(gated, file, display(root, name));
             }
         } catch (ImportPathRejectedException e) {
             failures.add(display(root, name) + ": " + e.getMessage());

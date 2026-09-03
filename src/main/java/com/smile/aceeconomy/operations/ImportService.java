@@ -149,6 +149,19 @@ public final class ImportService {
             return ImportRecordResult.applied(r, null, "would apply (dry-run)");
         }
 
+        // Every check that performs no write stays before the claim, so a
+        // validation failure consumes nothing and a retry still reports
+        // FAILED instead of a duplicate skip.
+        boolean accountExists;
+        try {
+            accountExists = accounts.exists(r.accountUuid());
+        } catch (RuntimeException e) {
+            return ImportRecordResult.failed(r, "apply failed: " + e.getMessage());
+        }
+        if (!accountExists && !options.createMissingAccounts()) {
+            return ImportRecordResult.failed(r, "account does not exist and createMissingAccounts=false");
+        }
+
         if (idempotency.isConsumed(key)) {
             return ImportRecordResult.skipped(r, "already applied");
         }
