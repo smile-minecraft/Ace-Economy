@@ -246,19 +246,35 @@ final class ProductionAdapters {
         }
     }
 
+    /**
+     * Bank command boundary: opens the GUI through the layout that is current
+     * at open time. The layout is read through a supplier (the successfully
+     * reloaded reference in production), so a reload that swaps the layout
+     * changes what newly opened interfaces show; already-open sessions were
+     * dropped by {@code invalidateAll}, so only new opens matter here.
+     */
     static final class Bank implements BankCommandService {
         private final V2BankGuiSession gui;
-        private final com.smile.aceeconomy.infrastructure.acelib.BankGuiLayout layout;
+        private final Supplier<com.smile.aceeconomy.infrastructure.acelib.BankGuiLayout> layouts;
         private final com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter messages;
         private final Executor executor;
+        Bank(V2BankGuiSession gui,
+             Supplier<com.smile.aceeconomy.infrastructure.acelib.BankGuiLayout> layouts,
+             com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter messages,
+             Executor executor) {
+            this.gui = gui;
+            this.layouts = java.util.Objects.requireNonNull(layouts, "layouts");
+            this.messages = messages; this.executor = executor;
+        }
         Bank(V2BankGuiSession gui,
              com.smile.aceeconomy.infrastructure.acelib.BankGuiLayout layout,
              com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter messages,
              Executor executor) {
-            this.gui = gui; this.layout = layout; this.messages = messages; this.executor = executor;
+            this(gui, () -> layout, messages, executor);
         }
         public void open(UUID id, String name) { executor.execute(() -> {
-            if (!layout.enabled()) {
+            com.smile.aceeconomy.infrastructure.acelib.BankGuiLayout layout = layouts.get();
+            if (layout == null || !layout.enabled()) {
                 return;
             }
             Player player = Bukkit.getPlayer(id);

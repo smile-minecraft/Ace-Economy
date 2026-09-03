@@ -133,7 +133,8 @@ public final class CompositionRoot {
     private CurrencyDisplayHolder displayHolder;
     // Last applied bank GUI layout. Snapshotted before every reload apply so a post-publish
     // failure can restore the previous resolver with the same infallible reference swap.
-    private BankGuiLayout currentLayout;
+    // Volatile because the reload writer and the bank-open readers run on different executors.
+    private volatile BankGuiLayout currentLayout;
 
     public CompositionRoot(JavaPlugin plugin) {
         this.plugin = java.util.Objects.requireNonNull(plugin, "plugin");
@@ -327,7 +328,7 @@ public final class CompositionRoot {
                 leaderboardService,
                 integer("leaderboard.page-size", 10), ioExecutor);
         ProductionAdapters.Bank bankCommands =
-                new ProductionAdapters.Bank(bankGui, bankGuiLayout, config, ioExecutor);
+                new ProductionAdapters.Bank(bankGui, () -> currentLayout, config, ioExecutor);
         ProductionAdapters.Admin adminCommands = new ProductionAdapters.Admin(api, ioExecutor,
                 () -> {
                     com.smile.aceeconomy.infrastructure.acelib.ReloadResult result =
