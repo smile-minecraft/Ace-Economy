@@ -20,7 +20,7 @@
 | `/withdraw` | `cash` | `<amount> [currency]` | 僅限玩家 | `aceeconomy.command.withdraw` | 無 |
 | `/baltop` | `top` | `[currency]` | 玩家或主控台 | `aceeconomy.command.baltop` | 無 |
 | `/bank` | `open` | 不接受參數 | 僅限玩家 | `aceeconomy.command.bank` | 無 |
-| `/aceeco` | `give`、`take`、`set`、`history`、`reload`、`rollback`、`backup`、`restore` | 見管理員參考 | `reload`、`rollback`、`restore` 僅限主控台；`backup` 與其他子指令可由玩家或主控台執行 | `aceeconomy.admin` 加上子指令權限 | 無 |
+| `/aceeco` | `give`、`take`、`set`、`history`、`reload`、`rollback`、`backup`、`restore`、`import` | 見管理員參考 | `reload`、`rollback`、`restore`、`import` 僅限主控台；`backup` 與其他子指令可由玩家或主控台執行 | `aceeconomy.admin` 加上子指令權限 | 無 |
 
 `<必填>` 代表必須提供的值；`[可選]` 代表可省略的值。省略 `currency` 時，使用設定的預設貨幣。貨幣 ID 不區分大小寫。
 
@@ -114,7 +114,7 @@
 
 ## 管理員權限
 
-管理員主指令是 `/aceeco`，v2 指令規格未提供別名。主權限為 `aceeconomy.admin`，每個操作也各有自己的權限節點。變更餘額的子指令沿用「玩家名稱、金額、可選貨幣」的格式。`history` 只讀取已記錄的交易，不會變更餘額。`reload`、`rollback` 與 `restore` 只能由主控台執行；`rollback` 要帶交易 ID，`restore` 則要帶備份 ID 與精確的 `confirm`。
+管理員主指令是 `/aceeco`，v2 指令規格未提供別名。主權限為 `aceeconomy.admin`，每個操作也各有自己的權限節點。變更餘額的子指令沿用「玩家名稱、金額、可選貨幣」的格式。`history` 只讀取已記錄的交易，不會變更餘額。`reload`、`rollback`、`restore` 與 `import` 只能由主控台執行；`rollback` 要帶交易 ID，`restore` 則要帶備份 ID 與精確的 `confirm`，`import` 要帶來源與路徑（寫入時需精確的 `apply confirm`）。
 
 | 子指令 | 用法 | 執行者 | 子指令權限 | 別名 |
 |---|---|---|---|---|
@@ -126,6 +126,7 @@
 | `rollback` | `/aceeco rollback <transaction-id>` | 僅限主控台 | `aceeconomy.admin.rollback` | 無 |
 | `backup` | `/aceeco backup [label]` | 玩家或主控台 | `aceeconomy.admin.backup` | 無 |
 | `restore` | `/aceeco restore <backup-id> confirm` | 僅限主控台 | `aceeconomy.admin.restore` | 無 |
+| `import` | `/aceeco import <essentials\|cmi> <path> [currency] [apply confirm]` | 僅限主控台 | `aceeconomy.admin.import` | 無 |
 
 插件宣告的預設值是：玩家指令權限為 `true`，管理員權限為 `op`。另外，插件也宣告 `aceeconomy.bypass.debt`，預設值為 `op`，用於跳過債務上限的權限。
 
@@ -222,12 +223,38 @@
 
 範例：`/aceeco restore 20260824T093000-aaaa1111 confirm`
 
+### 匯入餘額：`/aceeco import`
+
+當 EssentialsX 或 CMI 伺服器的餘額需要帶進 v2 時使用。指令只能從主控台執行，且需要 `aceeconomy.admin` 與 `aceeconomy.admin.import`。沒有精確的 `apply confirm` 時一律是預演：不寫入、不備份、不消耗防重複狀態。
+
+| 項目 | 說明 |
+|---|---|
+| 用法 | `/aceeco import <essentials\|cmi> <path> [currency] [apply confirm]` |
+| 執行者 | 僅限主控台 |
+| 權限 | `aceeconomy.admin.import`（另需主權限 `aceeconomy.admin`） |
+| 來源格式 | Essentials：`<uuid>.yml` 玩家檔案或其目錄（`money:` 餘額、可選 `last-account-name:`）。支援 EssentialsX 2.x userdata。CMI：管理員整理好的 UTF-8 對帳檔（每行 `uuid,name,balance`，可有表頭，`.csv`/`.txt`）。CMI 的 `cmi.sqlite.db` 二進位檔不支援，會直接拒絕。 |
+| 路徑 | 相對於插件控制的 `<plugin data folder>/import` 目錄。絕對路徑、`..`、symlink、不存在的項目、過大檔案、敏感檔名與各來源不支援的副檔名，都在讀檔前拒絕。 |
+| 貨幣 | 省略時使用設定的預設貨幣。未知的貨幣 ID 會在備份前中止整個流程。 |
+| 套用 | 只有精確的 `apply confirm`（`confirm` 限小寫）會寫入。寫入前先建立 `pre-import` 安全備份；備份失敗則整批不套用。重跑同一來源是安全的：已套用的紀錄會回報為跳過。 |
+| 報告 | `applied` / `skipped` / `failed` 計數與失敗摘要。只要有任何一筆失敗，就不會宣稱完全成功。 |
+
+範例：
+
+```text
+/aceeco import essentials userdata
+/aceeco import essentials userdata coin apply confirm
+/aceeco import cmi balances.csv
+/aceeco import cmi balances.csv coin apply confirm
+```
+
+先把 Essentials 的 `plugins/Essentials/userdata/` 檔案（或整理好的 CMI 對帳檔）複製到 `plugins/AceEconomy/import/`；指令不會讀取該目錄以外的任何位置。遷移流程見[從 AceEconomy v1 升級](upgrade-from-v1.zh-TW.md)。
+
 ## 常見指令錯誤
 
 | 狀況 | 檢查方式 |
 |---|---|
 | 沒有權限 | 確認執行者擁有主指令或子指令列出的權限。 |
-| 執行者類型不對 | 玩家限定指令請在遊戲內執行；`/aceeco reload`、`/aceeco rollback` 與 `/aceeco restore` 請從主控台執行；`restore` 另要求沒有玩家在線。 |
+| 執行者類型不對 | 玩家限定指令請在遊戲內執行；`/aceeco reload`、`/aceeco rollback`、`/aceeco restore` 與 `/aceeco import` 請從主控台執行；`restore` 另要求沒有玩家在線。 |
 | 參數少了或多了 | 對照正確的子指令和用法。例如 `/baltop` 必須接 `top`，不接受頁碼。 |
 | 找不到玩家 | 檢查玩家名稱後再試一次。 |
 | 找不到貨幣 | 使用已設定的貨幣 ID；省略貨幣時會使用設定的預設值。 |
@@ -237,3 +264,6 @@
 | 還原確認被拒絕 | 必須使用精確的小寫 `confirm`：`/aceeco restore <backup-id> confirm`。`CONFIRM`、`Confirm` 與其他拼法都會被拒絕。 |
 | 還原時有玩家在線 | 先讓所有玩家離線，再從主控台重試。 |
 | 還原的安全備份或快照檢查失敗 | 保留正式資料，依錯誤提示檢查原因；不要刪除目前儲存內容來強行還原。 |
+| 匯入確認被拒絕 | 沒有精確的 `apply confirm` 就只是預覽。請重跑為 `/aceeco import <essentials\|cmi> <path> [currency] apply confirm`。 |
+| 匯入路徑被拒絕 | 路徑必須相對於 `<plugin data folder>/import`。絕對路徑、`..`、symlink、敏感檔名與不支援的副檔名都會在讀檔前拒絕。 |
+| 匯入回報失敗 | 看失敗摘要：未知格式、無效數字與負餘額不會被靜默當成零。修好來源後重跑，只會補上還沒套用的部分。 |

@@ -116,4 +116,14 @@ For the operator checklist and regular maintenance, see [Server operations](oper
 
 ## If v1 data must be carried forward
 
-The product does not perform automatic v1-to-v2 data migration. Do not improvise by editing JSON, renaming files, or pointing v2 at the v1 storage location. Preserve the original backup and raise a separately scoped data-conversion request with a reversible plan.
+v2 never reads v1 files directly, and a v1 file is not a v2 snapshot. Do not edit JSON by hand, rename files, or point v2 at the v1 storage location. Keep the original backup from [Before touching the live server](#before-touching-the-live-server) untouched.
+
+When old balances have to move into v2, use the assisted import instead. It only handles EssentialsX 2.x player files and a prepared CMI balance sheet, and it runs from the server console:
+
+1. Copy the source files into `plugins/AceEconomy/import/`. For EssentialsX that means the `<uuid>.yml` userdata files with the `money:` field; for CMI it means one UTF-8 sheet with `uuid,name,balance` per line. Nothing outside the `import/` folder is ever read.
+2. Preview first with no writing, for example `/aceeco import essentials userdata` or `/aceeco import cmi balances.csv`. Fix any path or format problem the preview reports before going further.
+3. When the preview looks right, write with the exact pair `apply confirm`, for example `/aceeco import essentials userdata apply confirm`. The command takes a `pre-import` safety backup first; if that backup fails, nothing is written.
+4. Read the `applied` / `skipped` / `failed` report. Any failure means the run is not fully successful, so check the failure summary rather than assuming the missing rows became zero.
+5. Running the same source again is safe: rows that already went in come back as `skipped`, so a retry only applies what is still missing.
+
+The full usage, permissions, and error table live under "Import balances" in [Commands](commands.md#import-balances-aceeco-import).

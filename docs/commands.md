@@ -20,7 +20,7 @@ You are checking your balance, sending money, or opening the bank menu. The comm
 | `/withdraw` | `cash` | `<amount> [currency]` | Player only | `aceeconomy.command.withdraw` | None |
 | `/baltop` | `top` | `[currency]` | Player or console | `aceeconomy.command.baltop` | None |
 | `/bank` | `open` | no arguments | Player only | `aceeconomy.command.bank` | None |
-| `/aceeco` | `give`, `take`, `set`, `history`, `reload`, `rollback`, `backup`, `restore` | See the administrator reference | `reload`, `rollback`, and `restore`: console only; `backup` and other subcommands: player or console | `aceeconomy.admin` plus the subcommand node | None |
+| `/aceeco` | `give`, `take`, `set`, `history`, `reload`, `rollback`, `backup`, `restore`, `import` | See the administrator reference | `reload`, `rollback`, `restore`, and `import`: console only; `backup` and other subcommands: player or console | `aceeconomy.admin` plus the subcommand node | None |
 
 `<required>` values must be supplied. `[optional]` values may be omitted. If `currency` is omitted, the configured default currency is used. Currency IDs are matched without regard to letter case.
 
@@ -114,7 +114,7 @@ For a valid v2 banknote, durable replay protection and credit complete before th
 
 ## For administrators
 
-The administrator root is `/aceeco`, with no alias listed by the v2 command specification. The root permission is `aceeconomy.admin`; each operation also declares its own permission node. The mutation commands accept the same player, amount, and optional currency pattern as the player commands. `history` reads recorded transactions instead of changing balances. `reload`, `rollback`, and `restore` are console-only; `rollback` takes a transaction id and `restore` takes a backup id plus the exact confirmation word `confirm`.
+The administrator root is `/aceeco`, with no alias listed by the v2 command specification. The root permission is `aceeconomy.admin`; each operation also declares its own permission node. The mutation commands accept the same player, amount, and optional currency pattern as the player commands. `history` reads recorded transactions instead of changing balances. `reload`, `rollback`, `restore`, and `import` are console-only; `rollback` takes a transaction id, `restore` takes a backup id plus the exact confirmation word `confirm`, and `import` takes a source plus a gate-relative path (writes only with the exact `apply confirm` pair).
 
 | Subcommand | Usage | Sender | Subcommand permission | Alias |
 |---|---|---|---|---|
@@ -126,6 +126,7 @@ The administrator root is `/aceeco`, with no alias listed by the v2 command spec
 | `rollback` | `/aceeco rollback <transaction-id>` | Console only | `aceeconomy.admin.rollback` | None |
 | `backup` | `/aceeco backup [label]` | Player or console | `aceeconomy.admin.backup` | None |
 | `restore` | `/aceeco restore <backup-id> confirm` | Console only | `aceeconomy.admin.restore` | None |
+| `import` | `/aceeco import <essentials\|cmi> <path> [currency] [apply confirm]` | Console only | `aceeconomy.admin.import` | None |
 
 The declared defaults are `true` for the player command permissions and `op` for the administrator permissions. The plugin also declares `aceeconomy.bypass.debt` with an `op` default for debt-limit bypass access.
 
@@ -222,12 +223,38 @@ Restore replaces the live economy state, so it is console-only and requires both
 
 Example: `/aceeco restore 20260824T093000-aaaa1111 confirm`
 
+### Import balances: `/aceeco import`
+
+Use `import` when balances from an EssentialsX or CMI server must be carried into v2. The command is console-only and requires both `aceeconomy.admin` and `aceeconomy.admin.import`. Without the exact `apply confirm` pair it is a dry-run preview: nothing is written, no backup is taken, and no idempotency state is consumed.
+
+| Item | Details |
+|---|---|
+| Usage | `/aceeco import <essentials\|cmi> <path> [currency] [apply confirm]` |
+| Sender | Console only |
+| Permission | `aceeconomy.admin.import` (with the root `aceeconomy.admin`) |
+| Source input | Essentials: a `<uuid>.yml` userdata file or a directory of them (`money:` balance, optional `last-account-name:`). Supported: EssentialsX 2.x userdata. CMI: an operator-prepared UTF-8 balance sheet (`uuid,name,balance` per line, header optional, `.csv`/`.txt`). The raw `cmi.sqlite.db` binary is not supported and is rejected. |
+| Path | Relative to the plugin-controlled `<plugin data folder>/import` directory. Absolute paths, `..`, symlinks, missing entries, oversized files, sensitive names, and per-source unsupported extensions are rejected before anything is read. |
+| Currency | Omitting it uses the configured default currency. An unknown id aborts the run before any backup is taken. |
+| Apply | Only `apply confirm` (exact lowercase `confirm`) writes. A `pre-import` safety backup is taken first; if it fails, nothing is applied. Re-running the same source is idempotent: already-applied records are reported as skipped. |
+| Report | `applied` / `skipped` / `failed` counts plus a failure summary. Any failure means the run is not fully successful. |
+
+Examples:
+
+```text
+/aceeco import essentials userdata
+/aceeco import essentials userdata coin apply confirm
+/aceeco import cmi balances.csv
+/aceeco import cmi balances.csv coin apply confirm
+```
+
+Copy the Essentials `plugins/Essentials/userdata/` files (or the prepared CMI sheet) into `plugins/AceEconomy/import/` first; the command never reads outside that directory. See the migration path in [Upgrade from AceEconomy v1](upgrade-from-v1.md).
+
 ## Common command errors
 
 | What happened | What to check |
 |---|---|
 | Permission denied | The sender does not have the permission shown for the root or subcommand. |
-| Wrong sender | Run player-only commands in game. Run `/aceeco reload`, `/aceeco rollback`, and `/aceeco restore` from the console; `restore` also requires no players to be online. |
+| Wrong sender | Run player-only commands in game. Run `/aceeco reload`, `/aceeco rollback`, `/aceeco restore`, and `/aceeco import` from the console; `restore` also requires no players to be online. |
 | Missing or extra arguments | Use the exact subcommand and usage line. For example, `/baltop` needs `top`; it does not take a page number. |
 | Unknown player | Check the player name and try again. |
 | Unknown currency | Use a configured currency ID. Omitting it uses the configured default. |
@@ -237,3 +264,6 @@ Example: `/aceeco restore 20260824T093000-aaaa1111 confirm`
 | Restore confirmation rejected | Use the exact lowercase word `confirm`: `/aceeco restore <backup-id> confirm`. `CONFIRM`, `Confirm`, and other spellings are rejected. |
 | Restore rejected because players are online | Run restore from the console after all players have left. |
 | Restore safety or snapshot check failed | Keep the live data unchanged, inspect the typed error, and do not delete the current store to force a restore. |
+| Import confirmation rejected | Without the exact pair `apply confirm` the command only previews. Re-run as `/aceeco import <essentials\|cmi> <path> [currency] apply confirm`. |
+| Import path rejected | The path must be relative to `<plugin data folder>/import`. Absolute paths, `..`, symlinks, sensitive names, and unsupported extensions are refused before anything is read. |
+| Import reports failures | Read the failure summary: unknown formats, invalid numbers, and negative balances never become silent zeroes. Re-running after a fix only applies what is still missing. |

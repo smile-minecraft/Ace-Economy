@@ -51,6 +51,8 @@ import com.smile.aceeconomy.gui.v2.BanknoteRedeemListener;
 import com.smile.aceeconomy.gui.v2.V2BankGuiSession;
 import com.smile.aceeconomy.operations.HistoryService;
 import com.smile.aceeconomy.operations.BackupRestoreService;
+import com.smile.aceeconomy.operations.ImportRunner;
+import com.smile.aceeconomy.operations.ImportService;
 import com.smile.aceeconomy.operations.LeaderboardService;
 import com.smile.aceeconomy.operations.RollbackService;
 import com.smile.aceeconomy.ports.AuditSink;
@@ -337,9 +339,34 @@ public final class CompositionRoot {
                 leaderboardService::invalidateAll);
         ProductionAdapters.BackupRestore backupCommands =
                 new ProductionAdapters.BackupRestore(backupRestoreService, ioExecutor);
+        // The import command surface binds to an ImportService over the SAME
+        // accounts/transactions/nonce stores as the rest of the graph, plus the
+        // backup service above for the pre-import safety snapshot. Vendor files
+        // are read only from <dataFolder>/import through the path gate; the
+        // directory is created here so a missing folder is a setup note, not a
+        // per-command failure. Imported balances bypass EconomyService the same
+        // way rollback does, so the same balance-cache invalidation applies.
+        ImportService importService = new ImportService(currencies, accounts, transactions,
+                () -> Instant.now(), new PersistentIdempotencyGuard(nonces),
+                uuid -> {
+                    EconomyService live = economy;
+                    if (live != null) {
+                        live.invalidateBalance(uuid);
+                    }
+                });
+        try {
+            java.nio.file.Files.createDirectories(plugin.getDataFolder().toPath().resolve("import"));
+        } catch (java.io.IOException e) {
+            plugin.getLogger().warning("Could not create the import directory; "
+                    + "/aceeco import will reject every path until it exists: " + e.getMessage());
+        }
+        ImportRunner importRunner = new ImportRunner(importService, backupRestoreService,
+                plugin.getDataFolder().toPath(), currencies);
+        ProductionAdapters.Import importCommands =
+                new ProductionAdapters.Import(importRunner, ioExecutor);
         CommandServices services = new CommandServices(economyCommands,
                 new ProductionAdapters.Players(ioExecutor), withdrawalCommands, leaderboards, bankCommands,
-                adminCommands, historyCommands, rollbackCommands, backupCommands, config);
+                adminCommands, historyCommands, rollbackCommands, backupCommands, importCommands, config);
         // Command-surface flags are startup-only wiring: the leaderboard toggle decides whether
         // an executable baltop spec exists at all, and the main-command alias is validated
         // against every label plugin.yml declares plus the sibling v2 specs. Bukkit only routes

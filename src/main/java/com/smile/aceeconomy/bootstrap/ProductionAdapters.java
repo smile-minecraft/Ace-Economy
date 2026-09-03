@@ -191,6 +191,28 @@ final class ProductionAdapters {
         }
     }
 
+    /**
+     * Import command boundary: moves the blocking gate/parse/backup/apply
+     * sequence onto the IO executor. Preview versus apply is decided by the
+     * command layer (exact {@code apply confirm} pair); this adapter adds no
+     * policy of its own and never turns a preview into writes.
+     */
+    static final class Import implements com.smile.aceeconomy.commands.v2.ports.ImportCommandService {
+        private final com.smile.aceeconomy.operations.ImportRunner runner;
+        private final Executor executor;
+        Import(com.smile.aceeconomy.operations.ImportRunner runner, Executor executor) {
+            this.runner = runner; this.executor = executor;
+        }
+        public CompletableFuture<com.smile.aceeconomy.operations.ImportOutcome> preview(
+                com.smile.aceeconomy.ports.operations.ImportSource source, String path, String currencyId) {
+            return CompletableFuture.supplyAsync(() -> runner.preview(source, path, currencyId), executor);
+        }
+        public CompletableFuture<com.smile.aceeconomy.operations.ImportOutcome> apply(
+                com.smile.aceeconomy.ports.operations.ImportSource source, String path, String currencyId) {
+            return CompletableFuture.supplyAsync(() -> runner.apply(source, path, currencyId), executor);
+        }
+    }
+
     static final class Bank implements BankCommandService {
         private final V2BankGuiSession gui; private final Executor executor;
         Bank(V2BankGuiSession gui, Executor executor) { this.gui = gui; this.executor = executor; }

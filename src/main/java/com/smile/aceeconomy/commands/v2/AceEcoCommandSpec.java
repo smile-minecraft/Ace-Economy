@@ -11,8 +11,12 @@ import com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter;
 import com.smile.aceeconomy.operations.AuditPage;
 import com.smile.aceeconomy.operations.AuditQuery;
 import com.smile.aceeconomy.operations.BackupResult;
+import com.smile.aceeconomy.operations.ImportException;
+import com.smile.aceeconomy.operations.ImportFailureReason;
+import com.smile.aceeconomy.operations.ImportOutcome;
 import com.smile.aceeconomy.operations.RestoreResult;
 import com.smile.aceeconomy.operations.RollbackResult;
+import com.smile.aceeconomy.ports.operations.ImportSource;
 
 import net.kyori.adventure.text.Component;
 
@@ -50,7 +54,7 @@ public final class AceEcoCommandSpec {
         var messages = services.messages();
         CommandSpec.Builder builder = CommandSpec.builder("aceeco")
                 .description("Administrative economy commands")
-                .usage("/aceeco <give|take|set|history|reload|rollback|backup|restore>")
+                .usage("/aceeco <give|take|set|history|reload|rollback|backup|restore|import>")
                 .permission("aceeconomy.admin")
                 .subCommand(mutation(services, "give"))
                 .subCommand(mutation(services, "take"))
@@ -59,6 +63,7 @@ public final class AceEcoCommandSpec {
                 .subCommand(rollback(services))
                 .subCommand(backup(services))
                 .subCommand(restore(services))
+                .subCommand(importBalances(services))
                 .subCommand(SubCommandSpec.builder("reload")
                         .description("Reload economy configuration")
                         .usage("")
@@ -140,6 +145,212 @@ public final class AceEcoCommandSpec {
                 .args("backup-id", "confirm")
                 .handler(context -> executeRestore(services, context))
                 .build();
+    }
+
+    private static SubCommandSpec importBalances(CommandServices services) {
+        return SubCommandSpec.builder("import")
+                .description("Preview or apply an Essentials/CMI balance import (console only, dry-run by default)")
+                .usage("<essentials|cmi> <path> [currency] [apply confirm]")
+                .permission("aceeconomy.admin.import")
+                .consoleOnly()
+                .minArgs(2)
+                .maxArgs(5)
+                .args("source", "path", "currency", "apply", "confirm")
+                .handler(context -> executeImport(services, context))
+                .completer((context, args) -> completeImport(services, args))
+                .build();
+    }
+
+    /**
+     * Argument shapes (after {@code <source> <path>}): {@code []} and
+     * {@code [currency]} are dry-run previews; {@code [apply confirm]} and
+     * {@code [currency apply confirm]} are real applies. A lone
+     * {@code apply} without {@code confirm} is rejected before the service
+     * is touched. {@code confirm} must match exactly (lowercase), mirroring
+     * the restore confirmation; {@code apply} is matched case-insensitively
+     * unless it is a known currency id.
+     */
+    private static void executeImport(CommandServices services, CommandContext context) {
+        var messages = services.messages();
+        ImportSource source = parseImportSource(messages, V2CommandSupport.arg(messages, context, 0));
+        String path = V2CommandSupport.arg(messages, context, 1);
+        List<String> rest = context.commandArgs().subList(2, context.commandArgs().size());
+        String rawCurrency = null;
+        boolean apply = false;
+        if (rest.isEmpty()) {
+            // dry-run with the default currency
+        } else if (rest.size() == 1) {
+            String token = rest.get(0);
+            if (isApplyToken(services, token)) {
+                throw confirmRequired(messages, source, path);
+            }
+            rawCurrency = token;
+        } else if (rest.size() == 2) {
+            if (isApplyWord(rest.get(0)) && "confirm".equals(rest.get(1))) {
+                apply = true;
+            } else {
+                throw confirmRequired(messages, source, path);
+            }
+        } else if (rest.size() == 3) {
+            if (isApplyWord(rest.get(1)) && "confirm".equals(rest.get(2))) {
+                rawCurrency = rest.get(0);
+                apply = true;
+            } else {
+                throw confirmRequired(messages, source, path);
+            }
+        } else {
+            throw confirmRequired(messages, source, path);
+        }
+        CurrencyInfo currency = V2CommandSupport.currency(services, rawCurrency);
+        if (services.imports() == null) {
+            String msg = messages != null ? messages.plainMessage("command.empty-result", Map.of())
+                    : "command.empty-result";
+            V2CommandSupport.replyFailure(context, CommandException.custom("ACELIB-CMD-EMPTY-RESULT", msg));
+            return;
+        }
+        CompletableFuture<ImportOutcome> pending;
+        try {
+            pending = apply ? services.imports().apply(source, path, currency.id())
+                    : services.imports().preview(source, path, currency.id());
+        } catch (RuntimeException e) {
+            V2CommandSupport.replyFailure(context, ImportErrors.from(messages, e));
+            return;
+        }
+        if (pending == null) {
+            String msg = messages != null ? messages.plainMessage("command.empty-future", Map.of())
+                    : "command.empty-future";
+            V2CommandSupport.replyFailure(context, CommandException.custom("ACELIB-CMD-EMPTY-FUTURE", msg));
+            return;
+        }
+        var currencyForReply = currency;
+        pending.whenComplete((result, failure) -> {
+            if (failure != null) {
+                V2CommandSupport.replyFailure(context, ImportErrors.from(messages, failure));
+            } else if (result == null) {
+                String msg = messages != null
+                        ? messages.plainMessage("command.empty-result", Map.of())
+                        : "command.empty-result";
+                V2CommandSupport.replyFailure(context,
+                        CommandException.custom("ACELIB-CMD-EMPTY-RESULT", msg));
+            } else {
+                CommandReply.replyComponent(context, messages,
+                        formatImport(messages, source, currencyForReply, path, result));
+            }
+        });
+    }
+
+    private static ImportSource parseImportSource(ConfigLangAdapter messages, String raw) {
+        if ("essentials".equalsIgnoreCase(raw)) {
+            return ImportSource.ESSENTIALS;
+        }
+        if ("cmi".equalsIgnoreCase(raw)) {
+            return ImportSource.CMI;
+        }
+        String msg = messages != null
+                ? messages.plainMessage("command.import-unknown-source", Map.of("raw", raw))
+                : "command.import-unknown-source:" + raw;
+        throw CommandException.custom("ACELIB-CMD-IMPORT-SOURCE-UNKNOWN", msg);
+    }
+
+    private static boolean isApplyWord(String token) {
+        return "apply".equalsIgnoreCase(token);
+    }
+
+    /**
+     * A lone trailing {@code apply} means the operator started the write
+     * path — unless a currency is literally named {@code apply}, in which
+     * case the token stays a currency argument.
+     */
+    private static boolean isApplyToken(CommandServices services, String token) {
+        if (!isApplyWord(token)) {
+            return false;
+        }
+        try {
+            return !services.economy().knownCurrencyIds().stream().anyMatch("apply"::equalsIgnoreCase);
+        } catch (RuntimeException e) {
+            return true;
+        }
+    }
+
+    private static CommandException confirmRequired(ConfigLangAdapter messages,
+                                                    ImportSource source, String path) {
+        String msg = messages != null
+                ? messages.plainMessage("command.import-confirm-required",
+                        Map.of("source", source.name().toLowerCase(java.util.Locale.ROOT), "path", path))
+                : "command.import-confirm-required";
+        return CommandException.custom("ACELIB-CMD-IMPORT-CONFIRM-REQUIRED", msg);
+    }
+
+    private static Component formatImport(ConfigLangAdapter messages, ImportSource source,
+                                          CurrencyInfo currency, String path, ImportOutcome outcome) {
+        String sourceName = source.name().toLowerCase(java.util.Locale.ROOT);
+        String failures = summarizeFailures(outcome);
+        Map<String, Object> vars = outcome.backupId() == null
+                ? Map.of("source", sourceName, "path", path, "currency_name", currency.displayName(),
+                        "applied", String.valueOf(outcome.report().appliedCount()),
+                        "skipped", String.valueOf(outcome.report().skippedCount()),
+                        "failed", String.valueOf(outcome.failedCount()),
+                        "failures", failures)
+                : Map.of("source", sourceName, "path", path, "currency_name", currency.displayName(),
+                        "applied", String.valueOf(outcome.report().appliedCount()),
+                        "skipped", String.valueOf(outcome.report().skippedCount()),
+                        "failed", String.valueOf(outcome.failedCount()),
+                        "failures", failures, "backup_id", outcome.backupId());
+        if (messages == null) {
+            String base = "import." + (outcome.dryRun() ? "preview" : "applied")
+                    + ":" + sourceName + ":" + path + ":" + currency.displayName()
+                    + ":applied=" + outcome.report().appliedCount()
+                    + ":skipped=" + outcome.report().skippedCount()
+                    + ":failed=" + outcome.failedCount();
+            if (outcome.backupId() != null) {
+                base += ":backup=" + outcome.backupId();
+            }
+            if (!failures.isEmpty()) {
+                base += ":failures=" + failures;
+            }
+            return Component.text(base);
+        }
+        if (outcome.isEmpty()) {
+            return messages.renderMessage("admin.import-empty", Map.of(
+                    "source", sourceName, "path", path, "currency_name", currency.displayName()));
+        }
+        return messages.renderMessage(outcome.dryRun() ? "admin.import-preview" : "admin.import-success", vars);
+    }
+
+    /** First few failure lines for the reply; the full detail stays in the console log. */
+    private static String summarizeFailures(ImportOutcome outcome) {
+        List<String> all = new java.util.ArrayList<>(outcome.parseFailures());
+        for (var result : outcome.report().results()) {
+            if (result.status() == com.smile.aceeconomy.operations.ImportRecordResult.Status.FAILED) {
+                String id = result.record() == null ? "?" : result.record().sourceRecordId();
+                all.add(id + ": " + result.message());
+            }
+        }
+        if (all.isEmpty()) {
+            return "";
+        }
+        int shown = Math.min(5, all.size());
+        String joined = String.join("; ", all.subList(0, shown));
+        return all.size() > shown ? " [" + joined + "; and " + (all.size() - shown) + " more]" : " [" + joined + "]";
+    }
+
+    private static List<String> completeImport(CommandServices services, List<String> args) {
+        int position = args.size() - 1;
+        if (position == 0) {
+            return CommandCompletion.byPrefix(List.of("essentials", "cmi"), CommandCompletion.last(args));
+        }
+        if (position == 2) {
+            List<String> base = new java.util.ArrayList<>(services.economy().knownCurrencyIds());
+            base.add("apply");
+            return CommandCompletion.byPrefix(base, CommandCompletion.last(args));
+        }
+        if (position == 3) {
+            return CommandCompletion.byPrefix(List.of("apply", "confirm"), CommandCompletion.last(args));
+        }
+        if (position == 4) {
+            return CommandCompletion.byPrefix(List.of("confirm"), CommandCompletion.last(args));
+        }
+        return List.of();
     }
 
     private static void executeBackup(CommandServices services, CommandContext context) {

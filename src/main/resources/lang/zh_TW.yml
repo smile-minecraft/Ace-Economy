@@ -86,7 +86,10 @@ admin:
   help-set: '<white>/aceeco set \<玩家> \<金額> [貨幣]</white> <gray>- 設定玩家餘額</gray>'
   help-history: '<white>/aceeco history \<玩家> [頁碼]</white> <gray>- 查看交易記錄</gray>'
   help-rollback: '<white>/aceeco rollback \<交易ID></white> <gray>- 回溯交易</gray>'
-  help-import: '<white>/aceeco import \<essentials|cmi></white> <gray>- 匯入資料</gray>'
+  help-import: '<white>/aceeco import \<essentials|cmi> \<path> [currency] [apply confirm]</white> <gray>- 預覽或套用餘額匯入（僅主控台，預設為預演）</gray>'
+  import-preview: "<green>匯入預覽（預演，不做任何變更）：<white>{applied}</white> 筆可套用、<white>{skipped}</white> 筆已跳過、<white>{failed}</white> 筆失敗 — {source} / {currency_name}{failures}</green>"
+  import-success: "<green>匯入完成：<white>{applied}</white> 筆已套用、<white>{skipped}</white> 筆已跳過、<white>{failed}</white> 筆失敗 — {source} / {currency_name}。安全備份：<white>{backup_id}</white>{failures}</green>"
+  import-empty: "<yellow>{source} 在 {path} 沒有可匯入的資料（{currency_name}）。</yellow>"
   help-migrate: '<white>/aceeco migrate \<sqlite|mysql></white> <gray>- 遷移儲存類型</gray>'
   help-help: "<white>/aceeco help</white> <gray>- 顯示此幫助訊息</gray>"
   migration-start: "<yellow>開始從 <white>{plugin}</white> 匯入資料...</yellow>"
@@ -119,6 +122,8 @@ command:
   invalid-uuid: "<red>交易 ID 必須為有效 UUID：<white>{raw}</white></red>"
   invalid-page: "<red>頁碼必須為非負整數：<white>{raw}</white></red>"
   restore-confirm-required: "<red>還原是破壞性操作。請完全依照此格式重新執行：<white>/aceeco restore {backup_id} confirm</white></red>"
+  import-confirm-required: "<red>匯入會寫入餘額。沒有 <white>apply confirm</white> 就只是預覽。請完全依照此格式重新執行：<white>/aceeco import {source} {path} apply confirm</white></red>"
+  import-unknown-source: "<red>未知的匯入來源：<white>{raw}</white>。支援：<white>essentials、cmi</white>。</red>"
 
 error:
   format-error: "<red>訊息格式錯誤，鍵={key}</red>"

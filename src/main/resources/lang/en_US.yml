@@ -86,7 +86,10 @@ admin:
   help-set: '<white>/aceeco set \<player> \<amount> [currency]</white> <gray>- Set balance</gray>'
   help-history: '<white>/aceeco history \<player> [page]</white> <gray>- View transaction history</gray>'
   help-rollback: '<white>/aceeco rollback \<id></white> <gray>- Rollback transaction</gray>'
-  help-import: '<white>/aceeco import \<essentials|cmi></white> <gray>- Import data</gray>'
+  help-import: '<white>/aceeco import \<essentials|cmi> \<path> [currency] [apply confirm]</white> <gray>- Preview or apply a balance import (console only, dry-run by default)</gray>'
+  import-preview: "<green>Import preview (dry-run, no changes): <white>{applied}</white> would apply, <white>{skipped}</white> skipped, <white>{failed}</white> failed — {source} / {currency_name}{failures}</green>"
+  import-success: "<green>Import applied: <white>{applied}</white> applied, <white>{skipped}</white> skipped, <white>{failed}</white> failed — {source} / {currency_name}. Safety backup: <white>{backup_id}</white>{failures}</green>"
+  import-empty: "<yellow>No importable records found for {source} at {path} ({currency_name}).</yellow>"
   help-migrate: '<white>/aceeco migrate \<sqlite|mysql></white> <gray>- Migrate storage type</gray>'
   help-help: "<white>/aceeco help</white> <gray>- Show this help</gray>"
   migration-start: "<yellow>Starting data import from <white>{plugin}</white>...</yellow>"
@@ -119,6 +122,8 @@ command:
   invalid-uuid: "<red>Transaction id must be a valid UUID: <white>{raw}</white></red>"
   invalid-page: "<red>Page must be a non-negative integer: <white>{raw}</white></red>"
   restore-confirm-required: "<red>Restore is destructive. Re-run exactly as: <white>/aceeco restore {backup_id} confirm</white></red>"
+  import-confirm-required: "<red>Import writes balances. Without <white>apply confirm</white> this is only a preview. Re-run exactly as: <white>/aceeco import {source} {path} apply confirm</white></red>"
+  import-unknown-source: "<red>Unknown import source: <white>{raw}</white>. Supported: <white>essentials, cmi</white>.</red>"
 
 error:
   format-error: "<red>Message format error for key={key}</red>"

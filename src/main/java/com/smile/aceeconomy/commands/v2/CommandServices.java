@@ -5,6 +5,7 @@ import com.smile.aceeconomy.commands.v2.ports.BackupCommandService;
 import com.smile.aceeconomy.commands.v2.ports.BankCommandService;
 import com.smile.aceeconomy.commands.v2.ports.EconomyCommandService;
 import com.smile.aceeconomy.commands.v2.ports.HistoryQueryService;
+import com.smile.aceeconomy.commands.v2.ports.ImportCommandService;
 import com.smile.aceeconomy.commands.v2.ports.LeaderboardQueryService;
 import com.smile.aceeconomy.commands.v2.ports.PlayerLookupService;
 import com.smile.aceeconomy.commands.v2.ports.RollbackCommandService;
@@ -24,6 +25,7 @@ public record CommandServices(
         HistoryQueryService history,
         RollbackCommandService rollback,
         BackupCommandService backupRestore,
+        ImportCommandService imports,
         ConfigLangAdapter messages) {
 
     public CommandServices {
@@ -36,7 +38,8 @@ public record CommandServices(
         Objects.requireNonNull(history, "history");
         Objects.requireNonNull(rollback, "rollback");
         Objects.requireNonNull(backupRestore, "backupRestore");
-        // messages may be null in offline unit tests that don't exercise i18n; production always supplies it
+        // imports and messages may be null in offline unit tests that don't exercise
+        // them; production always supplies both
     }
 
     /** Legacy constructor without messages — used by offline tests that don't exercise i18n. */
@@ -49,7 +52,24 @@ public record CommandServices(
             AdminCommandService admin,
             HistoryQueryService history,
             RollbackCommandService rollback,
+            BackupCommandService backupRestore,
+            ImportCommandService imports) {
+        this(economy, players, withdrawals, leaderboard, bank, admin, history, rollback,
+                backupRestore, imports, null);
+    }
+
+    /** Legacy constructor without import/messages — used by offline tests predating import. */
+    public CommandServices(
+            EconomyCommandService economy,
+            PlayerLookupService players,
+            WithdrawCommandService withdrawals,
+            LeaderboardQueryService leaderboard,
+            BankCommandService bank,
+            AdminCommandService admin,
+            HistoryQueryService history,
+            RollbackCommandService rollback,
             BackupCommandService backupRestore) {
-        this(economy, players, withdrawals, leaderboard, bank, admin, history, rollback, backupRestore, null);
+        this(economy, players, withdrawals, leaderboard, bank, admin, history, rollback,
+                backupRestore, null, null);
     }
 }

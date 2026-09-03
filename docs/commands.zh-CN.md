@@ -20,7 +20,7 @@
 | `/withdraw` | `cash` | `<amount> [currency]` | 仅限玩家 | `aceeconomy.command.withdraw` | 无 |
 | `/baltop` | `top` | `[currency]` | 玩家或控制台 | `aceeconomy.command.baltop` | 无 |
 | `/bank` | `open` | 不接受参数 | 仅限玩家 | `aceeconomy.command.bank` | 无 |
-| `/aceeco` | `give`、`take`、`set`、`history`、`reload`、`rollback`、`backup`、`restore` | 见管理员参考 | `reload`、`rollback`、`restore` 仅限控制台；`backup` 与其他子指令可由玩家或控制台执行 | `aceeconomy.admin` 加上子指令权限 | 无 |
+| `/aceeco` | `give`、`take`、`set`、`history`、`reload`、`rollback`、`backup`、`restore`、`import` | 见管理员参考 | `reload`、`rollback`、`restore`、`import` 仅限控制台；`backup` 与其他子指令可由玩家或控制台执行 | `aceeconomy.admin` 加上子指令权限 | 无 |
 
 `<必填>` 代表必须提供的值；`[可选]` 代表可省略的值。省略 `currency` 时，使用设置的默认货币。货币 ID 不区分大小写。
 
@@ -114,7 +114,7 @@ v2 指令规格列出的主指令别名只有 `/money` 的 `/balance`。它仍�
 
 ## 管理员权限
 
-管理员主指令是 `/aceeco`，v2 指令规格未提供别名。主权限为 `aceeconomy.admin`，每个操作也各有自己的权限节点。变更余额的子指令沿用「玩家名称、金额、可选货币」的格式。`history` 只读取已记录的交易，不会改变余额。`reload`、`rollback` 与 `restore` 只能由控制台执行；`rollback` 要带交易 ID，`restore` 则要带备份 ID 与精确的 `confirm`。
+管理员主指令是 `/aceeco`，v2 指令规格未提供别名。主权限为 `aceeconomy.admin`，每个操作也各有自己的权限节点。变更余额的子指令沿用「玩家名称、金额、可选货币」的格式。`history` 只读取已记录的交易，不会改变余额。`reload`、`rollback`、`restore` 与 `import` 只能由控制台执行；`rollback` 要带交易 ID，`restore` 则要带备份 ID 与精确的 `confirm`，`import` 要带来源与路径（写入时需精确的 `apply confirm`）。
 
 | 子指令 | 用法 | 执行者 | 子指令权限 | 别名 |
 |---|---|---|---|---|
@@ -126,6 +126,7 @@ v2 指令规格列出的主指令别名只有 `/money` 的 `/balance`。它仍�
 | `rollback` | `/aceeco rollback <transaction-id>` | 仅限控制台 | `aceeconomy.admin.rollback` | 无 |
 | `backup` | `/aceeco backup [label]` | 玩家或控制台 | `aceeconomy.admin.backup` | 无 |
 | `restore` | `/aceeco restore <backup-id> confirm` | 仅限控制台 | `aceeconomy.admin.restore` | 无 |
+| `import` | `/aceeco import <essentials\|cmi> <path> [currency] [apply confirm]` | 仅限控制台 | `aceeconomy.admin.import` | 无 |
 
 插件声明的默认值是：玩家指令权限为 `true`，管理员权限为 `op`。另外，插件也声明 `aceeconomy.bypass.debt`，默认值为 `op`，用于跳过债务上限的权限。
 
@@ -222,12 +223,38 @@ v2 指令规格列出的主指令别名只有 `/money` 的 `/balance`。它仍�
 
 示例：`/aceeco restore 20260824T093000-aaaa1111 confirm`
 
+### 导入余额：`/aceeco import`
+
+当 EssentialsX 或 CMI 服务器的余额需要带进 v2 时使用。指令只能从控制台执行，且需要 `aceeconomy.admin` 与 `aceeconomy.admin.import`。没有精确的 `apply confirm` 时一律是预演：不写入、不备份、不消耗防重复状态。
+
+| 项目 | 说明 |
+|---|---|
+| 用法 | `/aceeco import <essentials\|cmi> <path> [currency] [apply confirm]` |
+| 执行者 | 仅限控制台 |
+| 权限 | `aceeconomy.admin.import`（还需要主权限 `aceeconomy.admin`） |
+| 来源格式 | Essentials：`<uuid>.yml` 玩家文件或其目录（`money:` 余额、可选 `last-account-name:`）。支持 EssentialsX 2.x userdata。CMI：管理员整理好的 UTF-8 对账文件（每行 `uuid,name,balance`，可有表头，`.csv`/`.txt`）。CMI 的 `cmi.sqlite.db` 二进制文件不受支持，会直接拒绝。 |
+| 路径 | 相对于插件控制的 `<plugin data folder>/import` 目录。绝对路径、`..`、symlink、不存在的条目、过大文件、敏感文件名与各来源不支持的扩展名，都会在读文件前拒绝。 |
+| 货币 | 省略时使用配置的默认货币。未知的货币 ID 会在备份前中止整个流程。 |
+| 应用 | 只有精确的 `apply confirm`（`confirm` 限小写）会写入。写入前先建立 `pre-import` 安全备份；备份失败则整批不应用。重跑同一来源是安全的：已应用的记录会报告为跳过。 |
+| 报告 | `applied` / `skipped` / `failed` 计数与失败摘要。只要有任何一笔失败，就不会宣称完全成功。 |
+
+示例：
+
+```text
+/aceeco import essentials userdata
+/aceeco import essentials userdata coin apply confirm
+/aceeco import cmi balances.csv
+/aceeco import cmi balances.csv coin apply confirm
+```
+
+先把 Essentials 的 `plugins/Essentials/userdata/` 文件（或整理好的 CMI 对账文件）复制到 `plugins/AceEconomy/import/`；指令不会读取该目录之外的任何位置。迁移流程见[从 AceEconomy v1 升级](upgrade-from-v1.zh-CN.md)。
+
 ## 常见指令错误
 
 | 情况 | 检查方式 |
 |---|---|
 | 没有权限 | 确认执行者拥有主指令或子指令列出的权限。 |
-| 执行者类型不对 | 玩家限定指令请在游戏内执行；`/aceeco reload`、`/aceeco rollback` 与 `/aceeco restore` 请从控制台执行；`restore` 还要求没有玩家在线。 |
+| 执行者类型不对 | 玩家限定指令请在游戏内执行；`/aceeco reload`、`/aceeco rollback`、`/aceeco restore` 与 `/aceeco import` 请从控制台执行；`restore` 还要求没有玩家在线。 |
 | 参数少了或多了 | 对照正确的子指令和用法。例如 `/baltop` 必须接 `top`，不接受页码。 |
 | 找不到玩家 | 检查玩家名称后再试一次。 |
 | 找不到货币 | 使用已配置的货币 ID；省略货币时会使用设置的默认值。 |
@@ -237,3 +264,6 @@ v2 指令规格列出的主指令别名只有 `/money` 的 `/balance`。它仍�
 | 还原确认被拒绝 | 必须使用精确的小写 `confirm`：`/aceeco restore <backup-id> confirm`。`CONFIRM`、`Confirm` 与其他拼法都会被拒绝。 |
 | 还原时有玩家在线 | 先让所有玩家离线，再从控制台重试。 |
 | 还原的安全备份或快照检查失败 | 保留正式数据，根据错误提示检查原因；不要删除当前存储内容来强行还原。 |
+| 导入确认被拒绝 | 没有精确的 `apply confirm` 就只是预览。请重跑为 `/aceeco import <essentials\|cmi> <path> [currency] apply confirm`。 |
+| 导入路径被拒绝 | 路径必须相对于 `<plugin data folder>/import`。绝对路径、`..`、symlink、敏感文件名与不支持的扩展名都会在读文件前拒绝。 |
+| 导入报告失败 | 看失败摘要：未知格式、无效数字与负余额不会被静默当成零。修好来源后重跑，只会补上还没应用的部分。 |

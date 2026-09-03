@@ -116,4 +116,14 @@ v2 的 JSON 快照有自己的 schema 版本。v1 的数据文件不是 v2 快�
 
 ## 如果必须延续 v1 数据
 
-本产品不会自动执行 v1 到 v2 的数据迁移。不要自己动手编辑 JSON、改文件名，或者让 v2 指向 v1 的存储位置。请保留原始备份，另外提出一份范围明确、可以回退的数据转换需求。
+v2 不会直接读 v1 的文件，v1 的文件也不是 v2 快照。不要自己改 JSON、改文件名，或把 v2 指向 v1 的存储位置。[操作正式服务器前](#操作正式服务器前)留下的原始备份不要动。
+
+旧余额真要带进 v2，请走导入流程。只吃两种来源：EssentialsX 2.x 的玩家文件，以及整理好的 CMI 对账文件，都要从服务器控制台执行：
+
+1. 先把来源文件复制到 `plugins/AceEconomy/import/`。EssentialsX 就是带 `money:` 字段的 `<uuid>.yml` 玩家文件；CMI 就是整理好的 UTF-8 对账文件，每行 `uuid,name,balance`。`import/` 之外的路径一律不读。
+2. 先预览，不写入，例如 `/aceeco import essentials userdata` 或 `/aceeco import cmi balances.csv`。预览报的路径或格式问题先修好，再往下走。
+3. 预览结果没问题，才用精确的 `apply confirm` 写入，例如 `/aceeco import essentials userdata apply confirm`。写入前会先做一份 `pre-import` 安全备份；备份失败就整批不写。
+4. 看 `applied` / `skipped` / `failed` 报告。只要有失败，就不算完全成功，请看失败摘要，不要以为没进去的都变成零。
+5. 同一份来源重跑是安全的：已经进去的会报成 `skipped`，重跑只会补上还没进去的。
+
+完整用法、权限和错误对照，见[指令](commands.zh-CN.md#导入余额aceeco-import)的“导入余额”一节。
