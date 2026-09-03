@@ -2,7 +2,9 @@ package com.smile.aceeconomy.infrastructure.operations;
 
 import com.smile.aceeconomy.ports.operations.ImportSource;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
@@ -441,26 +443,48 @@ public final class ImportPathGate {
     }
 
     /**
-     * Read the whole file after a symlink and size pre-check. Symlinks are
-     * still rejected before and after by the callers; this keeps the read
-     * itself bounded so a file grown past the limit mid-read fails closed
-     * instead of exhausting memory.
+     * Single read quantum for the bounded file read below. Small enough to
+     * stop just past the size bound, large enough to keep full-size reads fast.
+     */
+    private static final int READ_CHUNK_BYTES = 64 * 1024;
+
+    /**
+     * Read the whole file after a symlink pre-check. A size probe first would
+     * still leave a window where the file grows before the bytes are pulled
+     * in, so the stream itself is capped: anything past the limit fails closed
+     * here instead of being buffered into memory first. Symlinks are still
+     * rejected before and after by the callers.
      */
     private static byte[] readBytesSecure(Path path, String displayName) throws IOException {
         if (Files.isSymbolicLink(path)) {
             throw new ImportPathRejectedException(
                     displayName + ": import path must not be a symbolic link; refusing to read");
         }
-        if (Files.size(path) > MAX_FILE_BYTES) {
-            throw new ImportPathRejectedException("import file is too large (max "
-                    + MAX_FILE_BYTES + " bytes): " + displayName);
+        try (InputStream in = Files.newInputStream(path)) {
+            return readBoundedBytes(in, displayName);
         }
-        byte[] bytes = Files.readAllBytes(path);
-        if (bytes.length > MAX_FILE_BYTES) {
-            throw new ImportPathRejectedException("import file is too large (max "
-                    + MAX_FILE_BYTES + " bytes): " + displayName);
+    }
+
+    /**
+     * Drain at most {@code MAX_FILE_BYTES + 1} bytes: exactly-at-limit input
+     * is returned whole, anything larger is refused before the oversized tail
+     * is buffered. The one-byte over-read is what tells "exactly full" apart
+     * from "too big" without trusting a pre-read size probe.
+     */
+    static byte[] readBoundedBytes(InputStream in, String displayName) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream(READ_CHUNK_BYTES);
+        byte[] chunk = new byte[READ_CHUNK_BYTES];
+        long total = 0;
+        int read;
+        while ((read = in.read(chunk)) != -1) {
+            total += read;
+            if (total > MAX_FILE_BYTES) {
+                throw new ImportPathRejectedException("import file is too large (max "
+                        + MAX_FILE_BYTES + " bytes): " + displayName);
+            }
+            out.write(chunk, 0, read);
         }
-        return bytes;
+        return out.toByteArray();
     }
 
     /**
