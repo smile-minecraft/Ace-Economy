@@ -1,5 +1,10 @@
 package com.smile.aceeconomy.gui.v2;
 
+import com.smile.acelib.gui.GuiArgument;
+import com.smile.acelib.gui.GuiAsyncRequest;
+import com.smile.acelib.gui.GuiPage;
+import com.smile.acelib.gui.GuiResult;
+import com.smile.acelib.gui.GuiService;
 import com.smile.acelib.gui.GuiSession;
 import com.smile.aceeconomy.infrastructure.acelib.FakeGuiService;
 import com.smile.aceeconomy.infrastructure.acelib.RecordingFoliaContext;
@@ -11,11 +16,11 @@ import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.HashMap;
-import java.util.Map;
+import java.util.HashSet;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -25,17 +30,19 @@ import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * True-timing publish-vs-rollback interleave: the candidate open passes the
- * post-check, then the rollback snapshot runs before the three bookkeeping
- * puts land. The candidate must not survive under the restored resolver.
+ * entry check and finishes {@code openInventory}, then parks before acquiring
+ * its publish fence while the rollback snapshot runs. The candidate must not
+ * survive under the restored resolver.
  *
- * <p>The sessions map is wrapped (via reflection only to install the hook)
- * so the open thread parks on its first {@code put} — proving the post-check
- * already passed — while the test thread runs the real rollback. No state is
- * forged; the order is controlled by latches across real threads.
+ * <p>Parking before fence acquisition proves the rollback was not blocked by
+ * the open: the rollback runs to completion while the opener is parked, sees
+ * an empty snapshot, and the opener then self-cleans through the post-publish
+ * generation fence and reports stale-layout for a retry.
  */
 class V2BankGuiSessionPublishRollbackRaceTest {
 
@@ -52,39 +59,71 @@ class V2BankGuiSessionPublishRollbackRaceTest {
         return p;
     }
 
-    /** Sessions map that parks the next put so the rollback lands in between. */
-    private static final class ParkingSessions extends ConcurrentHashMap<UUID, GuiSession> {
+    /** GuiService wrapper that parks after openInventory, before the open takes its fence. */
+    private static final class ParkingGuiService implements GuiService {
+        private final FakeGuiService delegate;
         final CountDownLatch entered = new CountDownLatch(1);
         final CountDownLatch release = new CountDownLatch(1);
 
-        ParkingSessions(Map<UUID, GuiSession> seed) {
-            super(seed);
+        ParkingGuiService(FakeGuiService delegate) {
+            this.delegate = delegate;
         }
 
         @Override
-        public GuiSession put(UUID key, GuiSession value) {
+        public GuiResult openInventory(GuiArgument argument) {
+            GuiResult result = delegate.openInventory(argument);
             entered.countDown();
             try {
                 assertTrue(release.await(10, TimeUnit.SECONDS),
-                        "rollback must run while the open is parked on publish");
+                        "rollback must run while the open is parked before fence acquisition");
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new RuntimeException(e);
             }
-            return super.put(key, value);
+            return result;
         }
-    }
 
-    @SuppressWarnings("unchecked")
-    private static Map<UUID, GuiSession> sessionsOf(V2BankGuiSession session) throws Exception {
-        Field f = V2BankGuiSession.class.getDeclaredField("sessions");
-        f.setAccessible(true);
-        return (Map<UUID, GuiSession>) f.get(session);
+        @Override
+        public GuiResult closeInventory(UUID playerUuid, long generation) {
+            return delegate.closeInventory(playerUuid, generation);
+        }
+
+        @Override
+        public GuiResult getActiveSession(UUID playerUuid) {
+            return delegate.getActiveSession(playerUuid);
+        }
+
+        @Override
+        public GuiResult validateClick(UUID playerUuid, long generation, int slot) {
+            return delegate.validateClick(playerUuid, generation, slot);
+        }
+
+        @Override
+        public GuiResult beginAsyncUpdate(UUID playerUuid, long sessionGeneration, int pageIndex) {
+            return delegate.beginAsyncUpdate(playerUuid, sessionGeneration, pageIndex);
+        }
+
+        @Override
+        public <T> GuiResult applyAsyncUpdate(GuiAsyncRequest request, GuiPage<T> page,
+                                              Runnable renderer) {
+            return delegate.applyAsyncUpdate(request, page, renderer);
+        }
+
+        @Override
+        public String getModuleStatus() {
+            return delegate.getModuleStatus();
+        }
+
+        @Override
+        public void shutdown() {
+            delegate.shutdown();
+        }
     }
 
     @Test
     void candidatePublishedAfterRollbackSnapshotMustNotSurvive() throws Exception {
-        FakeGuiService gui = FakeGuiService.available();
+        FakeGuiService fake = FakeGuiService.available();
+        ParkingGuiService gui = new ParkingGuiService(fake);
         V2BankGuiSession session = new V2BankGuiSession(gui, new RecordingFoliaContext(),
                 new StubBankGuiUseCase(), slot -> BankGuiAction.withdraw(100));
         Function<Integer, BankGuiAction> candidate = slot -> BankGuiAction.withdraw(100);
@@ -98,24 +137,27 @@ class V2BankGuiSessionPublishRollbackRaceTest {
         UUID id = UUID.randomUUID();
         Player player = mockPlayer(id);
 
-        ParkingSessions parking = new ParkingSessions(sessionsOf(session));
-        Field f = V2BankGuiSession.class.getDeclaredField("sessions");
-        f.setAccessible(true);
-        f.set(session, parking);
-
         ExecutorService opener = Executors.newSingleThreadExecutor();
         try {
             Future<V2BankGuiSession.OpenOutcome> opening = opener.submit(
                     () -> session.open(player, "Bank", 27, PROTECTED, failedGeneration));
-            assertTrue(parking.entered.await(10, TimeUnit.SECONDS),
-                    "open must reach publish (post-check passed) before rollback");
+            assertTrue(gui.entered.await(10, TimeUnit.SECONDS),
+                    "open must finish openInventory (entry check passed) before rollback");
+            assertFalse(opening.isDone(),
+                    "open must still be parked before fence acquisition while rollback runs");
 
             // Real rollback window: restore the old resolver, then clean the
-            // failed candidate. The snapshot inside sees no entry for id.
+            // failed candidate. The snapshot inside sees no local entry for id
+            // because the opener has not taken its fence yet.
             session.replaceLayout(restored);
-            session.dropSessionsAfterFailedSwap(keepThrough, failedGeneration);
+            int dropped = session.dropSessionsAfterFailedSwap(keepThrough, failedGeneration);
+            assertEquals(0, dropped,
+                    "rollback snapshot must miss the parked candidate, proving it ran "
+                            + "in the pre-publish window instead of being blocked by the open");
+            assertFalse(opening.isDone(),
+                    "rollback must complete while the open is still parked before its fence");
 
-            parking.release.countDown();
+            gui.release.countDown();
             V2BankGuiSession.OpenOutcome outcome = opening.get(10, TimeUnit.SECONDS);
 
             assertFalse(outcome.success(),
@@ -125,7 +167,7 @@ class V2BankGuiSessionPublishRollbackRaceTest {
                     "the losing open must report stale-layout so the caller retries");
 
             // The just-created GuiService entry must not stay usable.
-            assertFalse(gui.getActiveSession(id).isSuccess(),
+            assertFalse(fake.getActiveSession(id).isSuccess(),
                     "the candidate GuiService entry must be closed, not left behind");
 
             // A retry from the fresh generation converges on the restored layout.
@@ -135,5 +177,31 @@ class V2BankGuiSessionPublishRollbackRaceTest {
         } finally {
             opener.shutdownNow();
         }
+    }
+
+    @Test
+    void publishFenceStaysBoundedAcrossManyKeys() throws Exception {
+        FakeGuiService gui = FakeGuiService.available();
+        V2BankGuiSession session = new V2BankGuiSession(gui, new RecordingFoliaContext(),
+                new StubBankGuiUseCase(), slot -> BankGuiAction.withdraw(100));
+
+        Field stripesField = V2BankGuiSession.class.getDeclaredField("keyGuards");
+        stripesField.setAccessible(true);
+        Object[] stripes = (Object[]) stripesField.get(session);
+        assertEquals(V2BankGuiSession.GUARD_STRIPES, stripes.length,
+                "publish fence must stay at a fixed stripe count under UUID churn");
+
+        Method guardFor = V2BankGuiSession.class.getDeclaredMethod("guardFor", UUID.class);
+        guardFor.setAccessible(true);
+        UUID fixed = UUID.randomUUID();
+        assertSame(guardFor.invoke(session, fixed), guardFor.invoke(session, fixed),
+                "same player must always map to the same stripe");
+
+        Set<Object> seen = new HashSet<>();
+        for (int i = 0; i < 500; i++) {
+            seen.add(guardFor.invoke(session, UUID.randomUUID()));
+        }
+        assertTrue(seen.size() <= V2BankGuiSession.GUARD_STRIPES,
+                "distinct players must share a bounded set of stripes, never grow per UUID");
     }
 }

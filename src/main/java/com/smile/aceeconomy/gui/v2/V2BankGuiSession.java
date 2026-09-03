@@ -61,12 +61,23 @@ public final class V2BankGuiSession {
     private final Map<UUID, SessionTag> sessionLayoutGenerations = new ConcurrentHashMap<>();
     // Per-player publish fence: the three bookkeeping puts of an open and the
     // per-key removals of a rollback/invalidation for the same player meet
-    // here. The critical section holds only map operations, never the slow
-    // inventory open, so no player thread is blocked on I/O.
-    private final Map<UUID, Object> keyGuards = new ConcurrentHashMap<>();
+    // here. Fixed stripes bound memory under UUID churn: the same player
+    // always maps to the same stripe, so same-key mutual exclusion holds;
+    // different keys sharing a stripe only wait on a map-only critical
+    // section, never on the slow inventory open.
+    static final int GUARD_STRIPES = 64;
+    private final Object[] keyGuards;
+
+    {
+        Object[] guards = new Object[GUARD_STRIPES];
+        for (int i = 0; i < guards.length; i++) {
+            guards[i] = new Object();
+        }
+        keyGuards = guards;
+    }
 
     private Object guardFor(UUID playerUuid) {
-        return keyGuards.computeIfAbsent(playerUuid, key -> new Object());
+        return keyGuards[Math.floorMod(playerUuid.hashCode(), GUARD_STRIPES)];
     }
 
     /**
