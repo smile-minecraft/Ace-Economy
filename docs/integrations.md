@@ -139,11 +139,15 @@ Floodgate is an optional soft dependency. When it is installed and AceLib identi
 2. Start the server; AceEconomy picks up the Bedrock lookup automatically. No AceEconomy configuration is needed.
 3. On a Bedrock client, run a command whose reply contains buttons (for example `/baltop`) and confirm the hint text is readable.
 
+### Bank forms on Bedrock
+
+`/bank open` sends Bedrock players a native form instead of the chest menu: a home screen with the balance plus deposit, withdraw, and close buttons; withdraw takes an amount and a currency, then requires a confirm step. Both interfaces share the same deposit/withdraw path. A closed, invalid, offline, or post-reload response never executes a transaction, and live Bedrock-client verification is still pending — automation covers the routing and safety rules, but do not claim the form flow is proven until a real client completes deposit, withdraw, cancel, and reopen.
+
 ### Limits
 
 - Only click actions degrade; hover text is not guaranteed on Bedrock.
-- When Floodgate is absent, disabled, or a lookup fails, every player receives the original message — startup and Java behaviour do not change.
-- The hint wording comes from the `message.bedrock.fallback.*` keys in `lang/<locale>.yml`; the payload is inserted as plain text and never parsed as formatting.
+- When Floodgate is absent, disabled, or a lookup fails, every player receives the original message and stays on the chest bank menu — startup and Java behaviour do not change.
+- The hint wording comes from the `message.bedrock.fallback.*` keys in `lang/<locale>.yml`; the payload is inserted as plain text and never parsed as formatting. Bank form text comes from the `gui.bank-form-*` keys in the same files.
 
 ## Related guides
 

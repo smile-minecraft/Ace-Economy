@@ -104,11 +104,13 @@ Use this to open the AceEconomy bank interface. The command must be run by a pla
 | Permission | `aceeconomy.command.bank` |
 | Alias | None listed by the v2 command specification |
 
-The current GUI action contract is:
+Java players open the chest menu. The current GUI action contract is:
 
 - `DEPOSIT`: slot `4` (the upper-middle cell).
 - `WITHDRAW`: the existing slots `11` and `13` (the `100` and `500` withdrawal buttons).
 - `CLOSE`: slot `15`.
+
+Bedrock players (Geyser + Floodgate) open a native form instead: a home screen with the balance plus deposit, withdraw, and close buttons; withdraw takes an amount and a currency, then requires a confirm step. Closing a form, entering an invalid value, going offline, or a reload/disconnect before answering never executes a transaction. Both interfaces share the same deposit/withdraw path, so nonce, anti-replay, and region guarantees hold on either side. When Floodgate is absent, every player stays on the chest menu.
 
 For a valid v2 banknote, durable replay protection and credit complete before the banknote is removed or its stack is reduced. Invalid, replayed, or credit-failed banknotes remain in the player's inventory. Right-clicking while holding a banknote redeems it through the same atomic path as the bank dashboard deposit button. If the credit commits but the item cannot be removed, the credit stands, and the server audit log records the note id, player, and credited value so the case stays traceable. A multi-note stack is decremented on a copy and written back with a single slot write, so a failed write leaves the full stack in hand: keep it and contact an administrator. Clearing a single note is one slot write whose outcome cannot be verified from the outside, so no promise is made about the slot: keep the note stub and contact an administrator without retrying (the credit is already counted and a replay is rejected). The administrator looks up the note id in the audit log, removes or voids the duplicate note first, and then compensates (for example with `/aceeco give`).
 

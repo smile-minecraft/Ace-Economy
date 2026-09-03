@@ -2,6 +2,7 @@ package com.smile.aceeconomy.bootstrap;
 
 import com.smile.acelib.AceLibApi;
 import com.smile.acelib.bedrock.BedrockService;
+import com.smile.acelib.form.FormService;
 import com.smile.acelib.command.BukkitCommandBridge;
 import com.smile.acelib.command.BukkitReplySink;
 import com.smile.acelib.command.CommandRegistryImpl;
@@ -26,7 +27,9 @@ import com.smile.aceeconomy.infrastructure.acelib.BankGuiLayout;
 import com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter;
 import com.smile.aceeconomy.infrastructure.acelib.CurrencyConfigParser;
 import com.smile.aceeconomy.infrastructure.acelib.SafeSchedulerFoliaContext;
+import com.smile.aceeconomy.gui.v2.BankFormSession;
 import com.smile.aceeconomy.gui.v2.BankGuiActions;
+import com.smile.aceeconomy.gui.v2.BankOpenRouter;
 import com.smile.aceeconomy.infrastructure.integration.acelib.AceLibExternalServiceReadiness;
 import com.smile.aceeconomy.infrastructure.integration.acelib.ExternalIntegrationCoordinator;
 import com.smile.aceeconomy.infrastructure.integration.acelib.IntegrationModule;
@@ -117,6 +120,7 @@ public final class CompositionRoot {
     private FoliaContextExecutor folia;
     private PlayerSessionManager sessions;
     private V2BankGuiSession bankGui;
+    private BankFormSession bankForms;
     private CommandRegistryImpl commandRegistry;
     private ExternalIntegrationCoordinator integrations;
     private V2BanknoteFactory banknotes;
@@ -327,8 +331,26 @@ public final class CompositionRoot {
         ProductionAdapters.Leaderboards leaderboards = new ProductionAdapters.Leaderboards(
                 leaderboardService,
                 integer("leaderboard.page-size", 10), ioExecutor);
-        ProductionAdapters.Bank bankCommands =
+        ProductionAdapters.Bank javaBankCommands =
                 new ProductionAdapters.Bank(bankGui, () -> currentLayout, config, ioExecutor);
+        // Bedrock native-form bank surface. The form service is resolved
+        // defensively: an unavailable Bedrock facade (Floodgate absent) leaves
+        // a null transport, and the session fails closed at send time while
+        // the detector keeps every player on the Java chest path.
+        FormService bedrockForms = null;
+        try {
+            BedrockService bedrock = requireApi().getBedrockService();
+            if (bedrock != null) {
+                bedrockForms = bedrock.forms();
+            }
+        } catch (Throwable failure) {
+            plugin.getLogger().warning("Bedrock form service unavailable, bank forms disabled: "
+                    + failure.getClass().getSimpleName());
+        }
+        bankForms = new BankFormSession(bedrockForms, folia, bankUseCase, api,
+                () -> currencies, config);
+        BankOpenRouter bankCommands = new BankOpenRouter(
+                javaBankCommands, bankForms::open, config.bedrockDetector(), ioExecutor);
         ProductionAdapters.Admin adminCommands = new ProductionAdapters.Admin(api, ioExecutor,
                 () -> {
                     com.smile.aceeconomy.infrastructure.acelib.ReloadResult result =
@@ -408,6 +430,9 @@ public final class CompositionRoot {
     }
 
     private void stopPresentation() {
+        if (bankForms != null) {
+            bankForms.invalidateAll();
+        }
         if (commandRegistry != null) {
             commandRegistry.onPluginDisable();
         }
@@ -531,6 +556,9 @@ public final class CompositionRoot {
                         layoutSwapped = true;
                         bankGui.replaceLayout(BankGuiActions.resolver(layout));
                         bankGui.invalidateAll();
+                        if (bankForms != null) {
+                            bankForms.invalidateAll();
+                        }
                     }
                 } catch (Throwable failure) {
                     // Rollback is reference swaps back to the snapshots above: the

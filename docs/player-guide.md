@@ -127,6 +127,8 @@ Open the dashboard with:
 
 The bank is a player-only menu. It gives you a single place to view your account area and use the available banknote withdrawal actions. Close the menu when you are done. The command requires `aceeconomy.command.bank`.
 
+Java players get a chest menu; Bedrock players (Geyser + Floodgate) get a native form instead. The form shows your balance with three buttons: deposit the banknote held in your main hand, withdraw, or close. Withdraw asks for an amount and a currency, then shows a confirm screen — nothing moves until you confirm. Closing a form or entering an invalid value never changes your balance. Both interfaces share the same deposit/withdraw path, so the one-banknote-once rule and the full-inventory check apply everywhere.
+
 ## I want to use more than one currency
 
 Every command that shows `[currency]` accepts a configured currency ID. The default configuration includes `dollar` and `token`; your server may define more.
