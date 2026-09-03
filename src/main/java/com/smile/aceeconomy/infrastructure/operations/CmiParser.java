@@ -7,7 +7,6 @@ import com.smile.aceeconomy.ports.operations.ImportSource;
 
 import java.io.IOException;
 import java.math.BigDecimal;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
@@ -15,7 +14,6 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
-import java.util.stream.Stream;
 
 /**
  * Parses the v1 CMI input: an operator-prepared UTF-8 balance sheet, one
@@ -46,59 +44,88 @@ public final class CmiParser {
      * @param scale currency scale used to build amounts
      */
     public static ImportParseResult parse(Path root, String currencyId, int scale) {
+        ImportPathGate.GatedImport baseline;
+        try {
+            baseline = ImportPathGate.snapshot(root, display(root));
+        } catch (ImportPathRejectedException e) {
+            return new ImportParseResult(List.of(), List.of(display(root) + ": " + e.getMessage()));
+        }
+        return parse(baseline, currencyId, scale);
+    }
+
+    /**
+     * Parse a gate-approved path, refusing anything the gate approved but that
+     * changed before the read: a replaced file or directory, or a file turned
+     * into a directory or a symlink, yields failures instead of records.
+     *
+     * @param gated gate identity captured by {@link ImportPathGate#gate}
+     */
+    public static ImportParseResult parse(ImportPathGate.GatedImport gated, String currencyId, int scale) {
         List<ImportRecord> records = new ArrayList<>();
         List<String> failures = new ArrayList<>();
-        for (Path file : collect(root, failures)) {
+        List<Path> files;
+        try {
+            files = collect(gated, failures);
+        } catch (ImportPathRejectedException e) {
+            failures.add(display(gated.path()) + ": " + e.getMessage());
+            return new ImportParseResult(records, failures);
+        }
+        Path rootReal;
+        try {
+            rootReal = gated.path().toRealPath();
+        } catch (IOException e) {
+            failures.add(display(gated.path()) + ": cannot resolve import path; refusing to read");
+            return new ImportParseResult(records, failures);
+        }
+        for (Path file : files) {
             if (records.size() >= MAX_RECORDS) {
-                failures.add(display(root) + ": too many records (max " + MAX_RECORDS + ")");
+                failures.add(display(gated.path()) + ": too many records (max " + MAX_RECORDS + ")");
                 break;
             }
-            parseFile(root, file, currencyId, scale, records, failures);
+            parseFile(gated, rootReal, file, currencyId, scale, records, failures);
         }
         return new ImportParseResult(records, failures);
     }
 
-    private static List<Path> collect(Path root, List<String> failures) {
-        try {
-            if (Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS)) {
-                try (Stream<Path> stream = Files.list(root)) {
-                    return stream
-                            .filter(path -> !Files.isSymbolicLink(path))
-                            .filter(path -> Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS))
-                            .filter(path -> {
-                                String ext = ImportPathGate.extensionOf(
-                                        path.getFileName().toString().toLowerCase(java.util.Locale.ROOT));
-                                return ext.equals("csv") || ext.equals("txt");
-                            })
-                            .sorted(Comparator.comparing(path -> path.getFileName().toString()))
-                            .toList();
-                }
-            }
-            if (Files.isRegularFile(root, LinkOption.NOFOLLOW_LINKS)
-                    && !Files.isSymbolicLink(root)) {
-                return List.of(root);
-            }
-        } catch (IOException e) {
-            failures.add(display(root) + ": cannot list input (" + e.getMessage() + ")");
-            return List.of();
+    private static List<Path> collect(ImportPathGate.GatedImport gated, List<String> failures) {
+        Path root = gated.path();
+        if (gated.directory()) {
+            return ImportPathGate.listMembersSecure(gated, display(root)).stream()
+                    .filter(path -> !Files.isSymbolicLink(path))
+                    .filter(path -> Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS))
+                    .filter(path -> {
+                        String ext = ImportPathGate.extensionOf(
+                                path.getFileName().toString().toLowerCase(java.util.Locale.ROOT));
+                        return ext.equals("csv") || ext.equals("txt");
+                    })
+                    .sorted(Comparator.comparing(path -> path.getFileName().toString()))
+                    .toList();
         }
-        failures.add(display(root) + ": not a regular file or directory");
-        return List.of();
+        return List.of(root);
     }
 
-    private static void parseFile(Path root, Path file, String currencyId, int scale,
+    private static void parseFile(ImportPathGate.GatedImport gated, Path rootReal, Path file,
+                                  String currencyId, int scale,
                                   List<ImportRecord> records, List<String> failures) {
+        Path root = gated.path();
         String name = display(root, file.getFileName().toString());
-        List<String> lines;
+        String content;
         try {
-            if (Files.size(file) > ImportPathGate.MAX_FILE_BYTES) {
-                failures.add(name + ": file is too large");
-                return;
+            if (!gated.directory() && file.equals(gated.path())) {
+                content = ImportPathGate.readRootFileSecure(gated, name);
+            } else {
+                content = ImportPathGate.readMemberSecure(rootReal, file, name);
             }
-            lines = Files.readAllLines(file, StandardCharsets.UTF_8);
+        } catch (ImportPathRejectedException e) {
+            failures.add(name + ": " + e.getMessage());
+            return;
         } catch (IOException e) {
             failures.add(name + ": cannot read file (" + e.getMessage() + ")");
             return;
+        }
+        List<String> lines = new ArrayList<>();
+        for (String raw : content.split("\n", -1)) {
+            lines.add(raw.endsWith("\r") ? raw.substring(0, raw.length() - 1) : raw);
         }
         int lineNumber = 0;
         for (String raw : lines) {

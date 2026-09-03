@@ -37,13 +37,36 @@ import java.util.function.Consumer;
  *   <li><b>Dry-run</b> performs zero writes and consumes no idempotency state.</li>
  *   <li><b>Rerun idempotency</b> — each record is keyed by {@code source:sourceRecordId}; a rerun
  *       of an already-applied record is reported as skipped, not re-applied.</li>
+ *   <li><b>Concurrent applies are serialized.</b> The account, transaction, and
+ *       idempotency stores expose no shared transaction, so a real cross-store
+ *       atomic commit is impossible here. Instead every non-dry-run import runs
+ *       under one JVM-wide mutex and each record claims its idempotency key
+ *       <em>before</em> writing: two racing applies of the same record yield
+ *       exactly one {@code APPLIED} and one {@code SKIPPED_DUPLICATE}, and a
+ *       lost claim ({@code consume} returning {@code false}) is a duplicate
+ *       skip that appends no audit record.</li>
  *   <li><b>Failure isolation</b> — a malformed or failing record yields a per-record failure and
- *       processing continues; the overall report is only "fully successful" when no record failed.</li>
+ *       processing continues; the overall report is only "fully successful" when no record failed.
+ *       When the audit append fails after the balance was written, the previous
+ *       balance is restored best-effort. Two residuals are inherent to the
+ *       available ports and documented, not hidden: the idempotency key stays
+ *       consumed (there is no un-consume operation, so a later retry reports a
+ *       duplicate skip), and a newly created account cannot be removed (there
+ *       is no account-delete operation).</li>
  *   <li><b>Never partially claims success</b> — {@link ImportReport#fullySuccessful()} is false if
  *       any record failed.</li>
  * </ul>
  */
 public final class ImportService {
+
+    /**
+     * Serializes every non-dry-run import in this JVM. Claim-first idempotency
+     * already decides same-record races atomically at the guard, but the mutex
+     * additionally keeps concurrent imports of different records on one
+     * account from interleaving balance writes, and keeps the behavior correct
+     * even for guard implementations whose claim is not itself atomic.
+     */
+    private static final Object IMPORT_MUTEX = new Object();
 
     private final CurrencyRegistry currencies;
     private final AccountRepository accounts;
@@ -78,6 +101,15 @@ public final class ImportService {
         Objects.requireNonNull(records, "records");
         Objects.requireNonNull(options, "options");
 
+        if (options.dryRun()) {
+            return runAll(records, options);
+        }
+        synchronized (IMPORT_MUTEX) {
+            return runAll(records, options);
+        }
+    }
+
+    private ImportReport runAll(List<ImportRecord> records, ImportOptions options) {
         List<ImportRecordResult> results = new ArrayList<>();
         int applied = 0;
         int skipped = 0;
@@ -120,6 +152,13 @@ public final class ImportService {
         if (idempotency.isConsumed(key)) {
             return ImportRecordResult.skipped(r, "already applied");
         }
+        if (!idempotency.consume(key)) {
+            // Lost a claim race with a concurrent apply of the same record:
+            // the winner owns the write, so report a duplicate skip and append
+            // nothing. Deliberately before any write, so no duplicate balance
+            // or audit record can exist.
+            return ImportRecordResult.skipped(r, "already applied");
+        }
 
         try {
             Currency cur = currencies.get(r.currencyId());
@@ -131,9 +170,21 @@ public final class ImportService {
                 }
                 Account updated = existing.setBalance(cur.id(), r.amount());
                 accounts.save(existing, updated);
-                Amount after = updated.balanceOf(cur.id());
-                UUID txId = appendImportRecord(r, cur, before, after);
-                idempotency.consume(key);
+                UUID txId;
+                try {
+                    Amount after = updated.balanceOf(cur.id());
+                    txId = appendImportRecord(r, cur, before, after);
+                } catch (RuntimeException appendFailure) {
+                    // Best-effort rollback of the balance write; the claim
+                    // above cannot be undone, which the class javadoc discloses.
+                    try {
+                        accounts.save(updated, existing);
+                    } catch (RuntimeException ignored) {
+                        // The balance is already dubious; never mask the
+                        // original append failure with a rollback failure.
+                    }
+                    throw appendFailure;
+                }
                 notifyInvalidated(r.accountUuid());
                 return ImportRecordResult.applied(r, txId, null);
             }
@@ -148,11 +199,12 @@ public final class ImportService {
             accounts.create(r.accountUuid(),
                     r.ownerName() != null ? r.ownerName() : r.accountUuid().toString(), initial);
             UUID txId = appendImportRecord(r, cur, cur.zero(), r.amount());
-            idempotency.consume(key);
             notifyInvalidated(r.accountUuid());
             return ImportRecordResult.applied(r, txId, null);
         } catch (RuntimeException e) {
-            // Isolation: do not consume the idempotency key so the record can be retried.
+            // Isolation: a validation failure before the claim above never
+            // consumed anything and stays retryable; a failure after the claim
+            // reports per-record failure without claiming success.
             // A failed write may still have touched persistence, so drop any cached hit
             // rather than letting a later sync read mask the problem.
             notifyInvalidated(r.accountUuid());

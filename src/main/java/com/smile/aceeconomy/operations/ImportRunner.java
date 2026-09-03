@@ -56,9 +56,12 @@ public final class ImportRunner {
             throw new ImportException(ImportFailureReason.SOURCE_UNKNOWN,
                     "unknown import source; supported: essentials, cmi");
         }
-        Path gated;
+        ImportPathGate.GatedImport gated;
         try {
-            gated = ImportPathGate.resolve(pluginDataFolder, userPath, source);
+            // The gate identity travels with the path into the parser, which
+            // re-verifies it before reading: a file, directory, or symlink
+            // swapped in after this check is refused, never parsed.
+            gated = ImportPathGate.gate(pluginDataFolder, userPath, source);
         } catch (ImportPathRejectedException e) {
             throw new ImportException(ImportFailureReason.PATH_REJECTED, e.getMessage(), e);
         }
