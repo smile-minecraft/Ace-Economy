@@ -39,8 +39,10 @@ import java.util.logging.Logger;
  *       swap between click and execution never removes the wrong item.</li>
  *   <li>Every Bukkit touch after the event thread (decode of the snapshot, credit, removal and
  *       player feedback) runs inside the player's region context via {@link FoliaContextExecutor}.</li>
- *   <li>Exactly one item is consumed, and only after a committed credit. Any rejection, replay,
- *       snapshot mismatch or unclonable item keeps the physical item untouched.</li>
+  *   <li>Exactly one item is consumed, and only after a committed credit. Any rejection, replay,
+  *       snapshot mismatch, unclonable item or removal failure keeps the physical item untouched:
+  *       removal decrements a clone and writes the slot back once, so a failed write leaves the
+  *       full stack in hand with a retained audit record for manual reissue.</li>
  * </ul>
  *
  * <p>The interaction event is cancelled as soon as a banknote is accepted for redemption (before
@@ -142,9 +144,17 @@ public final class BanknoteRedeemListener implements Listener {
         }
         // The credit above already committed the nonce and the balance together, so from here on
         // the note must never vanish silently: any Bukkit inventory touch that throws (hand read,
-        // similarity check, decrement or slot write) keeps the physical item and leaves a retained
-        // audit record plus a player-facing pointer for manual review, instead of letting the
-        // exception escape the scheduled work with the credited note still in hand.
+        // similarity check, clone, decrement or slot write) keeps the physical item and leaves a
+        // retained audit record plus a player-facing pointer for manual review, instead of letting
+        // the exception escape the scheduled work with the credited note still in hand.
+        //
+        // Bukkit offers no atomic hand update, so removal is a single clone-then-write: the live
+        // stack is never mutated in place. A multi-note stack is decremented on a clone and written
+        // back with one slot write, so a failed write still leaves the full stack in hand. The
+        // retained audit record carries the nonce, player and credited value, the player is told to
+        // keep the note and contact an administrator, and the administrator verifies the nonce in
+        // the audit log and compensates manually (for example with /aceeco give) after removing or
+        // invalidating the duplicate note.
         ItemStack current;
         try {
             current = fromMainHand
@@ -160,11 +170,17 @@ public final class BanknoteRedeemListener implements Listener {
             return;
         }
         try {
-            if (current.getAmount() <= 1) {
+            int amount = current.getAmount();
+            if (amount <= 1) {
                 setHeld(player, fromMainHand, null);
             } else {
-                current.setAmount(current.getAmount() - 1);
-                setHeld(player, fromMainHand, current);
+                ItemStack updated = current.clone();
+                if (updated == null || updated == current) {
+                    throw new IllegalStateException(
+                            "banknote clone unavailable; item left untouched for manual review");
+                }
+                updated.setAmount(amount - 1);
+                setHeld(player, fromMainHand, updated);
             }
         } catch (Throwable t) {
             notifyRetained(player, claim, result.value(),

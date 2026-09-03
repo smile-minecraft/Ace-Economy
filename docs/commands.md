@@ -110,7 +110,7 @@ The current GUI action contract is:
 - `WITHDRAW`: the existing slots `11` and `13` (the `100` and `500` withdrawal buttons).
 - `CLOSE`: slot `15`.
 
-For a valid v2 banknote, durable replay protection and credit complete before the banknote is removed or its stack is reduced. Invalid, replayed, or credit-failed banknotes remain in the player's inventory. Right-clicking while holding a banknote redeems it through the same atomic path as the bank dashboard deposit button.
+For a valid v2 banknote, durable replay protection and credit complete before the banknote is removed or its stack is reduced. Invalid, replayed, or credit-failed banknotes remain in the player's inventory. Right-clicking while holding a banknote redeems it through the same atomic path as the bank dashboard deposit button. If the credit commits but the item cannot be removed, the credit stands, the full item stays in hand, and the server audit log records the note id, player, and credited value for manual reissue: the player keeps the note and contacts an administrator, who verifies the note id in the audit log and compensates (for example with `/aceeco give`) after removing or invalidating the duplicate note.
 
 ## For administrators
 

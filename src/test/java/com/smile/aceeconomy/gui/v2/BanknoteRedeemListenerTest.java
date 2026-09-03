@@ -136,7 +136,8 @@ class BanknoteRedeemListenerTest {
     void rightClickValidBanknoteCreditsAndConsumesOne() {
         ItemStack held = stack(false, 3);
         ItemStack snapshot = stack(false, 3);
-        Mockito.when(held.clone()).thenReturn(snapshot);
+        ItemStack updated = stack(false, 3);
+        Mockito.when(held.clone()).thenReturn(snapshot, updated);
         Mockito.when(held.isSimilar(snapshot)).thenReturn(true);
         Mockito.when(inv.getItemInMainHand()).thenReturn(held);
         Mockito.when(inv.getItemInOffHand()).thenReturn(air);
@@ -146,8 +147,10 @@ class BanknoteRedeemListenerTest {
         assertEquals(1, useCase.depositCalls, "deposit must run exactly once through the GUI use case");
         assertSame(snapshot, useCase.lastDepositItem, "deposit must use the click-time snapshot, not the live item");
         assertEquals(playerId, useCase.lastDepositPlayer);
-        verify(held).setAmount(2);
-        verify(inv).setItemInMainHand(held);
+        verify(updated).setAmount(2);
+        verify(inv).setItemInMainHand(updated);
+        verify(held, never()).setAmount(any(int.class));
+        assertEquals(3, held.getAmount(), "the live stack must stay untouched; only the clone is written back");
         verify(messages).renderMessage(eq("banknote.redeem-success"), anyMap());
     }
 
@@ -286,7 +289,8 @@ class BanknoteRedeemListenerTest {
         DeferredFoliaContext folia = new DeferredFoliaContext();
         ItemStack held = stack(false, 2);
         ItemStack snapshot = stack(false, 2);
-        Mockito.when(held.clone()).thenReturn(snapshot);
+        ItemStack updated = stack(false, 2);
+        Mockito.when(held.clone()).thenReturn(snapshot, updated);
         Mockito.when(held.isSimilar(snapshot)).thenReturn(true);
         Mockito.when(inv.getItemInMainHand()).thenReturn(held);
         Mockito.when(inv.getItemInOffHand()).thenReturn(air);
@@ -297,8 +301,9 @@ class BanknoteRedeemListenerTest {
 
         folia.flush();
         assertEquals(1, useCase.depositCalls);
-        verify(held).setAmount(1);
-        verify(inv).setItemInMainHand(held);
+        verify(updated).setAmount(1);
+        verify(inv).setItemInMainHand(updated);
+        verify(held, never()).setAmount(any(int.class));
     }
 
     @Test
@@ -340,22 +345,28 @@ class BanknoteRedeemListenerTest {
     void decrementFailureAfterCreditRetainsNote() {
         ItemStack held = stack(false, 2);
         ItemStack snapshot = stack(false, 2);
-        Mockito.when(held.clone()).thenReturn(snapshot);
+        ItemStack updated = stack(false, 2);
+        Mockito.when(held.clone()).thenReturn(snapshot, updated);
         Mockito.when(held.isSimilar(snapshot)).thenReturn(true);
         Mockito.when(inv.getItemInMainHand()).thenReturn(held);
         Mockito.when(inv.getItemInOffHand()).thenReturn(air);
         Mockito.doThrow(new IllegalStateException("injected inventory outage"))
-                .when(held).setAmount(any(int.class));
+                .when(updated).setAmount(any(int.class));
         RecordingHandler auditLog = installAuditLog();
 
         listener(immediate(), auditLog.logger)
                 .onInteract(interact(EquipmentSlot.HAND, Action.RIGHT_CLICK_AIR, false));
 
         assertEquals(1, useCase.depositCalls, "the credit already committed before the mutation failed");
+        verify(held, never()).setAmount(any(int.class));
+        verify(inv, never()).setItemInMainHand(any());
+        assertEquals(2, held.getAmount(), "the live stack keeps both notes for manual review");
         verify(messages).renderMessage(eq("banknote.redeem-retained"), anyMap());
         verify(messages, never()).renderMessage(eq("banknote.redeem-success"), anyMap());
         assertTrue(auditLog.hasSevere(),
                 "a retained credit must leave an audit record for manual review, never fail silently");
+        assertTrue(auditLog.hasRetainedAuditFor(claim.nonce().toString(), playerId.toString()),
+                "the audit record must carry the nonce and player so an admin can reissue manually");
     }
 
     @Test
@@ -375,10 +386,46 @@ class BanknoteRedeemListenerTest {
                 .onInteract(interact(EquipmentSlot.HAND, Action.RIGHT_CLICK_AIR, false));
 
         assertEquals(1, useCase.depositCalls, "the credit already committed before the mutation failed");
+        verify(held, never()).setAmount(any(int.class));
+        verify(inv).setItemInMainHand((ItemStack) null);
+        assertEquals(1, held.getAmount(), "the single note stays in hand for manual review");
         verify(messages).renderMessage(eq("banknote.redeem-retained"), anyMap());
         verify(messages, never()).renderMessage(eq("banknote.redeem-success"), anyMap());
         assertTrue(auditLog.hasSevere(),
                 "a retained credit must leave an audit record for manual review, never fail silently");
+        assertTrue(auditLog.hasRetainedAuditFor(claim.nonce().toString(), playerId.toString()),
+                "the audit record must carry the nonce and player so an admin can reissue manually");
+    }
+
+    @Test
+    @DisplayName("slot-write failure after a successful decrement keeps the full stack, never a half-removed note")
+    void slotWriteFailureAfterDecrementKeepsFullStack() {
+        ItemStack held = stack(false, 2);
+        ItemStack snapshot = stack(false, 2);
+        ItemStack updated = stack(false, 2);
+        Mockito.when(held.clone()).thenReturn(snapshot, updated);
+        Mockito.when(held.isSimilar(snapshot)).thenReturn(true);
+        Mockito.when(inv.getItemInMainHand()).thenReturn(held);
+        Mockito.when(inv.getItemInOffHand()).thenReturn(air);
+        Mockito.doThrow(new IllegalStateException("injected slot outage"))
+                .when(inv).setItemInMainHand(any());
+        RecordingHandler auditLog = installAuditLog();
+
+        listener(immediate(), auditLog.logger)
+                .onInteract(interact(EquipmentSlot.HAND, Action.RIGHT_CLICK_AIR, false));
+
+        assertEquals(1, useCase.depositCalls, "the credit already committed before the slot write failed");
+        verify(updated).setAmount(1);
+        verify(inv).setItemInMainHand(updated);
+        verify(held, never()).setAmount(any(int.class));
+        assertEquals(2, held.getAmount(),
+                "the live stack is never mutated in place, so a failed slot write keeps both notes");
+        verify(messages).renderMessage(eq("banknote.redeem-retained"), anyMap());
+        verify(messages, never()).renderMessage(eq("banknote.redeem-success"), anyMap());
+        assertTrue(auditLog.hasSevere(),
+                "a retained credit must leave an audit record for manual review, never fail silently");
+        assertTrue(auditLog.hasRetainedAuditFor(claim.nonce().toString(), playerId.toString()),
+                "the audit record must carry the nonce and player so an admin can reissue manually");
     }
 
     @Test
@@ -397,10 +444,14 @@ class BanknoteRedeemListenerTest {
                 .onInteract(interact(EquipmentSlot.HAND, Action.RIGHT_CLICK_AIR, false));
 
         assertEquals(1, useCase.depositCalls, "the credit already committed before the hand read failed");
+        verify(held, never()).setAmount(any(int.class));
+        verify(inv, never()).setItemInMainHand(any());
         verify(messages).renderMessage(eq("banknote.redeem-retained"), anyMap());
         verify(messages, never()).renderMessage(eq("banknote.redeem-success"), anyMap());
         assertTrue(auditLog.hasSevere(),
                 "a retained credit must leave an audit record for manual review, never fail silently");
+        assertTrue(auditLog.hasRetainedAuditFor(claim.nonce().toString(), playerId.toString()),
+                "the audit record must carry the nonce and player so an admin can reissue manually");
     }
 
     private RecordingHandler installAuditLog() {
@@ -437,6 +488,15 @@ class BanknoteRedeemListenerTest {
 
         boolean hasSevere() {
             return records.stream().anyMatch(r -> r.getLevel().intValue() >= Level.SEVERE.intValue());
+        }
+
+        boolean hasRetainedAuditFor(String nonce, String playerId) {
+            return records.stream()
+                    .filter(r -> r.getLevel().intValue() >= Level.SEVERE.intValue())
+                    .map(LogRecord::getMessage)
+                    .anyMatch(message -> message != null
+                            && message.contains(nonce)
+                            && message.contains(playerId));
         }
     }
 
