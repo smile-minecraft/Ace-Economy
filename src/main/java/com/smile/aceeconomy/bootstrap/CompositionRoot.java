@@ -131,6 +131,9 @@ public final class CompositionRoot {
     // publish moves them all together and concurrent requests only ever see the whole old
     // registry or the whole new one.
     private CurrencyDisplayHolder displayHolder;
+    // Last applied bank GUI layout. Snapshotted before every reload apply so a post-publish
+    // failure can restore the previous resolver with the same infallible reference swap.
+    private BankGuiLayout currentLayout;
 
     public CompositionRoot(JavaPlugin plugin) {
         this.plugin = java.util.Objects.requireNonNull(plugin, "plugin");
@@ -298,6 +301,7 @@ public final class CompositionRoot {
         GuiService guiService = requireApi().getGuiService();
         bankGui = new V2BankGuiSession(guiService, folia, bankUseCase,
                 BankGuiActions.resolver(bankGuiLayout));
+        currentLayout = bankGuiLayout;
         // Right-click redemption reuses the same atomic bank use case as the GUI deposit button
         // (durable nonce consumption + credit commit together); the listener owns its click-time
         // snapshot and region-context removal, so no other slice needs to know about interact events.
@@ -484,29 +488,61 @@ public final class CompositionRoot {
             public void applyApproved(
                     com.smile.aceeconomy.infrastructure.acelib.CurrencyReloadPlan.Classification plan,
                     BankGuiLayout layout) {
-                if (plan.disposition()
-                        == com.smile.aceeconomy.infrastructure.acelib.CurrencyReloadPlan.Disposition
-                                .DISPLAY_ONLY) {
-                    // Single atomic publish: every display surface (commands, Vault,
-                    // placeholders) reads through the shared holder, so concurrent requests
-                    // see the whole old registry or the whole new one, never a mixture.
-                    // The publish re-validates first and throws before writing anything,
-                    // so a rejected candidate cannot leave a half-applied state behind.
-                    // The economy service keeps its own transactional copy (ids, scales
-                    // and default never change in a display-only diff); its guard passes
-                    // deterministically for the same candidate.
-                    com.smile.aceeconomy.infrastructure.acelib.CurrencyReloadPlan
-                            .publishDisplayOnly(displayHolder, plan);
-                    CurrencyRegistry candidate = plan.candidate();
-                    economy.replaceCurrencyDisplay(candidate);
-                    currencies = candidate;
-                }
-                // The layout candidate was fully parsed before the swap window: re-resolve for
-                // sessions opened from now on, then drop every open session so no pre-reload
-                // generation can act under the new rules.
-                if (bankGui != null && layout != null) {
-                    bankGui.replaceLayout(BankGuiActions.resolver(layout));
-                    bankGui.invalidateAll();
+                // Snapshot before the swap window so a mid-apply failure can roll every
+                // reference back: without this, a published holder with a failed economy
+                // or layout step would report failure while memory already runs the new
+                // version and the next reload would diff against the wrong baseline.
+                CurrencyRegistry oldDisplay = displayHolder.get();
+                CurrencyRegistry oldCurrencies = currencies;
+                BankGuiLayout oldLayout = currentLayout;
+                boolean displaySwapped = false;
+                boolean economySwapped = false;
+                boolean layoutSwapped = false;
+                try {
+                    if (plan.disposition()
+                            == com.smile.aceeconomy.infrastructure.acelib.CurrencyReloadPlan.Disposition
+                                    .DISPLAY_ONLY) {
+                        // Single atomic publish: every display surface (commands, Vault,
+                        // placeholders) reads through the shared holder, so concurrent requests
+                        // see the whole old registry or the whole new one, never a mixture.
+                        // The publish re-validates first and throws before writing anything,
+                        // so a rejected candidate cannot leave a half-applied state behind.
+                        // The economy service keeps its own transactional copy (ids, scales
+                        // and default never change in a display-only diff); its guard passes
+                        // deterministically for the same candidate.
+                        com.smile.aceeconomy.infrastructure.acelib.CurrencyReloadPlan
+                                .publishDisplayOnly(displayHolder, plan);
+                        displaySwapped = true;
+                        CurrencyRegistry candidate = plan.candidate();
+                        economy.replaceCurrencyDisplay(candidate);
+                        economySwapped = true;
+                        currencies = candidate;
+                    }
+                    // The layout candidate was fully parsed before the swap window: re-resolve for
+                    // sessions opened from now on, then drop every open session so no pre-reload
+                    // generation can act under the new rules.
+                    if (bankGui != null && layout != null) {
+                        bankGui.replaceLayout(BankGuiActions.resolver(layout));
+                        layoutSwapped = true;
+                        currentLayout = layout;
+                        bankGui.invalidateAll();
+                    }
+                } catch (Throwable failure) {
+                    // Rollback is pure reference swaps back to the snapshots above: the
+                    // display-only pair passes the guard in both directions, so restoring
+                    // cannot fail and the rethrow keeps the outer reload reporting failure.
+                    if (layoutSwapped && bankGui != null && oldLayout != null) {
+                        bankGui.replaceLayout(BankGuiActions.resolver(oldLayout));
+                        currentLayout = oldLayout;
+                    }
+                    if (economySwapped) {
+                        economy.replaceCurrencyDisplay(oldDisplay);
+                    }
+                    if (displaySwapped) {
+                        displayHolder.publish(oldDisplay);
+                    }
+                    currencies = oldCurrencies;
+                    throw failure;
                 }
             }
         };
