@@ -13,6 +13,8 @@ general:
   player-not-found: "<red>Player not found: <white>{player}</white></red>"
   status: "<green>Status: <white>{status}</white></green>"
   amount-must-be-positive: "<red>Amount must be positive!</red>"
+  amount-overflow: "<red>Amount exceeds the maximum allowed</red>"
+  default-currency-missing: "<red>Default currency is not configured</red>"
   player-offline: "<red>Player <white>{player}</white> is offline!</red>"
   player-no-account: "<red>Player does not have an account!</red>"
   account-not-loaded: "<red>Account not loaded. Please try again later!</red>"
@@ -41,6 +43,7 @@ economy:
   insufficient-funds-debt: "<red>Insufficient funds! Your account can only overdraw <gold>{limit}</gold> (Current: <yellow>{balance}</yellow>).<reset>"
   debt-status: "<gray>(Credit limit: <gold>{limit}</gold>)</gray>"
   withdraw-success: "<green>Withdrawn banknote: <yellow>{amount}</yellow></green>"
+  withdraw-note: "<green>Withdrew <yellow>{amount}</yellow> as banknote {note_id}</green>"
   withdraw-redeem: "<green>Redeemed banknote: <yellow>{amount}</yellow> <gray>(Issuer: {issuer})</gray></green>"
   min-withdraw-amount: "<red>Minimum withdraw amount is {amount}!</red>"
   account-not-found: "<red>Account not found!</red>"
@@ -62,6 +65,7 @@ admin:
   admin-taking-failed: "<red>Action failed! Insufficient funds likely.</red>"
   backup-success: "<green>Backup created: <white>{backup_id}</white> (logical v2 snapshot)</green>"
   backup-failed: "<red>Backup failed: <white>{reason}</white></red>"
+  backup-invalid-result: "<red>Backup service returned a failure without a typed error; inspect logs — {details}</red>"
   restore-success: "<green>Restored backup <white>{backup_id}</white>. Safety backup: <white>{safety_id}</white>. Restart the server before players join!</green>"
   restore-confirm-required: "<red>Restore is destructive. Re-run exactly as: <white>/aceeco restore {backup_id} confirm</white></red>"
   restore-failed: "<red>Restore failed: <white>{reason}</white></red>"
@@ -93,6 +97,12 @@ admin:
   usage-import: '<gray>Usage: <white>/aceeco import \<essentials|cmi></white></gray>'
 
 command:
+  amount-format: "{symbol}{amount} {currency}"
+  amount-overflow: "<red>Amount exceeds the maximum allowed</red>"
+  audit-failure: "<red>Command completed but audit recording failed</red>"
+  empty-future: "<red>Command service returned no async result</red>"
+  empty-result: "<red>Command service returned no result</red>"
+  missing-argument: "<red>Argument {index} is required</red>"
   usage-pay: '<gray>Usage: <white>/pay \<player> \<amount> [currency]</white></gray>'
   usage-withdraw: '<gray>Usage: <white>/withdraw \<amount></white></gray>'
   usage-balance: "<gray>Usage: <white>/balance [player] [currency]</white></gray>"
@@ -114,6 +124,7 @@ baltop:
   header: "<gold>=== 🏆 {currency_name} Top Balances ===</gold>"
   entry: "<yellow>#{rank} <white>{player} <dark_gray>- <green>{amount}"
   empty: "<red>Leaderboard is empty.</red>"
+  empty-currency: "<red>No balances found for {currency_name}</red>"
   invalid-page: "<red>Page out of range (Max: {max_page})"
   footer: "<gray>Updated: {time_ago} ago <dark_gray>| </dark_gray><click:run_command:'/baltop {currency} {prev_page}'><gold>[Prev]</gold></click> <gray>({page}/{total_pages}) </gray><click:run_command:'/baltop {currency} {next_page}'><gold>[Next]</gold></click>"
   loading: "<gray>Loading leaderboard...</gray>"
@@ -130,6 +141,9 @@ history:
   usage: '<gray>Usage: <white>/aceeco history \<player> [page]</white></gray>'
 
 rollback:
+  already-reverted: "<yellow>Transaction {transaction_id} was already reverted; no changes made</yellow>"
+  invalid-result: "<red>Rollback service returned a failure without a typed error; inspect logs and do not retry blindly — {details}</red>"
+  success: "<green>Rolled back transaction {transaction_id}; reversal audit records ({count}): {ids}</green>"
   usage: '<gray>Usage: <white>/aceeco rollback \<player> \<time> [category]</white></gray>'
   searching: "<yellow>Searching and rolling back transactions...</yellow>"
   none-found: "<red>No matching transactions found to rollback.</red>"

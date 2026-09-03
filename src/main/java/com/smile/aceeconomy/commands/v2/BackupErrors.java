@@ -18,18 +18,37 @@ public final class BackupErrors {
     }
 
     public static CommandException from(BackupResult result) {
-        return map(result.error(), result.message());
+        return map(null, result.error(), result.message());
     }
 
     public static CommandException from(RestoreResult result) {
-        return map(result.error(), result.message());
+        return map(null, result.error(), result.message());
     }
 
-    private static CommandException map(BackupRestoreError err, String message) {
+    public static CommandException from(com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter messages,
+                                        BackupResult result) {
+        return map(messages, result.error(), result.message());
+    }
+
+    public static CommandException from(com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter messages,
+                                        RestoreResult result) {
+        return map(messages, result.error(), result.message());
+    }
+
+    private static CommandException map(com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter messages,
+                                        BackupRestoreError err, String message) {
         if (err == null) {
+            String details = message == null ? "" : message;
+            if (messages != null) {
+                String msg = messages.plainMessage("admin.backup-invalid-result",
+                        java.util.Map.of("details", details));
+                if (msg != null && !msg.startsWith("Missing translation")) {
+                    return CommandException.custom("ACELIB-CMD-BACKUP-INVALID-RESULT", msg);
+                }
+            }
             return CommandException.custom("ACELIB-CMD-BACKUP-INVALID-RESULT",
                     "backup service returned a failure without a typed error; inspect logs — "
-                            + message);
+                            + details);
         }
         String code = switch (err) {
             case INVALID_REQUEST -> "ACELIB-CMD-BACKUP-INVALID-REQUEST";

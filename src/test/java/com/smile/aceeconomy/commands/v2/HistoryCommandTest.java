@@ -212,8 +212,8 @@ class HistoryCommandTest {
 
         ArgumentCaptor<String> message = ArgumentCaptor.forClass(String.class);
         verify(sink).send(org.mockito.ArgumentMatchers.any(Sender.class), message.capture());
-        assertTrue(message.getValue().contains("No transactions found"),
-                "empty page must be explicit, got: " + message.getValue());
+        assertTrue(message.getValue().contains("history.empty"),
+                "empty page must be explicit via localized key, got: " + message.getValue());
     }
 
     @Test

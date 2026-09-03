@@ -194,9 +194,9 @@ class RollbackCommandTest {
 
         String reply = capturedReply(sink);
         assertTrue(reply.contains(transactionId.toString()), "no-op reply names the transaction: " + reply);
-        assertTrue(reply.toLowerCase().contains("already reverted"),
-                "no-op reply must state the transaction was already reverted: " + reply);
-        assertFalse(reply.contains("Rolled back"),
+        assertTrue(reply.contains("rollback.already-reverted"),
+                "no-op reply must use localized key: " + reply);
+        assertFalse(reply.contains("rollback.success"),
                 "a no-op must not read like a freshly executed rollback: " + reply);
     }
 

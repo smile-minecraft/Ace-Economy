@@ -9,6 +9,7 @@ import com.smile.aceeconomy.commands.v2.ports.LeaderboardQueryService;
 import com.smile.aceeconomy.commands.v2.ports.PlayerLookupService;
 import com.smile.aceeconomy.commands.v2.ports.RollbackCommandService;
 import com.smile.aceeconomy.commands.v2.ports.WithdrawCommandService;
+import com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter;
 
 import java.util.Objects;
 
@@ -22,7 +23,8 @@ public record CommandServices(
         AdminCommandService admin,
         HistoryQueryService history,
         RollbackCommandService rollback,
-        BackupCommandService backupRestore) {
+        BackupCommandService backupRestore,
+        ConfigLangAdapter messages) {
 
     public CommandServices {
         Objects.requireNonNull(economy, "economy");
@@ -34,5 +36,20 @@ public record CommandServices(
         Objects.requireNonNull(history, "history");
         Objects.requireNonNull(rollback, "rollback");
         Objects.requireNonNull(backupRestore, "backupRestore");
+        // messages may be null in offline unit tests that don't exercise i18n; production always supplies it
+    }
+
+    /** Legacy constructor without messages — used by offline tests that don't exercise i18n. */
+    public CommandServices(
+            EconomyCommandService economy,
+            PlayerLookupService players,
+            WithdrawCommandService withdrawals,
+            LeaderboardQueryService leaderboard,
+            BankCommandService bank,
+            AdminCommandService admin,
+            HistoryQueryService history,
+            RollbackCommandService rollback,
+            BackupCommandService backupRestore) {
+        this(economy, players, withdrawals, leaderboard, bank, admin, history, rollback, backupRestore, null);
     }
 }

@@ -35,34 +35,68 @@ public final class MoneyCommandSpec {
     }
 
     private static void execute(CommandServices services, CommandContext context) {
+        var messages = services.messages();
         List<String> args = context.commandArgs();
         if (args.size() > 2) {
-            throw com.smile.acelib.command.CommandException.custom(
-                    "ACELIB-CMD-INVALID-ARGUMENTS", "too many arguments");
+            String msg = messages != null
+                    ? messages.plainMessage("command.missing-argument", java.util.Map.of("index", "3"))
+                    : "command.missing-argument";
+            throw com.smile.acelib.command.CommandException.custom("ACELIB-CMD-INVALID-ARGUMENTS", msg);
         }
         if (args.isEmpty()) {
             var player = context.requireOnlinePlayer();
             CurrencyInfo currency = V2CommandSupport.currency(services, null);
-            V2CommandSupport.reply(context, services.economy().getBalance(player.getUniqueId(), currency.id()),
-                    value -> player.getName() + " has " + CommandFormat.formatAmount(currency, value));
+            V2CommandSupport.replyLocalized(context, messages,
+                    services.economy().getBalance(player.getUniqueId(), currency.id()),
+                    value -> balanceComponent(messages, currency, value, player.getName(), true));
             return;
         }
-        String playerName = V2CommandSupport.arg(context, 0);
-        String currencyId = args.size() == 2 ? V2CommandSupport.arg(context, 1) : null;
+        String playerName = V2CommandSupport.arg(messages, context, 0);
+        String currencyId = args.size() == 2 ? V2CommandSupport.arg(messages, context, 1) : null;
         CurrencyInfo currency = V2CommandSupport.currency(services, currencyId);
         services.players().resolve(playerName).whenComplete((target, failure) -> {
             if (failure != null) {
                 V2CommandSupport.replyFailure(context, failure);
             } else if (target.isEmpty()) {
+                String msg = messages != null
+                        ? messages.plainMessage("general.player-not-found", java.util.Map.of("player", playerName))
+                        : "general.player-not-found";
                 CommandReply.replyError(context, com.smile.acelib.command.CommandException.custom(
-                        "ACELIB-CMD-ACCOUNT-NOT-FOUND", "unknown player: " + playerName));
+                        "ACELIB-CMD-ACCOUNT-NOT-FOUND", msg));
             } else {
                 PlayerIdentity identity = target.get();
-                V2CommandSupport.reply(context,
+                V2CommandSupport.replyLocalized(context, messages,
                         services.economy().getBalance(identity.uuid(), currency.id()),
-                        value -> identity.name() + " has " + CommandFormat.formatAmount(currency, value));
+                        value -> balanceComponent(messages, currency, value, identity.name(), false));
             }
         });
+    }
+
+    private static net.kyori.adventure.text.Component balanceComponent(
+            com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter messages,
+            CurrencyInfo currency, com.smile.aceeconomy.domain.Amount value,
+            String playerName, boolean isSelf) {
+        String amountStr = CommandFormat.formatAmount(messages, currency, value);
+        if (messages == null) {
+            return net.kyori.adventure.text.Component.text("economy.balance-check:" + playerName + ":" + amountStr);
+        }
+        boolean isDefault = currency.isDefault();
+        if (isSelf) {
+            if (isDefault) {
+                return messages.renderMessage("economy.balance-check", java.util.Map.of("balance", amountStr));
+            } else {
+                return messages.renderMessage("economy.balance-check-currency",
+                        java.util.Map.of("balance", amountStr, "currency_name", currency.displayName()));
+            }
+        } else {
+            if (isDefault) {
+                return messages.renderMessage("economy.balance-check-other",
+                        java.util.Map.of("player", playerName, "balance", amountStr));
+            } else {
+                return messages.renderMessage("economy.balance-check-currency-other",
+                        java.util.Map.of("player", playerName, "balance", amountStr, "currency_name", currency.displayName()));
+            }
+        }
     }
 
     private static List<String> complete(CommandServices services, List<String> args) {

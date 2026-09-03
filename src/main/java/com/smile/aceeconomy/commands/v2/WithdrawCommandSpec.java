@@ -36,17 +36,27 @@ public final class WithdrawCommandSpec {
     }
 
     private static void execute(CommandServices services, CommandContext context) {
-        String currencyId = context.commandArgs().size() == 2 ? V2CommandSupport.arg(context, 1) : null;
+        var messages = services.messages();
+        String currencyId = context.commandArgs().size() == 2 ? V2CommandSupport.arg(messages, context, 1) : null;
         CurrencyInfo currency = V2CommandSupport.currency(services, currencyId);
-        var amount = V2CommandSupport.amount(context, currency, 0);
+        var amount = V2CommandSupport.amount(messages, context, currency, 0);
         var player = context.requireOnlinePlayer();
-        V2CommandSupport.reply(context,
+        V2CommandSupport.replyLocalized(context, messages,
                 services.withdrawals().withdraw(player.getUniqueId(), currency.id(), amount),
-                value -> receiptMessage(currency, value));
+                value -> receiptComponent(messages, currency, value));
     }
 
-    private static String receiptMessage(CurrencyInfo currency, Object raw) {
+    private static net.kyori.adventure.text.Component receiptComponent(
+            com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter messages,
+            CurrencyInfo currency, Object raw) {
         WithdrawReceipt receipt = (WithdrawReceipt) raw;
-        return "Withdrew " + currency.symbol() + receipt.value().toPlainString() + " as banknote " + receipt.noteId();
+        String amountStr = CommandFormat.formatAmount(messages, currency,
+                com.smile.aceeconomy.domain.Amount.of(receipt.value(), currency.scale()));
+        if (messages == null) {
+            return net.kyori.adventure.text.Component.text(
+                    "economy.withdraw-note:" + amountStr + ":" + receipt.noteId());
+        }
+        return messages.renderMessage("economy.withdraw-note",
+                java.util.Map.of("amount", amountStr, "note_id", receipt.noteId().toString()));
     }
 }

@@ -18,13 +18,24 @@ public final class RollbackErrors {
     }
 
     public static CommandException from(RollbackResult result) {
+        return from(null, result);
+    }
+
+    public static CommandException from(com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter messages,
+                                        RollbackResult result) {
         RollbackError err = result.error();
         if (err == null) {
-            // A malformed failure (no typed error) must never escape as an unhandled NPE:
-            // inside a completion callback that would silently swallow the operator's reply.
+            String details = result.message() == null ? "" : result.message();
+            if (messages != null) {
+                String msg = messages.plainMessage("rollback.invalid-result",
+                        java.util.Map.of("details", details));
+                if (msg != null && !msg.startsWith("Missing translation")) {
+                    return CommandException.custom("ACELIB-CMD-ROLLBACK-INVALID-RESULT", msg);
+                }
+            }
             return CommandException.custom("ACELIB-CMD-ROLLBACK-INVALID-RESULT",
                     "rollback service returned a failure without a typed error; inspect logs "
-                            + "and do not retry blindly — " + result.message());
+                            + "and do not retry blindly — " + details);
         }
         String code = switch (err) {
             case UNKNOWN_TRANSACTION -> "ACELIB-CMD-ROLLBACK-UNKNOWN-TRANSACTION";
@@ -34,6 +45,18 @@ public final class RollbackErrors {
             case MARK_FAILED -> "ACELIB-CMD-ROLLBACK-MARK-FAILED";
             case INVALID_REQUEST -> "ACELIB-CMD-ROLLBACK-INVALID-REQUEST";
         };
+        if (messages != null) {
+            if (err == RollbackError.MARK_FAILED) {
+                String details = result.message() == null ? "" : result.message();
+                String msg = messages.plainMessage("rollback.invalid-result",
+                        java.util.Map.of("details", details));
+                if (msg != null && !msg.startsWith("Missing translation")) {
+                    return CommandException.custom(code, msg);
+                }
+            }
+            // For other errors, still use domain message but prefix via language if available
+            // Keep original message for now to preserve semantics; future keys can be added per error.
+        }
         String message = err == RollbackError.MARK_FAILED
                 ? "reversal may already be applied but the reverted marker is missing; "
                   + "inspect storage and reconcile manually before any retry — "

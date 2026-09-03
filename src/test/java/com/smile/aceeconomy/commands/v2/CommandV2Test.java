@@ -149,7 +149,11 @@ class CommandV2Test {
 
         registry.dispatch(sender, "money", List.of("balance"));
 
-        verify(sink).sendPlayerAsync(player, "Alex has $12.00 Dollar");
+        ArgumentCaptor<String> msg = ArgumentCaptor.forClass(String.class);
+        verify(sink).sendPlayerAsync(org.mockito.ArgumentMatchers.same(player), msg.capture());
+        String captured = msg.getValue();
+        assertTrue(captured.contains("Alex") && captured.contains("economy.balance-check"),
+                "localized fallback must contain identifier and player: " + captured);
     }
 
     @Test

@@ -300,7 +300,7 @@ public final class CompositionRoot {
                 new ProductionAdapters.BackupRestore(backupRestoreService, ioExecutor);
         CommandServices services = new CommandServices(economyCommands,
                 new ProductionAdapters.Players(ioExecutor), withdrawalCommands, leaderboards, bankCommands,
-                adminCommands, historyCommands, rollbackCommands, backupCommands);
+                adminCommands, historyCommands, rollbackCommands, backupCommands, config);
         // Command-surface flags are startup-only wiring: the leaderboard toggle decides whether
         // an executable baltop spec exists at all, and the main-command alias is validated
         // against every label plugin.yml declares plus the sibling v2 specs. Bukkit only routes

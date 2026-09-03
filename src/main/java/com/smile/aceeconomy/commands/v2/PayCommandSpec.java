@@ -35,24 +35,45 @@ public final class PayCommandSpec {
     }
 
     private static void execute(CommandServices services, CommandContext context) {
-        String targetName = V2CommandSupport.arg(context, 0);
-        String currencyId = context.commandArgs().size() == 3 ? V2CommandSupport.arg(context, 2) : null;
+        var messages = services.messages();
+        String targetName = V2CommandSupport.arg(messages, context, 0);
+        String currencyId = context.commandArgs().size() == 3 ? V2CommandSupport.arg(messages, context, 2) : null;
         CurrencyInfo currency = V2CommandSupport.currency(services, currencyId);
-        var amount = V2CommandSupport.amount(context, currency, 1);
+        var amount = V2CommandSupport.amount(messages, context, currency, 1);
         var sender = context.requireOnlinePlayer();
         services.players().resolve(targetName).whenComplete((target, failure) -> {
             if (failure != null) {
                 V2CommandSupport.replyFailure(context, failure);
             } else if (target.isEmpty()) {
+                String msg = messages != null
+                        ? messages.plainMessage("general.player-not-found", java.util.Map.of("player", targetName))
+                        : "general.player-not-found";
                 CommandReply.replyError(context, com.smile.acelib.command.CommandException.custom(
-                        "ACELIB-CMD-ACCOUNT-NOT-FOUND", "unknown player: " + targetName));
+                        "ACELIB-CMD-ACCOUNT-NOT-FOUND", msg));
             } else {
                 PlayerIdentity identity = target.get();
-                V2CommandSupport.reply(context,
+                V2CommandSupport.replyLocalized(context, messages,
                         services.economy().transfer(sender.getUniqueId(), identity.uuid(), currency.id(), amount),
-                        value -> "Paid " + CommandFormat.formatAmount(currency, amount) + " to " + identity.name());
+                        ignored -> payComponent(messages, currency, amount, identity.name()));
             }
         });
+    }
+
+    private static net.kyori.adventure.text.Component payComponent(
+            com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter messages,
+            CurrencyInfo currency, com.smile.aceeconomy.domain.Amount amount, String targetName) {
+        String amountStr = CommandFormat.formatAmount(messages, currency, amount);
+        if (messages == null) {
+            return net.kyori.adventure.text.Component.text("economy.payment-sent:" + amountStr + ":" + targetName);
+        }
+        boolean isDefault = currency.isDefault();
+        if (isDefault) {
+            return messages.renderMessage("economy.payment-sent",
+                    java.util.Map.of("amount", amountStr, "player", targetName));
+        } else {
+            return messages.renderMessage("economy.payment-sent-currency",
+                    java.util.Map.of("amount", amountStr, "player", targetName, "currency_name", currency.displayName()));
+        }
     }
 
     private static List<String> complete(CommandServices services, List<String> args) {

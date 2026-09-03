@@ -13,6 +13,8 @@ general:
   player-not-found: "<red>找不到玩家：<white>{player}</white></red>"
   status: "<green>狀態：<white>{status}</white></green>"
   amount-must-be-positive: "<red>金額必須大於 0！</red>"
+  amount-overflow: "<red>金額超過允許的最大值</red>"
+  default-currency-missing: "<red>尚未設定預設貨幣</red>"
   player-offline: "<red>玩家 <white>{player}</white> 不在線上！</red>"
   player-no-account: "<red>該玩家沒有帳戶資料！</red>"
   account-not-loaded: "<red>帳戶尚未載入，請稍後再試！</red>"
@@ -41,6 +43,7 @@ economy:
   insufficient-funds-debt: "<red>餘額不足！您的帳戶最多只能透支 <gold>{limit}</gold> (目前: <yellow>{balance}</yellow>)。<reset>"
   debt-status: "<gray>(信用額度: <gold>{limit}</gold>)</gray>"
   withdraw-success: "<green>已提領支票：<yellow>{amount}</yellow></green>"
+  withdraw-note: "<green>已提領 <yellow>{amount}</yellow> 為支票 {note_id}</green>"
   withdraw-redeem: "<green>已兌換支票：<yellow>{amount}</yellow> <gray>(簽發人：{issuer})</gray></green>"
   min-withdraw-amount: "<red>最低提領金額為 {amount}！</red>"
   account-not-found: "<red>找不到帳戶資料！</red>"
@@ -62,6 +65,7 @@ admin:
   admin-taking-failed: "<red>操作失敗！可能餘額不足。</red>"
   backup-success: "<green>備份已建立：<white>{backup_id}</white>（v2 邏輯快照）</green>"
   backup-failed: "<red>備份失敗：<white>{reason}</white></red>"
+  backup-invalid-result: "<red>備份服務回報失敗但缺乏型別化錯誤；請檢查日誌 — {details}</red>"
   restore-success: "<green>已還原備份 <white>{backup_id}</white>。安全備份：<white>{safety_id}</white>。讓玩家進入前請先重啟伺服器！</green>"
   restore-confirm-required: "<red>還原是破壞性操作。請完全依照此格式重新執行：<white>/aceeco restore {backup_id} confirm</white></red>"
   restore-failed: "<red>還原失敗：<white>{reason}</white></red>"
@@ -93,6 +97,12 @@ admin:
   usage-import: '<gray>用法：<white>/aceeco import \<essentials|cmi></white></gray>'
 
 command:
+  amount-format: "{symbol}{amount} {currency}"
+  amount-overflow: "<red>金額超過允許的最大值</red>"
+  audit-failure: "<red>指令已完成但稽核紀錄寫入失敗</red>"
+  empty-future: "<red>指令服務未回傳非同步結果</red>"
+  empty-result: "<red>指令服務未回傳結果</red>"
+  missing-argument: "<red>缺少參數 {index}</red>"
   usage-pay: '<gray>用法：<white>/pay \<玩家> \<金額> [貨幣]</white></gray>'
   usage-withdraw: '<gray>用法：<white>/withdraw \<金額></white></gray>'
   usage-balance: "<gray>用法：<white>/balance [玩家] [貨幣]</white></gray>"
@@ -114,6 +124,7 @@ baltop:
   header: "<gold>=== 🏆 {currency_name} 富豪榜 ===</gold>"
   entry: "<yellow>#{rank} <white>{player} <dark_gray>- <green>{amount}"
   empty: "<red>排行榜目前沒有資料。</red>"
+  empty-currency: "<red>找不到 {currency_name} 的資料</red>"
   invalid-page: "<red>頁碼超出範圍 (最大頁數: {max_page})"
   footer: "<gray>更新於: {time_ago} 前 <dark_gray>| </dark_gray><click:run_command:'/baltop {currency} {prev_page}'><gold>[上一頁]</gold></click> <gray>({page}/{total_pages}) </gray><click:run_command:'/baltop {currency} {next_page}'><gold>[下一頁]</gold></click>"
   loading: "<gray>正在載入排行榜...</gray>"
@@ -130,6 +141,9 @@ history:
   usage: '<gray>用法：<white>/aceeco history \<玩家> [頁碼]</white></gray>'
 
 rollback:
+  already-reverted: "<yellow>交易 {transaction_id} 已被回溯；未做任何變更</yellow>"
+  invalid-result: "<red>回溯服務回報失敗但缺乏型別化錯誤；請檢查日誌且勿盲目重試 — {details}</red>"
+  success: "<green>已回溯交易 {transaction_id}；反向稽核紀錄 ({count})：{ids}</green>"
   usage: '<gray>用法：<white>/aceeco rollback \<玩家> \<時間> [類別]</white></gray>'
   searching: "<yellow>正在搜尋並回溯交易...</yellow>"
   none-found: "<red>找不到符合條件的可回溯交易。</red>"

@@ -15,12 +15,25 @@ public final class CurrencyArgResolver {
     }
 
     public static CurrencyInfo resolve(EconomyCommandService economy, String rawCurrency, String defaultId) {
+        return resolve(null, economy, rawCurrency, defaultId);
+    }
+
+    public static CurrencyInfo resolve(com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter messages,
+                                       EconomyCommandService economy, String rawCurrency, String defaultId) {
         if (rawCurrency == null || rawCurrency.isBlank()) {
-            return economy.resolveCurrency(defaultId).orElseThrow(() ->
-                    CommandException.custom("ACELIB-CMD-UNKNOWN-CURRENCY", "default currency is not configured"));
+            return economy.resolveCurrency(defaultId).orElseThrow(() -> {
+                String msg = messages != null
+                        ? messages.plainMessage("general.default-currency-missing", java.util.Map.of())
+                        : "general.default-currency-missing";
+                return CommandException.custom("ACELIB-CMD-UNKNOWN-CURRENCY", msg);
+            });
         }
         String id = rawCurrency.trim().toLowerCase();
-        return economy.resolveCurrency(id).orElseThrow(() ->
-                CommandException.custom("ACELIB-CMD-UNKNOWN-CURRENCY", "unknown currency: " + id));
+        return economy.resolveCurrency(id).orElseThrow(() -> {
+            String msg = messages != null
+                    ? messages.plainMessage("general.unknown-currency", java.util.Map.of("currency", id))
+                    : "general.unknown-currency";
+            return CommandException.custom("ACELIB-CMD-UNKNOWN-CURRENCY", msg);
+        });
     }
 }

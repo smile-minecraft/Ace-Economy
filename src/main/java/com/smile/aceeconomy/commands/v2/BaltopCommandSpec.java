@@ -36,21 +36,47 @@ public final class BaltopCommandSpec {
     }
 
     private static void execute(CommandServices services, CommandContext context) {
-        String rawCurrency = context.commandArgs().isEmpty() ? null : V2CommandSupport.arg(context, 0);
+        var messages = services.messages();
+        String rawCurrency = context.commandArgs().isEmpty() ? null : V2CommandSupport.arg(messages, context, 0);
         CurrencyInfo currency = V2CommandSupport.currency(services, rawCurrency);
-        V2CommandSupport.replyValue(context, services.leaderboard().top(currency.id(), 1, services.leaderboard().pageSize()),
-                value -> format(currency, value));
+        V2CommandSupport.replyValueLocalized(context, messages,
+                services.leaderboard().top(currency.id(), 1, services.leaderboard().pageSize()),
+                value -> formatComponent(messages, currency, value));
     }
 
-    private static String format(CurrencyInfo currency, Object raw) {
+    private static net.kyori.adventure.text.Component formatComponent(
+            com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter messages,
+            CurrencyInfo currency, Object raw) {
         @SuppressWarnings("unchecked")
         List<LeaderboardEntry> entries = (List<LeaderboardEntry>) raw;
         if (entries.isEmpty()) {
-            return "No balances found for " + currency.displayName();
+            if (messages == null) {
+                return net.kyori.adventure.text.Component.text("baltop.empty-currency:" + currency.displayName());
+            }
+            return messages.renderMessage("baltop.empty-currency",
+                    java.util.Map.of("currency_name", currency.displayName()));
         }
-        return entries.stream()
-                .map(entry -> entry.rank() + ". " + entry.name() + " " + currency.symbol()
-                        + entry.balance().toPlainString())
-                .collect(Collectors.joining("\n"));
+        if (messages == null) {
+            return net.kyori.adventure.text.Component.text(entries.stream()
+                    .map(entry -> "baltop.entry:" + entry.rank() + ":" + entry.name() + ":" + currency.symbol()
+                            + entry.balance().toPlainString())
+                    .collect(java.util.stream.Collectors.joining("\n")));
+        }
+        // Build multi-line component via baltop.entry template per line, joined with newline
+        net.kyori.adventure.text.Component result = net.kyori.adventure.text.Component.empty();
+        boolean first = true;
+        for (LeaderboardEntry entry : entries) {
+            String amountStr = currency.symbol() + entry.balance().toPlainString();
+            net.kyori.adventure.text.Component line = messages.renderMessage("baltop.entry",
+                    java.util.Map.of("rank", String.valueOf(entry.rank()),
+                            "player", entry.name(),
+                            "amount", amountStr));
+            if (!first) {
+                result = result.append(net.kyori.adventure.text.Component.text("\n"));
+            }
+            result = result.append(line);
+            first = false;
+        }
+        return result;
     }
 }

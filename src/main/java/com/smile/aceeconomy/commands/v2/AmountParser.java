@@ -26,30 +26,54 @@ public final class AmountParser {
     }
 
     public static Amount parse(String raw, int scale) {
+        return parse(null, raw, scale);
+    }
+
+    public static Amount parse(com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter messages,
+                               String raw, int scale) {
         if (raw == null || raw.isBlank()) {
-            throw CommandException.custom("ACELIB-CMD-INVALID-AMOUNT", "amount is required");
+            String msg = messages != null
+                    ? messages.plainMessage("general.invalid-amount", java.util.Map.of("amount", raw == null ? "" : raw.trim()))
+                    : "general.invalid-amount";
+            throw CommandException.custom("ACELIB-CMD-INVALID-AMOUNT", msg);
         }
         final BigDecimal decimal;
         try {
             decimal = new BigDecimal(raw.trim());
         } catch (NumberFormatException e) {
-            throw CommandException.custom("ACELIB-CMD-INVALID-AMOUNT",
-                    "amount is not a valid number: " + raw.trim());
+            String msg = messages != null
+                    ? messages.plainMessage("general.invalid-amount", java.util.Map.of("amount", raw.trim()))
+                    : "general.invalid-amount";
+            throw CommandException.custom("ACELIB-CMD-INVALID-AMOUNT", msg);
         }
         if (decimal.scale() > scale) {
-            throw CommandException.custom("ACELIB-CMD-INVALID-AMOUNT",
-                    "amount has too many decimal places for the currency");
+            String msg = messages != null
+                    ? messages.plainMessage("general.invalid-amount", java.util.Map.of("amount", raw.trim()))
+                    : "general.invalid-amount";
+            throw CommandException.custom("ACELIB-CMD-INVALID-AMOUNT", msg);
         }
         if (decimal.signum() <= 0) {
-            throw CommandException.custom("ACELIB-CMD-AMOUNT-NON-POSITIVE", "amount must be positive");
+            String msg = messages != null
+                    ? messages.plainMessage("general.amount-must-be-positive", java.util.Map.of())
+                    : "general.amount-must-be-positive";
+            throw CommandException.custom("ACELIB-CMD-AMOUNT-NON-POSITIVE", msg);
         }
         if (decimal.compareTo(MAX_VALUE) > 0) {
-            throw CommandException.custom("ACELIB-CMD-AMOUNT-OVERFLOW", "amount exceeds the maximum allowed");
+            String msg = messages != null
+                    ? messages.plainMessage("general.amount-overflow", java.util.Map.of())
+                    : "general.amount-overflow";
+            if (msg.startsWith("Missing translation")) {
+                msg = messages != null ? messages.plainMessage("command.amount-overflow", java.util.Map.of()) : msg;
+            }
+            throw CommandException.custom("ACELIB-CMD-AMOUNT-OVERFLOW", msg);
         }
         try {
             return Amount.of(decimal, scale);
         } catch (IllegalArgumentException e) {
-            throw CommandException.custom("ACELIB-CMD-INVALID-AMOUNT", e.getMessage());
+            String msg = messages != null
+                    ? messages.plainMessage("general.invalid-amount", java.util.Map.of("amount", raw.trim()))
+                    : "general.invalid-amount";
+            throw CommandException.custom("ACELIB-CMD-INVALID-AMOUNT", msg);
         }
     }
 }
