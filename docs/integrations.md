@@ -61,9 +61,14 @@ Vault has one economy balance, so it always uses the configured default currency
 
 Plugins querying the Vault `Economy` service can load a provider named `AceEconomy`. A deposit or withdrawal reports success with the new balance. Balance checks for an existing account return that account's balance.
 
+### Player-name lookups
+
+Name-based Vault methods (`hasAccount(String)`, `getBalance(String)`, `has(String, ...)`, `depositPlayer(String, ...)`, `withdrawPlayer(String, ...)`, `createPlayerAccount(String)`, including the world-name overloads) resolve the name through online players and cached offline records only — no storage or network I/O runs on the calling thread. Matching is case-insensitive, and the UUID stays the account key, so a renamed player keeps the same account. An unknown or blank name is never reported as a valid zero-balance account: balance and `has` queries return `0.0`/`false` with a `FINE`-level server-log diagnostic, while deposits and withdrawals return `FAILURE` naming the problem. World-name parameters are accepted but ignored: there are no per-world balances, every lookup reports the global balance.
+
 ### Troubleshooting
 
 - **No provider is visible:** enable Vault before checking AceEconomy. If Vault is not installed or enabled, AceEconomy leaves the Vault provider disabled.
+- **A name-based deposit or withdrawal reports failure:** the name could not be matched to an online or cached player (check spelling, or whether that player has ever joined). Failed operations are not reported as successful, and the Vault adapter does not retry them.
 - **A transaction reports failure:** check the player account and amount. Failed operations are not reported as successful, and the Vault adapter does not retry them.
 - **A missing account shows zero or false:** this is the safe result for a balance or `has` query. Create the account through the normal AceEconomy flow first.
 - **Bank features are unavailable:** the AceEconomy Vault provider does not advertise Vault bank support.

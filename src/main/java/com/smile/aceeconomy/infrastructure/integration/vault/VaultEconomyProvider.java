@@ -14,6 +14,8 @@ import org.bukkit.OfflinePlayer;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
+import java.util.logging.Logger;
 
 /**
  * v2 Vault {@link Economy} adapter.
@@ -30,15 +32,79 @@ import java.util.Locale;
  * <p>Vault has no per-currency concept, so the adapter always operates on the registry's default
  * currency. This class is the adapter; registration ownership lives in
  * {@link VaultEconomyLifecycle}.</p>
+ *
+ * <p>Name-based methods resolve through a {@link PlayerIdentityResolver} (online players and
+ * cached offline records only — never blocking storage or network I/O) and then delegate to
+ * the same UUID core path as the {@code OfflinePlayer} overloads, so the UUID stays the
+ * account key across renames. An unknown or blank name is never presented as a valid
+ * zero-balance account: queries return the safe default and log a {@code FINE} diagnostic,
+ * mutations return {@code FAILURE} naming the problem. World parameters are accepted but
+ * ignored: there are no per-world balances, every lookup reports the global balance.</p>
  */
 public final class VaultEconomyProvider implements Economy {
 
+    private static final Logger LOG = Logger.getLogger(VaultEconomyProvider.class.getName());
+
     private final EconomyApi api;
     private final CurrencyRegistry currencies;
+    private final PlayerIdentityResolver identities;
 
     public VaultEconomyProvider(EconomyApi api, CurrencyRegistry currencies) {
+        this(api, currencies, new BukkitPlayerIdentityResolver());
+    }
+
+    public VaultEconomyProvider(EconomyApi api, CurrencyRegistry currencies,
+            PlayerIdentityResolver identities) {
         this.api = api;
         this.currencies = currencies;
+        this.identities = identities != null ? identities : new BukkitPlayerIdentityResolver();
+    }
+
+    /**
+     * Normalizes a Vault-supplied player name: trims surrounding whitespace and treats a
+     * blank value as unknown. Matching itself is case-insensitive and lives in the
+     * resolver; this only decides whether a lookup is worth attempting.
+     *
+     * @return the trimmed name, or {@code null} when there is nothing to resolve
+     */
+    private static String normalizeName(String playerName) {
+        if (playerName == null) {
+            return null;
+        }
+        String name = playerName.strip();
+        return name.isEmpty() ? null : name;
+    }
+
+    private Optional<OfflinePlayer> resolveName(String playerName) {
+        String name = normalizeName(playerName);
+        if (name == null) {
+            return Optional.empty();
+        }
+        try {
+            Optional<OfflinePlayer> found = identities.resolve(name);
+            return found != null ? found : Optional.empty();
+        } catch (RuntimeException e) {
+            return Optional.empty();
+        }
+    }
+
+    private static String describeName(String playerName) {
+        String name = normalizeName(playerName);
+        return name == null ? "blank" : "unknown '" + name + "'";
+    }
+
+    private static void logUnknownLookup(String method, String playerName) {
+        LOG.fine("Vault " + method + ": " + describeName(playerName)
+                + " player name; returning the safe default instead of a zero-balance account");
+    }
+
+    private static EconomyResponse unknownNameFailure(String playerName) {
+        String name = normalizeName(playerName);
+        String reason = name == null
+                ? "player name is blank"
+                : "unknown player name '" + name + "': no online or cached player record";
+        logUnknownLookup("mutation", playerName);
+        return new EconomyResponse(0, 0, EconomyResponse.ResponseType.FAILURE, reason);
     }
 
     // ---------- identity ----------
@@ -83,7 +149,10 @@ public final class VaultEconomyProvider implements Economy {
 
     @Override
     public boolean hasAccount(String playerName) {
-        return false;
+        return resolveName(playerName).map(player -> hasAccount(player)).orElseGet(() -> {
+            logUnknownLookup("hasAccount(String)", playerName);
+            return false;
+        });
     }
 
     @Override
@@ -106,7 +175,10 @@ public final class VaultEconomyProvider implements Economy {
 
     @Override
     public boolean createPlayerAccount(String playerName) {
-        return false;
+        return resolveName(playerName).map(player -> createPlayerAccount(player)).orElseGet(() -> {
+            logUnknownLookup("createPlayerAccount(String)", playerName);
+            return false;
+        });
     }
 
     @Override
@@ -149,7 +221,10 @@ public final class VaultEconomyProvider implements Economy {
 
     @Override
     public double getBalance(String playerName) {
-        return 0.0;
+        return resolveName(playerName).map(player -> getBalance(player)).orElseGet(() -> {
+            logUnknownLookup("getBalance(String)", playerName);
+            return 0.0;
+        });
     }
 
     @Override
@@ -159,7 +234,7 @@ public final class VaultEconomyProvider implements Economy {
 
     @Override
     public double getBalance(String playerName, String worldName) {
-        return 0.0;
+        return getBalance(playerName);
     }
 
     @Override
@@ -169,7 +244,10 @@ public final class VaultEconomyProvider implements Economy {
 
     @Override
     public boolean has(String playerName, double amount) {
-        return false;
+        return resolveName(playerName).map(player -> has(player, amount)).orElseGet(() -> {
+            logUnknownLookup("has(String, double)", playerName);
+            return false;
+        });
     }
 
     @Override
@@ -179,7 +257,7 @@ public final class VaultEconomyProvider implements Economy {
 
     @Override
     public boolean has(String playerName, String worldName, double amount) {
-        return false;
+        return has(playerName, amount);
     }
 
     @Override
@@ -191,8 +269,8 @@ public final class VaultEconomyProvider implements Economy {
 
     @Override
     public EconomyResponse depositPlayer(String playerName, double amount) {
-        return new EconomyResponse(0, 0, EconomyResponse.ResponseType.FAILURE,
-                "player name accounts are not supported");
+        return resolveName(playerName).map(player -> deposit(player, amount))
+                .orElseGet(() -> unknownNameFailure(playerName));
     }
 
     @Override
@@ -237,8 +315,8 @@ public final class VaultEconomyProvider implements Economy {
 
     @Override
     public EconomyResponse withdrawPlayer(String playerName, double amount) {
-        return new EconomyResponse(0, 0, EconomyResponse.ResponseType.FAILURE,
-                "player name accounts are not supported");
+        return resolveName(playerName).map(player -> withdraw(player, amount))
+                .orElseGet(() -> unknownNameFailure(playerName));
     }
 
     @Override
