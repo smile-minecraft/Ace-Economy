@@ -252,27 +252,48 @@ final class ProductionAdapters {
      * reloaded reference in production), so a reload that swaps the layout
      * changes what newly opened interfaces show; already-open sessions were
      * dropped by {@code invalidateAll}, so only new opens matter here.
+     *
+     * <p>Open-vs-reload race: the layout generation is sampled before the layout
+     * itself (the reload publishes the layout reference before bumping the
+     * generation), and the bound generation travels into the session open. An
+     * open whose layout read raced a reload is rejected instead of building an
+     * old-version session the invalidation snapshot already missed; it retries
+     * once from the fresh layout so the player still gets the current GUI.
      */
     static final class Bank implements BankCommandService {
         private final V2BankGuiSession gui;
         private final Supplier<com.smile.aceeconomy.infrastructure.acelib.BankGuiLayout> layouts;
+        private final java.util.function.LongSupplier layoutGenerations;
         private final com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter messages;
         private final Executor executor;
         Bank(V2BankGuiSession gui,
              Supplier<com.smile.aceeconomy.infrastructure.acelib.BankGuiLayout> layouts,
              com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter messages,
              Executor executor) {
+            this(gui, layouts, gui::layoutGeneration, messages, executor);
+        }
+        Bank(V2BankGuiSession gui,
+             Supplier<com.smile.aceeconomy.infrastructure.acelib.BankGuiLayout> layouts,
+             java.util.function.LongSupplier layoutGenerations,
+             com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter messages,
+             Executor executor) {
             this.gui = gui;
             this.layouts = java.util.Objects.requireNonNull(layouts, "layouts");
+            this.layoutGenerations = java.util.Objects.requireNonNull(layoutGenerations, "layoutGenerations");
             this.messages = messages; this.executor = executor;
         }
         Bank(V2BankGuiSession gui,
              com.smile.aceeconomy.infrastructure.acelib.BankGuiLayout layout,
              com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter messages,
              Executor executor) {
-            this(gui, () -> layout, messages, executor);
+            this(gui, () -> layout, gui::layoutGeneration, messages, executor);
         }
         public void open(UUID id, String name) { executor.execute(() -> {
+            openOnce(id, false);
+        }); }
+
+        private void openOnce(UUID id, boolean isRetry) {
+            long expected = layoutGenerations.getAsLong();
             com.smile.aceeconomy.infrastructure.acelib.BankGuiLayout layout = layouts.get();
             if (layout == null || !layout.enabled()) {
                 return;
@@ -280,9 +301,15 @@ final class ProductionAdapters {
             Player player = Bukkit.getPlayer(id);
             if (player != null) {
                 String title = messages.plainMessage(layout.titleKey(), java.util.Map.of());
-                gui.open(player, title, layout.size(), layout.protectedSlots());
+                V2BankGuiSession.OpenOutcome outcome =
+                        gui.open(player, title, layout.size(), layout.protectedSlots(), expected);
+                boolean stale = outcome != null && !outcome.success()
+                        && "stale-layout".equals(outcome.errorCode());
+                if (!isRetry && stale) {
+                    openOnce(id, true);
+                }
             }
-        }); }
+        }
     }
 
     static final class BankUseCase implements BankGuiUseCase {

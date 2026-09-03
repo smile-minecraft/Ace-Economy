@@ -7,25 +7,40 @@ import com.smile.aceeconomy.domain.Currency;
 import com.smile.aceeconomy.domain.CurrencyDisplayHolder;
 import com.smile.aceeconomy.domain.CurrencyRegistry;
 import com.smile.aceeconomy.domain.DebtPolicy;
+import com.smile.aceeconomy.gui.v2.BankGuiAction;
+import com.smile.aceeconomy.gui.v2.BankGuiActions;
+import com.smile.aceeconomy.gui.v2.StubBankGuiUseCase;
 import com.smile.aceeconomy.gui.v2.V2BankGuiSession;
 import com.smile.aceeconomy.infrastructure.acelib.BankGuiConfigParser;
 import com.smile.aceeconomy.infrastructure.acelib.BankGuiLayout;
 import com.smile.aceeconomy.infrastructure.acelib.CurrencyReloadPlan;
+import com.smile.aceeconomy.infrastructure.acelib.FakeGuiService;
+import com.smile.aceeconomy.infrastructure.acelib.RecordingFoliaContext;
 import com.smile.aceeconomy.infrastructure.acelib.ReloadRuntime;
 
+import org.bukkit.entity.Player;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.PlayerInventory;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
+import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Post-publish rollback: when a later apply step throws after the shared holder
@@ -152,11 +167,18 @@ class ReloadDisplayRollbackTest {
     }
 
     /**
-     * Post-swap rollback with real state: the layout resolver is exchanged
+     * Post-swap rollback with a real session: the layout resolver is exchanged
      * successfully and only the later {@code invalidateAll} throws. The holder,
      * the real economy copy and the layout reference must all return to the
      * pre-publish snapshots, and the original failure must propagate so the
      * outer reload reports failure instead of running mixed versions.
+     *
+     * <p>The session is real (only {@code invalidateAll} is forced to throw on a
+     * spy), and the old/new layouts are distinguishable (27 slots with
+     * withdraw-500 on slot 13 versus 36 slots with close on slot 13 and
+     * withdraw-500 moved to slot 20). The two captured resolvers must behave
+     * like the new layout first and the old layout second, and a click after
+     * the rollback must follow the old rules end to end.
      */
     @Test
     void invalidateAllFailureAfterLayoutSwapRollsBackAllWithRealEconomy() throws Exception {
@@ -169,14 +191,17 @@ class ReloadDisplayRollbackTest {
                 Currency.define("token", "Token", "T", 0, false)));
         CurrencyDisplayHolder holder = new CurrencyDisplayHolder(oldReg);
         EconomyService realEconomy = harness.service();
-        V2BankGuiSession gui = Mockito.mock(V2BankGuiSession.class);
+        FakeGuiService guiService = FakeGuiService.available();
+        RecordingFoliaContext folia = new RecordingFoliaContext();
+        StubBankGuiUseCase useCase = new StubBankGuiUseCase();
+        BankGuiLayout oldLayout =
+                BankGuiConfigParser.parse(null, Set.of("dollar", "token"));
+        BankGuiLayout newLayout = new36Layout();
+        V2BankGuiSession gui = Mockito.spy(new V2BankGuiSession(
+                guiService, folia, useCase, BankGuiActions.resolver(oldLayout)));
         Mockito.doThrow(new RuntimeException("invalidate down"))
                 .when(gui)
                 .invalidateAll();
-        BankGuiLayout oldLayout =
-                BankGuiConfigParser.parse(null, Set.of("dollar", "token"));
-        BankGuiLayout newLayout =
-                BankGuiConfigParser.parse(null, Set.of("dollar", "token"));
 
         setField(root, "currencies", oldReg);
         setField(root, "displayHolder", holder);
@@ -200,6 +225,65 @@ class ReloadDisplayRollbackTest {
                 "real economy state must return to the pre-publish registry");
         assertSame(oldLayout, getField(root, "currentLayout"),
                 "layout reference must return to the pre-publish version");
-        Mockito.verify(gui, Mockito.times(2)).replaceLayout(Mockito.any());
+        assertEquals(2L, gui.layoutGeneration(),
+                "both resolver swaps (new, then restore) must land on the real session");
+
+        ArgumentCaptor<Function<Integer, BankGuiAction>> swaps =
+                ArgumentCaptor.forClass(Function.class);
+        Mockito.verify(gui, Mockito.times(2)).replaceLayout(swaps.capture());
+        BankGuiAction firstOn13 = swaps.getAllValues().get(0).apply(13);
+        BankGuiAction secondOn13 = swaps.getAllValues().get(1).apply(13);
+        assertEquals(BankGuiAction.Type.CLOSE, firstOn13.type(),
+                "the first swap must install the new layout (slot 13 closes)");
+        assertEquals(BankGuiAction.Type.WITHDRAW, secondOn13.type(),
+                "the rollback swap must restore the old layout (slot 13 withdraws)");
+        assertEquals(500L, secondOn13.amount());
+        assertEquals(BankGuiAction.Type.WITHDRAW,
+                swaps.getAllValues().get(0).apply(20).type(),
+                "the first swap must install the new layout (slot 20 withdraws)");
+        assertEquals(BankGuiAction.Type.NONE,
+                swaps.getAllValues().get(1).apply(20).type(),
+                "the rollback swap must restore the old layout (slot 20 empty)");
+
+        Player player = mockPlayer();
+        V2BankGuiSession.OpenOutcome opened =
+                gui.open(player, "Bank", oldLayout.size(), oldLayout.protectedSlots());
+        assertTrue(opened.success(), "a post-rollback open must succeed");
+        V2BankGuiSession.ClickOutcome click = gui.handleClick(
+                player.getUniqueId(), opened.session().generation(), 13);
+        assertTrue(click.isSuccess(),
+                "slot 13 must withdraw under the restored old layout, got " + click.reason());
+        assertEquals(500L, useCase.lastAmount);
+    }
+
+    private static BankGuiLayout new36Layout() {
+        Map<String, BankGuiLayout.SlotConfig> actions = new LinkedHashMap<>();
+        actions.put("deposit", new BankGuiLayout.SlotConfig(
+                "deposit", 4, BankGuiLayout.ActionType.DEPOSIT, 0L, null,
+                "CHEST", "gui.bank-deposit-name", List.of("gui.bank-deposit-lore")));
+        actions.put("withdraw100", new BankGuiLayout.SlotConfig(
+                "withdraw100", 11, BankGuiLayout.ActionType.WITHDRAW, 100L, null,
+                "PAPER", "gui.bank-withdraw-name", List.of("gui.bank-withdraw-lore")));
+        actions.put("close", new BankGuiLayout.SlotConfig(
+                "close", 13, BankGuiLayout.ActionType.CLOSE, 0L, null,
+                "BARRIER", "gui.bank-close-name", List.of()));
+        actions.put("withdraw500", new BankGuiLayout.SlotConfig(
+                "withdraw500", 20, BankGuiLayout.ActionType.WITHDRAW, 500L, null,
+                "PAPER", "gui.bank-withdraw-name", List.of("gui.bank-withdraw-lore")));
+        actions.put("close2", new BankGuiLayout.SlotConfig(
+                "close2", 15, BankGuiLayout.ActionType.CLOSE, 0L, null,
+                "BARRIER", "gui.bank-close-name", List.of()));
+        return BankGuiLayout.of(true, "gui.bank-title", 36, actions);
+    }
+
+    private static Player mockPlayer() {
+        Player player = Mockito.mock(Player.class);
+        PlayerInventory inventory = Mockito.mock(PlayerInventory.class);
+        Mockito.when(player.getUniqueId()).thenReturn(UUID.randomUUID());
+        Mockito.when(player.getInventory()).thenReturn(inventory);
+        Mockito.when(inventory.firstEmpty()).thenReturn(0);
+        Mockito.when(inventory.addItem(Mockito.any(ItemStack.class)))
+                .thenReturn(new HashMap<>());
+        return player;
     }
 }

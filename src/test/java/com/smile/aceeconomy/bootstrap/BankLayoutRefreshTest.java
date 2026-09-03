@@ -68,12 +68,12 @@ class BankLayoutRefreshTest {
             bukkit.when(() -> Bukkit.getPlayer(id)).thenReturn(player);
 
             bank.open(id, "someone");
-            Mockito.verify(gui).open(player, "Bank", 27, oldLayout.protectedSlots());
+            Mockito.verify(gui).open(player, "Bank", 27, oldLayout.protectedSlots(), 0L);
 
             // A successful reload swaps the reference the supplier reads.
             current.set(newLayout);
             bank.open(id, "someone");
-            Mockito.verify(gui).open(player, "Bank", 36, newLayout.protectedSlots());
+            Mockito.verify(gui).open(player, "Bank", 36, newLayout.protectedSlots(), 0L);
         }
     }
 }

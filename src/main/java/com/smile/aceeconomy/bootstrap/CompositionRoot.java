@@ -519,22 +519,36 @@ public final class CompositionRoot {
                         economySwapped = true;
                         currencies = candidate;
                     }
-                    // The layout candidate was fully parsed before the swap window: re-resolve for
-                    // sessions opened from now on, then drop every open session so no pre-reload
-                    // generation can act under the new rules.
+                    // The layout candidate was fully parsed before the swap window: publish the
+                    // new reference BEFORE bumping the session generation (inside replaceLayout),
+                    // then drop every open session so no pre-reload generation can act under the
+                    // new rules. Open readers sample the generation first and the layout second,
+                    // so this order guarantees they never observe a stale layout with a matching
+                    // generation: at worst they see the new generation and retry from fresh state.
                     if (bankGui != null && layout != null) {
-                        bankGui.replaceLayout(BankGuiActions.resolver(layout));
-                        layoutSwapped = true;
                         currentLayout = layout;
+                        layoutSwapped = true;
+                        bankGui.replaceLayout(BankGuiActions.resolver(layout));
                         bankGui.invalidateAll();
                     }
                 } catch (Throwable failure) {
-                    // Rollback is pure reference swaps back to the snapshots above: the
+                    // Rollback is reference swaps back to the snapshots above: the
                     // display-only pair passes the guard in both directions, so restoring
                     // cannot fail and the rethrow keeps the outer reload reporting failure.
+                    // The layout restore itself is tolerant: even if swapping the resolver
+                    // back throws, the layout reference is still restored so later opens
+                    // cannot keep reading the failed candidate.
                     if (layoutSwapped && bankGui != null && oldLayout != null) {
-                        bankGui.replaceLayout(BankGuiActions.resolver(oldLayout));
                         currentLayout = oldLayout;
+                        try {
+                            bankGui.replaceLayout(BankGuiActions.resolver(oldLayout));
+                        } catch (Throwable rollbackFailure) {
+                            // A stubbed test double may throw the same instance twice;
+                            // self-suppression is illegal, so only attach distinct causes.
+                            if (rollbackFailure != failure) {
+                                failure.addSuppressed(rollbackFailure);
+                            }
+                        }
                     }
                     if (economySwapped) {
                         economy.replaceCurrencyDisplay(oldDisplay);

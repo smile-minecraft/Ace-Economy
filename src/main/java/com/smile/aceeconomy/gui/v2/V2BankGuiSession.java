@@ -21,6 +21,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 
 /**
@@ -42,6 +43,11 @@ public final class V2BankGuiSession {
     private final FoliaContextExecutor folia;
     private final BankGuiUseCase useCase;
     private volatile Function<Integer, BankGuiAction> actionResolver;
+    // Layout generation: bumped once per resolver swap. An open binds the
+    // generation that was current when its layout was read; a mismatch means a
+    // reload landed in between, so the open must not build a session from the
+    // stale layout. Monotonic, never reused for a different layout.
+    private final AtomicLong layoutGeneration = new AtomicLong(0);
 
     private final Map<UUID, Player> players = new ConcurrentHashMap<>();
     private final Map<UUID, GuiSession> sessions = new ConcurrentHashMap<>();
@@ -57,11 +63,41 @@ public final class V2BankGuiSession {
     }
 
     public @NotNull OpenOutcome open(@NotNull Player player, @NotNull String title, int size,
-                                     @NotNull Set<Integer> protectedSlots) {
+                                      @NotNull Set<Integer> protectedSlots) {
+        return open(player, title, size, protectedSlots, layoutGeneration.get());
+    }
+
+    /**
+     * Generation-bound open. The caller passes the layout generation that was
+     * current when it read the layout: a mismatch on entry means a reload
+     * already swapped the layout, so no session is built. A swap that lands
+     * while {@code openInventory} runs is caught by the post-check, which drops
+     * the just-created stale session instead of leaving it behind for the
+     * reload invalidation to miss. Callers that get a {@code stale-layout}
+     * failure should re-read the current layout and retry once.
+     */
+    public @NotNull OpenOutcome open(@NotNull Player player, @NotNull String title, int size,
+                                      @NotNull Set<Integer> protectedSlots,
+                                      long expectedLayoutGeneration) {
+        if (expectedLayoutGeneration != layoutGeneration.get()) {
+            return OpenOutcome.failed("stale-layout", "bank layout changed before open");
+        }
         GuiArgument arg = GuiArgument.of(player, title, size, protectedSlots);
         GuiResult result = guiService.openInventory(arg);
         if (!result.isSuccess() || result.session() == null) {
             return OpenOutcome.failed(result.errorCode(), result.detail());
+        }
+        if (layoutGeneration.get() != expectedLayoutGeneration) {
+            try {
+                guiService.closeInventory(player.getUniqueId(), result.session().generation());
+            } catch (Throwable ignored) {
+                // Local bookkeeping below is still cleared; without it a later
+                // click would resolve against the new layout with an old session.
+            } finally {
+                players.remove(player.getUniqueId());
+                sessions.remove(player.getUniqueId());
+            }
+            return OpenOutcome.failed("stale-layout", "bank layout changed during open");
         }
         players.put(player.getUniqueId(), player);
         sessions.put(player.getUniqueId(), result.session());
@@ -353,10 +389,21 @@ public final class V2BankGuiSession {
     /**
      * Hot-swap the layout resolver after a validated reload. Sessions opened afterwards
      * resolve slots against the new layout; sessions already open keep working until
-     * {@link #invalidateAll()} drops them.
+     * {@link #invalidateAll()} drops them. Every swap starts a new layout generation so
+     * opens bound to the previous generation are rejected instead of building stale
+     * sessions; the production reload publishes the new layout reference before calling
+     * this, so a reader that takes the generation first and the layout second only ever
+     * sees a matching pair or a newer generation, never a stale layout with a matching
+     * generation.
      */
     public void replaceLayout(@NotNull Function<Integer, BankGuiAction> resolver) {
         this.actionResolver = Objects.requireNonNull(resolver, "resolver");
+        layoutGeneration.incrementAndGet();
+    }
+
+    /** Current layout generation for generation-bound opens. */
+    public long layoutGeneration() {
+        return layoutGeneration.get();
     }
 
     /**
