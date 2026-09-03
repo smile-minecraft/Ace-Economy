@@ -59,6 +59,15 @@ public final class V2BankGuiSession {
     // two still sees the previous tag while sessions already holds the new
     // session, and trusting the generation alone would let the candidate live on.
     private final Map<UUID, SessionTag> sessionLayoutGenerations = new ConcurrentHashMap<>();
+    // Per-player publish fence: the three bookkeeping puts of an open and the
+    // per-key removals of a rollback/invalidation for the same player meet
+    // here. The critical section holds only map operations, never the slow
+    // inventory open, so no player thread is blocked on I/O.
+    private final Map<UUID, Object> keyGuards = new ConcurrentHashMap<>();
+
+    private Object guardFor(UUID playerUuid) {
+        return keyGuards.computeIfAbsent(playerUuid, key -> new Object());
+    }
 
     /**
      * Layout generation a session was opened under, stapled to the session the
@@ -107,31 +116,51 @@ public final class V2BankGuiSession {
         if (!result.isSuccess() || result.session() == null) {
             return OpenOutcome.failed(result.errorCode(), result.detail());
         }
-        if (layoutGeneration.get() != expectedLayoutGeneration) {
-            GuiSession staleSession = result.session();
-            try {
-                guiService.closeInventory(player.getUniqueId(), staleSession.generation());
-            } catch (Throwable ignored) {
-                // Local bookkeeping below is still cleared; without it a later
-                // click would resolve against the new layout with an old session.
-            } finally {
-                dropStaleBookkeeping(player.getUniqueId(), staleSession);
+        UUID uuid = player.getUniqueId();
+        GuiSession owned = result.session();
+        synchronized (guardFor(uuid)) {
+            if (layoutGeneration.get() != expectedLayoutGeneration) {
+                try {
+                    guiService.closeInventory(uuid, owned.generation());
+                } catch (Throwable ignored) {
+                    // Local bookkeeping below is still cleared; without it a later
+                    // click would resolve against the new layout with an old session.
+                } finally {
+                    dropStaleBookkeeping(uuid, owned);
+                }
+                return OpenOutcome.failed("stale-layout", "bank layout changed during open");
             }
-            return OpenOutcome.failed("stale-layout", "bank layout changed during open");
+            // Dependents last: a stale cleanup landing between these puts must
+            // already see the new session so it keeps the whole entry.
+            SessionTag ownTag = new SessionTag(expectedLayoutGeneration, owned);
+            sessions.put(uuid, owned);
+            sessionLayoutGenerations.put(uuid, ownTag);
+            players.put(uuid, player);
+            if (layoutGeneration.get() != expectedLayoutGeneration) {
+                // The publish landed after a rollback or reload snapshot: the
+                // snapshot missed this entry, so withdraw only our own puts and
+                // report stale-layout for a retry on the current layout. The
+                // conditional removes never touch a newer retry.
+                try {
+                    guiService.closeInventory(uuid, owned.generation());
+                } catch (Throwable ignored) {
+                    // Local state below is still cleared.
+                }
+                sessions.remove(uuid, owned);
+                sessionLayoutGenerations.remove(uuid, ownTag);
+                if (!sessions.containsKey(uuid)) {
+                    players.remove(uuid);
+                }
+                return OpenOutcome.failed("stale-layout", "bank layout changed during open");
+            }
+            if (dropOrphanAfterLostRace(uuid, owned)) {
+                // A rollback slipped between the puts above and removed the new
+                // session; the players put just re-added an entry no session backs.
+                // Report stale-layout so the caller retries on the restored layout.
+                return OpenOutcome.failed("stale-layout", "bank layout rolled back during open");
+            }
+            return OpenOutcome.success(owned);
         }
-        // Dependents last: a stale cleanup landing between these puts must
-        // already see the new session so it keeps the whole entry.
-        sessions.put(player.getUniqueId(), result.session());
-        sessionLayoutGenerations.put(player.getUniqueId(),
-                new SessionTag(expectedLayoutGeneration, result.session()));
-        players.put(player.getUniqueId(), player);
-        if (dropOrphanAfterLostRace(player.getUniqueId(), result.session())) {
-            // A rollback slipped between the puts above and removed the new
-            // session; the players put just re-added an entry no session backs.
-            // Report stale-layout so the caller retries on the restored layout.
-            return OpenOutcome.failed("stale-layout", "bank layout rolled back during open");
-        }
-        return OpenOutcome.success(result.session());
     }
 
     /**
@@ -451,11 +480,13 @@ public final class V2BankGuiSession {
         // Conditional for the same reason as the stale-open cleanup: a
         // concurrent reopen already replaced the entry with a larger
         // generation, and the unconditional remove would delete it.
-        sessions.computeIfPresent(playerUuid, (key, current) ->
-                current.generation() == generation ? null : current);
-        if (!sessions.containsKey(playerUuid)) {
-            sessionLayoutGenerations.remove(playerUuid);
-            players.remove(playerUuid);
+        synchronized (guardFor(playerUuid)) {
+            sessions.computeIfPresent(playerUuid, (key, current) ->
+                    current.generation() == generation ? null : current);
+            if (!sessions.containsKey(playerUuid)) {
+                sessionLayoutGenerations.remove(playerUuid);
+                players.remove(playerUuid);
+            }
         }
         return CloseOutcome.closed();
     }
@@ -504,30 +535,33 @@ public final class V2BankGuiSession {
         for (Map.Entry<UUID, GuiSession> entry : snapshot) {
             UUID uuid = entry.getKey();
             GuiSession known = entry.getValue();
-            try {
-                if (known != null) {
-                    guiService.closeInventory(uuid, known.generation());
-                }
-            } catch (Throwable ignored) {
-                // Local state below is still cleared; the stale generation can no longer act.
-            } finally {
-                // Conditional: an open that completed after the snapshot
-                // replaced the entry, and the unconditional remove would
-                // delete the fresh session. The player entry is kept with it.
-                if (sessions.remove(uuid, known)) {
-                    SessionTag knownTag = knownTags.get(uuid);
-                    if (knownTag == null) {
-                        sessionLayoutGenerations.remove(uuid);
-                    } else {
-                        sessionLayoutGenerations.remove(uuid, knownTag);
+            synchronized (guardFor(uuid)) {
+                try {
+                    if (known != null && sessions.get(uuid) == known) {
+                        guiService.closeInventory(uuid, known.generation());
                     }
-                    dropped++;
-                }
-                if (!sessions.containsKey(uuid)) {
-                    players.remove(uuid);
+                } catch (Throwable ignored) {
+                    // Local state below is still cleared; the stale generation can no longer act.
+                } finally {
+                    // Conditional: an open that completed after the snapshot
+                    // replaced the entry, and the unconditional remove would
+                    // delete the fresh session. The player entry is kept with it.
+                    if (sessions.remove(uuid, known)) {
+                        SessionTag knownTag = knownTags.get(uuid);
+                        if (knownTag == null) {
+                            sessionLayoutGenerations.remove(uuid);
+                        } else {
+                            sessionLayoutGenerations.remove(uuid, knownTag);
+                        }
+                        dropped++;
+                    }
+                    if (!sessions.containsKey(uuid)) {
+                        players.remove(uuid);
+                    }
                 }
             }
         }
+        sweepOrphansLocked();
         return dropped;
     }
 
@@ -551,49 +585,95 @@ public final class V2BankGuiSession {
                 new java.util.ArrayList<>(sessions.entrySet());
         int dropped = 0;
         for (Map.Entry<UUID, GuiSession> entry : snapshot) {
-            UUID uuid = entry.getKey();
-            GuiSession known = entry.getValue();
-            if (sessions.get(uuid) != known) {
-                continue;
-            }
-            SessionTag tag = sessionLayoutGenerations.get(uuid);
-            // An entry without a tag cannot be proven old: the rollback may have
-            // landed between the session put and the tag put of an open from the
-            // failed candidate, so treat it as suspect and drop it. A tag owned
-            // by anyone but the current session is equally stale: the sessions
-            // put of a same-UUID candidate landed first and the tag put has not
-            // caught up, so the current entry is the suspect, not the old tag.
-            // Only a tag owned by the current session at or below the pre-swap
-            // generation (or beyond the failed one) is kept.
-            if (tag != null && tag.owner() == known
-                    && (tag.layoutGeneration() <= keepThroughGeneration
-                        || tag.layoutGeneration() > failedGeneration)) {
-                continue;
-            }
+            dropped += dropOneSuspectAfterFailedSwap(
+                    entry.getKey(), entry.getValue(), keepThroughGeneration, failedGeneration)
+                    ? 1 : 0;
+        }
+        sweepOrphansLocked();
+        // Re-scan for publishes that landed after the snapshot was taken: an
+        // open whose puts arrived mid-rollback is suspect under the same rule,
+        // and the weakly consistent snapshot above may have missed it. Opens
+        // that land after this pass self-clean through the post-publish fence
+        // in open(), so a single bounded pass closes the window.
+        for (Map.Entry<UUID, GuiSession> entry :
+                new java.util.ArrayList<>(sessions.entrySet())) {
+            dropped += dropOneSuspectAfterFailedSwap(
+                    entry.getKey(), entry.getValue(), keepThroughGeneration, failedGeneration)
+                    ? 1 : 0;
+        }
+        sweepOrphansLocked();
+        return dropped;
+    }
+
+    /**
+     * Drop one rollback suspect for the same per-key fence the open publish
+     * holds. Returns true when a session was dropped. Never throws.
+     */
+    private boolean dropOneSuspectAfterFailedSwap(UUID uuid, GuiSession known,
+                                                  long keepThroughGeneration,
+                                                  long failedGeneration) {
+        synchronized (guardFor(uuid)) {
             try {
-                guiService.closeInventory(uuid, known.generation());
-            } catch (Throwable ignored) {
-                // Local state below is still cleared; the failed generation can no longer act.
-            }
-            if (sessions.remove(uuid, known)) {
-                if (tag == null) {
-                    sessionLayoutGenerations.remove(uuid);
-                } else {
-                    sessionLayoutGenerations.remove(uuid, tag);
+                if (known == null || sessions.get(uuid) != known) {
+                    return false;
                 }
-                dropped++;
-            }
-            if (!sessions.containsKey(uuid)) {
-                players.remove(uuid);
+                SessionTag tag = sessionLayoutGenerations.get(uuid);
+                // An entry without a tag cannot be proven old: the rollback may have
+                // landed between the session put and the tag put of an open from the
+                // failed candidate, so treat it as suspect and drop it. A tag owned
+                // by anyone but the current session is equally stale: the sessions
+                // put of a same-UUID candidate landed first and the tag put has not
+                // caught up, so the current entry is the suspect, not the old tag.
+                // Only a tag owned by the current session at or below the pre-swap
+                // generation (or beyond the failed one) is kept.
+                if (tag != null && tag.owner() == known
+                        && (tag.layoutGeneration() <= keepThroughGeneration
+                            || tag.layoutGeneration() > failedGeneration)) {
+                    return false;
+                }
+                try {
+                    guiService.closeInventory(uuid, known.generation());
+                } catch (Throwable ignored) {
+                    // Local state below is still cleared.
+                }
+                if (sessions.remove(uuid, known)) {
+                    if (tag == null) {
+                        sessionLayoutGenerations.remove(uuid);
+                    } else {
+                        sessionLayoutGenerations.remove(uuid, tag);
+                    }
+                    if (!sessions.containsKey(uuid)) {
+                        players.remove(uuid);
+                    }
+                    return true;
+                }
+                return false;
+            } catch (Throwable ignored) {
+                return false;
             }
         }
-        // Best-effort sweep for entries that landed outside the snapshot: a
-        // players or tag put that arrived after its session was removed above
-        // backs no session, so drop it instead of leaking an orphan. Entries
-        // that still back a session are kept.
-        players.keySet().removeIf(key -> !sessions.containsKey(key));
-        sessionLayoutGenerations.keySet().removeIf(key -> !sessions.containsKey(key));
-        return dropped;
+    }
+
+    /**
+     * Per-key orphan sweep: drop players/tag entries that back no session.
+     * Each key is rechecked under its fence, so a concurrent publish racing
+     * the scan cannot be mistaken for an orphan.
+     */
+    private void sweepOrphansLocked() {
+        for (UUID key : new java.util.ArrayList<>(players.keySet())) {
+            synchronized (guardFor(key)) {
+                if (!sessions.containsKey(key)) {
+                    players.remove(key);
+                }
+            }
+        }
+        for (UUID key : new java.util.ArrayList<>(sessionLayoutGenerations.keySet())) {
+            synchronized (guardFor(key)) {
+                if (!sessions.containsKey(key)) {
+                    sessionLayoutGenerations.remove(key);
+                }
+            }
+        }
     }
 
     // ---- outcomes -------------------------------------------------------------
