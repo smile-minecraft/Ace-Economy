@@ -69,7 +69,7 @@ final class LeaderboardQueryCountRegressionTest {
                 "SQL leaderboard refresh must be constant queries (prepareStatement <=3), was " + preparesFor100
                 + " for " + accounts + " accounts — N+1 still active");
 
-        // Verify deterministic ordering: highest balance first, tie-break by UUID asc
+        // [VERIFY:P2] 驗證排行榜排序具決定性：餘額最高者在首位，同分時依 UUID 遞增排序。
         assertEquals(new UUID(0, 100), rows.get(0).accountId(), "highest balance account should be first");
 
         // Scale to 1000: count must not grow linearly
