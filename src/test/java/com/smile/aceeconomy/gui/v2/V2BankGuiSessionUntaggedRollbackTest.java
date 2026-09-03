@@ -45,10 +45,11 @@ class V2BankGuiSessionUntaggedRollbackTest {
     }
 
     @SuppressWarnings("unchecked")
-    private static Map<UUID, Long> tagsOf(V2BankGuiSession session) throws Exception {
+    private static Map<UUID, V2BankGuiSession.SessionTag> tagsOf(V2BankGuiSession session)
+            throws Exception {
         Field f = V2BankGuiSession.class.getDeclaredField("sessionLayoutGenerations");
         f.setAccessible(true);
-        return (Map<UUID, Long>) f.get(session);
+        return (Map<UUID, V2BankGuiSession.SessionTag>) f.get(session);
     }
 
     @Test
@@ -74,7 +75,7 @@ class V2BankGuiSessionUntaggedRollbackTest {
         assertTrue(gapOpen.success());
 
         // Mimic the interleave: sessions.put landed, the tag put has not yet.
-        Map<UUID, Long> tags = tagsOf(session);
+        Map<UUID, V2BankGuiSession.SessionTag> tags = tagsOf(session);
         assertTrue(tags.remove(gapPlayer.getUniqueId()) != null
                 || !tags.containsKey(gapPlayer.getUniqueId()));
 
