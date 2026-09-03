@@ -512,8 +512,12 @@ public final class V2BankGuiSession {
                 continue;
             }
             Long tag = sessionLayoutGenerations.get(uuid);
-            long vintage = (tag == null) ? Long.MAX_VALUE : tag;
-            if (vintage <= keepThroughGeneration || vintage > failedGeneration) {
+            // An entry without a tag cannot be proven old: the rollback may have
+            // landed between the session put and the tag put of an open from the
+            // failed candidate, so treat it as suspect and drop it. Only a tag at
+            // or below the pre-swap generation (or beyond the failed one) is kept.
+            if (tag != null
+                    && (tag <= keepThroughGeneration || tag > failedGeneration)) {
                 continue;
             }
             try {
