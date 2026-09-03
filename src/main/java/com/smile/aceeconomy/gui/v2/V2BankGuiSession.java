@@ -165,6 +165,14 @@ public final class V2BankGuiSession {
         try {
             folia.runForPlayer(player, () -> {
                 try {
+                    // Re-validate inside the Folia context: the dispatch may have waited while
+                    // a reload invalidated the session, so the pre-dispatch check alone is
+                    // stale. A generation that no longer matches is discarded without action.
+                    GuiResult recheck = guiService.validateClick(playerUuid, generation, slot);
+                    if (!recheck.isAllowed()) {
+                        future.complete(ClickOutcome.rejected(recheck.errorCode()));
+                        return;
+                    }
                     ClickOutcome outcome;
                     switch (action.type()) {
                         case WITHDRAW -> outcome = runWithdraw(player, playerUuid, action);

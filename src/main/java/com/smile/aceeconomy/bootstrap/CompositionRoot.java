@@ -18,6 +18,7 @@ import com.smile.aceeconomy.commands.v2.MainCommandAliasPolicy;
 import com.smile.aceeconomy.commands.v2.V2CommandRegistry;
 import com.smile.aceeconomy.domain.Amount;
 import com.smile.aceeconomy.domain.Currency;
+import com.smile.aceeconomy.domain.CurrencyDisplayHolder;
 import com.smile.aceeconomy.domain.CurrencyRegistry;
 import com.smile.aceeconomy.domain.DebtPolicy;
 import com.smile.aceeconomy.infrastructure.acelib.BankGuiConfigParser;
@@ -125,12 +126,11 @@ public final class CompositionRoot {
     // always read the same cached ranking (same instance, same TTL).
     private LeaderboardCache leaderboardCache;
     private Duration leaderboardTtl;
-    // Display-holding collaborators, kept so a validated display-only reload can swap the
-    // immutable registry reference in every holder inside one atomic window.
-    private ProductionAdapters.Economy economyCommands;
-    private ProductionAdapters.Withdrawals withdrawalCommands;
-    private VaultEconomyProvider vaultProvider;
-    private PlaceholderResolver papiResolver;
+    // Single publish point for display-only currency metadata. Every display surface
+    // (command adapters, Vault, placeholders) reads through this holder, so one validated
+    // publish moves them all together and concurrent requests only ever see the whole old
+    // registry or the whole new one.
+    private CurrencyDisplayHolder displayHolder;
 
     public CompositionRoot(JavaPlugin plugin) {
         this.plugin = java.util.Objects.requireNonNull(plugin, "plugin");
@@ -237,6 +237,9 @@ public final class CompositionRoot {
         economy = new EconomyService(currencies, debt, startBalance, accounts,
                 auditSink, clock, publisher);
         api = new EconomyApiImpl(economy, publisher);
+        // The shared display holder starts on the same registry instance every holder will
+        // read through; display-only reloads advance it with a single atomic publish.
+        displayHolder = new CurrencyDisplayHolder(currencies);
 
         // Production rollback boundary and banknote replay guard. Both are bound to the
         // durable persistence capabilities acquired above; the command surface binds its
@@ -304,11 +307,9 @@ public final class CompositionRoot {
         resources.register(() -> HandlerList.unregisterAll(redeemListener));
 
         ProductionAdapters.Economy economyCommands =
-                new ProductionAdapters.Economy(api, currencies, ioExecutor);
+                new ProductionAdapters.Economy(api, displayHolder, ioExecutor);
         ProductionAdapters.Withdrawals withdrawalCommands =
-                new ProductionAdapters.Withdrawals(api, currencies, banknotes, ioExecutor);
-        this.economyCommands = economyCommands;
-        this.withdrawalCommands = withdrawalCommands;
+                new ProductionAdapters.Withdrawals(api, displayHolder, banknotes, ioExecutor);
         // Hoisted so the backup/restore service can invalidate the SAME leaderboard cache
         // after a successful restore (single instance, single invalidation boundary).
         // The fields keep the instance and TTL alive for the PAPI resolver wiring below,
@@ -411,8 +412,7 @@ public final class CompositionRoot {
         List<IntegrationModule> modules = new ArrayList<>();
         AceLibApi ready = requireApi();
         if (Bukkit.getPluginManager().isPluginEnabled("Vault")) {
-            VaultEconomyProvider provider = new VaultEconomyProvider(api, currencies);
-            vaultProvider = provider;
+            VaultEconomyProvider provider = new VaultEconomyProvider(api, displayHolder);
             modules.add(new VaultIntegrationModule("vault", "vault",
                     new VaultEconomyLifecycle(new BukkitVaultRegistration(plugin, ServicePriority.Normal), provider)));
         }
@@ -424,12 +424,11 @@ public final class CompositionRoot {
             PlaceholderResolver resolver;
             if (leaderboardCache != null && leaderboardTtl != null) {
                 Clock leaderboardClock = () -> Instant.now();
-                resolver = new PlaceholderResolver(api, currencies, leaderboardCache,
+                resolver = new PlaceholderResolver(api, displayHolder, leaderboardCache,
                         leaderboardTtl, leaderboardClock);
             } else {
-                resolver = new PlaceholderResolver(api, currencies);
+                resolver = new PlaceholderResolver(api, displayHolder);
             }
-            papiResolver = resolver;
             AceEconomyExpansion expansion = new AceEconomyExpansion(resolver, plugin.getDescription().getVersion());
             modules.add(new PlaceholderIntegrationModule("placeholderapi", "placeholderapi",
                     new PlaceholderLifecycle(new BukkitPlaceholderRegistration(), expansion)));
@@ -488,20 +487,18 @@ public final class CompositionRoot {
                 if (plan.disposition()
                         == com.smile.aceeconomy.infrastructure.acelib.CurrencyReloadPlan.Disposition
                                 .DISPLAY_ONLY) {
+                    // Single atomic publish: every display surface (commands, Vault,
+                    // placeholders) reads through the shared holder, so concurrent requests
+                    // see the whole old registry or the whole new one, never a mixture.
+                    // The publish re-validates first and throws before writing anything,
+                    // so a rejected candidate cannot leave a half-applied state behind.
+                    // The economy service keeps its own transactional copy (ids, scales
+                    // and default never change in a display-only diff); its guard passes
+                    // deterministically for the same candidate.
+                    com.smile.aceeconomy.infrastructure.acelib.CurrencyReloadPlan
+                            .publishDisplayOnly(displayHolder, plan);
                     CurrencyRegistry candidate = plan.candidate();
                     economy.replaceCurrencyDisplay(candidate);
-                    if (economyCommands != null) {
-                        economyCommands.replaceCurrencyDisplay(candidate);
-                    }
-                    if (withdrawalCommands != null) {
-                        withdrawalCommands.replaceCurrencyDisplay(candidate);
-                    }
-                    if (vaultProvider != null) {
-                        vaultProvider.replaceCurrencyDisplay(candidate);
-                    }
-                    if (papiResolver != null) {
-                        papiResolver.replaceCurrencyDisplay(candidate);
-                    }
                     currencies = candidate;
                 }
                 // The layout candidate was fully parsed before the swap window: re-resolve for

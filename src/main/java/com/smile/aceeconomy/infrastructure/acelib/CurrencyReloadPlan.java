@@ -1,6 +1,7 @@
 package com.smile.aceeconomy.infrastructure.acelib;
 
 import com.smile.aceeconomy.domain.Currency;
+import com.smile.aceeconomy.domain.CurrencyDisplayHolder;
 import com.smile.aceeconomy.domain.CurrencyRegistry;
 
 import java.util.ArrayList;
@@ -150,5 +151,30 @@ public final class CurrencyReloadPlan {
             raw.put(c.id(), fields);
         }
         return raw;
+    }
+
+    /**
+     * Atomically publish an approved display-only candidate to every surface sharing the
+     * holder. The plan must already be classified as identical or display-only, and the
+     * candidate is re-validated against the holder's current registry before anything is
+     * written: a structural plan throws with the shared holder untouched, so a failed apply
+     * can never leave holders on different versions. A validated publish is a single
+     * volatile reference swap, which concurrent readers observe all-or-nothing.
+     *
+     * @throws IllegalArgumentException when the plan is not display-appliable, the candidate
+     *                                  is missing, or it is not display-only against the holder
+     */
+    public static void publishDisplayOnly(CurrencyDisplayHolder holder, Classification plan) {
+        Objects.requireNonNull(holder, "holder");
+        Objects.requireNonNull(plan, "plan");
+        if (plan.disposition() != Disposition.IDENTICAL
+                && plan.disposition() != Disposition.DISPLAY_ONLY) {
+            throw new IllegalArgumentException(
+                    "refusing non-display currency publish: " + plan.summary()
+                            + " :: " + String.join("; ", plan.details()));
+        }
+        CurrencyRegistry candidate = Objects.requireNonNull(plan.candidate(), "candidate");
+        requireDisplayOnlyChange(holder.get(), candidate);
+        holder.publish(candidate);
     }
 }

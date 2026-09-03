@@ -12,9 +12,10 @@ import java.util.List;
  *
  * <p>All calls happen inside the adapter reload lock, so the inspection sees a stable live
  * snapshot and the apply lands in the same atomic window as the config/lang swap.
- * {@code applyApproved} must only perform infallible volatile-reference swaps and
- * session invalidation: throwing there aborts the config/lang swap, but holders that
- * were already swapped stay on an equivalent display-only registry by construction.</p>
+ * {@code applyApproved} must validate before publishing and then perform only infallible
+ * writes: throwing after a publish aborts the config/lang swap while display readers
+ * already agree on the new display-only registry by construction (one shared publish
+ * point, so no mixed versions are observable).</p>
  */
 public interface ReloadRuntime {
 

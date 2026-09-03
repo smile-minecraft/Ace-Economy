@@ -15,6 +15,7 @@ import com.smile.aceeconomy.domain.Account;
 import com.smile.aceeconomy.domain.AccountSnapshot;
 import com.smile.aceeconomy.domain.Amount;
 import com.smile.aceeconomy.domain.Currency;
+import com.smile.aceeconomy.domain.CurrencyDisplayHolder;
 import com.smile.aceeconomy.domain.CurrencyRegistry;
 import com.smile.aceeconomy.domain.EconomyError;
 import com.smile.aceeconomy.domain.EconomyResult;
@@ -56,15 +57,22 @@ final class ProductionAdapters {
     private ProductionAdapters() { }
 
     static final class Economy implements EconomyCommandService {
-        private final EconomyApi api; private volatile CurrencyRegistry currencies; private final Executor executor;
-        Economy(EconomyApi api, CurrencyRegistry currencies, Executor executor) {
-            this.api = api; this.currencies = currencies; this.executor = executor;
+        private final EconomyApi api; private final CurrencyDisplayHolder display; private final Executor executor;
+        Economy(EconomyApi api, CurrencyDisplayHolder display, Executor executor) {
+            this.api = api;
+            this.display = java.util.Objects.requireNonNull(display, "display");
+            this.executor = executor;
         }
-        /** Hot-swap display-only currency metadata after a validated reload. */
+        /**
+         * Hot-swap display-only currency metadata after a validated reload. The guard
+         * rejects structural changes so command output can never diverge from the
+         * transactional registry. All display surfaces share one holder, so this
+         * publish is observed atomically together with Vault and placeholder reads.
+         */
         void replaceCurrencyDisplay(CurrencyRegistry candidate) {
             com.smile.aceeconomy.infrastructure.acelib.CurrencyReloadPlan
-                    .requireDisplayOnlyChange(this.currencies, candidate);
-            this.currencies = candidate;
+                    .requireDisplayOnlyChange(display.get(), candidate);
+            display.publish(candidate);
         }
         public CompletableFuture<EconomyResult<Amount>> getBalance(UUID id, String c) {
             return CompletableFuture.supplyAsync(() -> api.getBalance(id, c), executor);
@@ -80,12 +88,13 @@ final class ProductionAdapters {
             return CompletableFuture.supplyAsync(() -> api.loadAccount(id), executor);
         }
         public Optional<CommandModels.CurrencyInfo> resolveCurrency(String id) {
+            CurrencyRegistry currencies = display.get();
             if (!currencies.contains(id)) return Optional.empty();
             Currency c = currencies.get(id);
             return Optional.of(new CommandModels.CurrencyInfo(c.id(), c.displayName(), c.symbol(), c.scale(), c.isDefault()));
         }
-        public List<String> knownCurrencyIds() { return currencies.all().stream().map(Currency::id).toList(); }
-        public String defaultCurrencyId() { return currencies.defaultCurrencyId(); }
+        public List<String> knownCurrencyIds() { return display.get().all().stream().map(Currency::id).toList(); }
+        public String defaultCurrencyId() { return display.get().defaultCurrencyId(); }
     }
 
     static final class Admin implements AdminCommandService {
@@ -130,22 +139,27 @@ final class ProductionAdapters {
     }
 
     static final class Withdrawals implements WithdrawCommandService {
-        private final EconomyApi api; private volatile CurrencyRegistry currencies; private final BanknoteFactory banknotes;
+        private final EconomyApi api; private final CurrencyDisplayHolder display; private final BanknoteFactory banknotes;
         private final Executor executor;
-        Withdrawals(EconomyApi api, CurrencyRegistry currencies, BanknoteFactory banknotes, Executor executor) {
-            this.api = api; this.currencies = currencies; this.banknotes = banknotes; this.executor = executor;
+        Withdrawals(EconomyApi api, CurrencyDisplayHolder display, BanknoteFactory banknotes, Executor executor) {
+            this.api = api;
+            this.display = java.util.Objects.requireNonNull(display, "display");
+            this.banknotes = banknotes; this.executor = executor;
         }
-        /** Hot-swap display-only currency metadata after a validated reload. */
+        /**
+         * Hot-swap display-only currency metadata after a validated reload. Shares one
+         * holder with every other display surface, so the publish is observed atomically.
+         */
         void replaceCurrencyDisplay(CurrencyRegistry candidate) {
             com.smile.aceeconomy.infrastructure.acelib.CurrencyReloadPlan
-                    .requireDisplayOnlyChange(this.currencies, candidate);
-            this.currencies = candidate;
+                    .requireDisplayOnlyChange(display.get(), candidate);
+            display.publish(candidate);
         }
         public CompletableFuture<EconomyResult<CommandModels.WithdrawReceipt>> withdraw(UUID id, String c, Amount a) {
             return CompletableFuture.supplyAsync(() -> {
                 EconomyResult<Amount> result = api.withdraw(id, c, a);
                 if (result.isFailure()) return EconomyResult.failure(result.error(), result.message());
-                Currency currency = currencies.get(c); BanknoteClaim claim = claim(id, currency, a.value().longValueExact());
+                Currency currency = display.get().get(c); BanknoteClaim claim = claim(id, currency, a.value().longValueExact());
                 if (banknotes.mint(claim).isEmpty()) return EconomyResult.failure(EconomyError.INVALID_AMOUNT,
                         "banknote could not be created");
                 return EconomyResult.success(new CommandModels.WithdrawReceipt(claim.nonce(), id.toString(), currency.id(), a.value()));

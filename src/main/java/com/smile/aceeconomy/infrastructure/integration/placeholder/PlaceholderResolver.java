@@ -3,6 +3,7 @@ package com.smile.aceeconomy.infrastructure.integration.placeholder;
 import com.smile.aceeconomy.api.v2.EconomyApi;
 import com.smile.aceeconomy.domain.Amount;
 import com.smile.aceeconomy.domain.Currency;
+import com.smile.aceeconomy.domain.CurrencyDisplayHolder;
 import com.smile.aceeconomy.domain.CurrencyRegistry;
 import com.smile.aceeconomy.domain.EconomyResult;
 import com.smile.aceeconomy.infrastructure.operations.LeaderboardCache;
@@ -59,13 +60,22 @@ public final class PlaceholderResolver {
     private static final int MAX_TOP_N = 100;
 
     private final EconomyApi api;
-    private volatile CurrencyRegistry currencies;
+    private final CurrencyDisplayHolder display;
     private final LeaderboardCache leaderboard;
     private final Duration leaderboardTtl;
     private final Clock clock;
 
     public PlaceholderResolver(EconomyApi api, CurrencyRegistry currencies) {
-        this(api, currencies, null, null, null);
+        this(api, new CurrencyDisplayHolder(currencies), null, null, null);
+    }
+
+    /**
+     * Shared-holder constructor for production wiring: every display surface reads the
+     * same holder, so a reload publish is observed atomically across Vault, commands
+     * and placeholders.
+     */
+    public PlaceholderResolver(EconomyApi api, CurrencyDisplayHolder display) {
+        this(api, display, null, null, null);
     }
 
     /**
@@ -76,8 +86,19 @@ public final class PlaceholderResolver {
      */
     public PlaceholderResolver(EconomyApi api, CurrencyRegistry currencies,
             LeaderboardCache leaderboard, Duration leaderboardTtl, Clock clock) {
+        this(api, new CurrencyDisplayHolder(currencies), leaderboard, leaderboardTtl, clock);
+    }
+
+    /**
+     * Snapshot-backed constructor sharing one display holder. The cache should be the same
+     * instance the leaderboard command path reads, so PAPI and {@code /baltop} always agree
+     * on ordering. A {@code null} cache disables rank/top placeholders (they resolve to
+     * {@code null}); when a cache is given, {@code ttl} and {@code clock} must be non-null.
+     */
+    public PlaceholderResolver(EconomyApi api, CurrencyDisplayHolder display,
+            LeaderboardCache leaderboard, Duration leaderboardTtl, Clock clock) {
         this.api = Objects.requireNonNull(api, "api");
-        this.currencies = Objects.requireNonNull(currencies, "currencies");
+        this.display = Objects.requireNonNull(display, "display");
         if (leaderboard != null) {
             Objects.requireNonNull(leaderboardTtl, "leaderboardTtl");
             Objects.requireNonNull(clock, "clock");
@@ -94,8 +115,8 @@ public final class PlaceholderResolver {
      */
     public void replaceCurrencyDisplay(CurrencyRegistry candidate) {
         com.smile.aceeconomy.infrastructure.acelib.CurrencyReloadPlan
-                .requireDisplayOnlyChange(this.currencies, candidate);
-        this.currencies = candidate;
+                .requireDisplayOnlyChange(display.get(), candidate);
+        display.publish(candidate);
     }
 
     /**
@@ -108,7 +129,7 @@ public final class PlaceholderResolver {
             return null;
         }
         String p = params.toLowerCase(Locale.ROOT);
-        String def = currencies.defaultCurrencyId();
+        String def = display.get().defaultCurrencyId();
 
         if (p.equals("balance")) {
             return rawBalance(player, def);
@@ -123,7 +144,7 @@ public final class PlaceholderResolver {
             if (currencyId.isEmpty() || !CURRENCY_ID.matcher(currencyId).matches()) {
                 return null; // malformed currency id
             }
-            if (!currencies.contains(currencyId)) {
+            if (!display.get().contains(currencyId)) {
                 return null; // unknown currency
             }
             return formatted ? formattedBalance(player, currencyId) : rawBalance(player, currencyId);
@@ -136,7 +157,7 @@ public final class PlaceholderResolver {
             if (currencyId.isEmpty() || !CURRENCY_ID.matcher(currencyId).matches()) {
                 return null; // malformed currency id
             }
-            if (!currencies.contains(currencyId)) {
+            if (!display.get().contains(currencyId)) {
                 return null; // unknown currency
             }
             return rank(player, currencyId);
@@ -187,7 +208,7 @@ public final class PlaceholderResolver {
             if (currencyId.isEmpty() || !CURRENCY_ID.matcher(currencyId).matches()) {
                 return null; // malformed currency id
             }
-            if (!currencies.contains(currencyId)) {
+            if (!display.get().contains(currencyId)) {
                 return null; // unknown currency
             }
         }
@@ -260,10 +281,10 @@ public final class PlaceholderResolver {
         if (currencyId.isEmpty() || !CURRENCY_ID.matcher(currencyId).matches()) {
             return null; // malformed currency id
         }
-        if (!currencies.contains(currencyId)) {
+        if (!display.get().contains(currencyId)) {
             return null; // unknown currency
         }
-        Currency c = currencies.get(currencyId);
+        Currency c = display.get().get(currencyId);
         return displayName ? c.displayName() : c.symbol();
     }
 
@@ -281,7 +302,7 @@ public final class PlaceholderResolver {
         if (r.isFailure()) {
             return null; // unavailable account
         }
-        Currency c = currencies.get(currencyId);
+        Currency c = display.get().get(currencyId);
         return c.symbol() + r.value().value().toPlainString();
     }
 }

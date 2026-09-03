@@ -3,6 +3,7 @@ package com.smile.aceeconomy.infrastructure.integration.vault;
 import com.smile.aceeconomy.api.v2.EconomyApi;
 import com.smile.aceeconomy.domain.Amount;
 import com.smile.aceeconomy.domain.Currency;
+import com.smile.aceeconomy.domain.CurrencyDisplayHolder;
 import com.smile.aceeconomy.domain.CurrencyRegistry;
 import com.smile.aceeconomy.domain.EconomyResult;
 
@@ -46,11 +47,20 @@ public final class VaultEconomyProvider implements Economy {
     private static final Logger LOG = Logger.getLogger(VaultEconomyProvider.class.getName());
 
     private final EconomyApi api;
-    private volatile CurrencyRegistry currencies;
+    private final CurrencyDisplayHolder display;
     private final PlayerIdentityResolver identities;
 
     public VaultEconomyProvider(EconomyApi api, CurrencyRegistry currencies) {
         this(api, currencies, new BukkitPlayerIdentityResolver());
+    }
+
+    /**
+     * Shared-holder constructor for production wiring: every display surface reads the
+     * same holder, so a reload publish is observed atomically across Vault, commands
+     * and placeholders.
+     */
+    public VaultEconomyProvider(EconomyApi api, CurrencyDisplayHolder display) {
+        this(api, display, new BukkitPlayerIdentityResolver());
     }
 
     /**
@@ -60,14 +70,19 @@ public final class VaultEconomyProvider implements Economy {
      */
     public void replaceCurrencyDisplay(CurrencyRegistry candidate) {
         com.smile.aceeconomy.infrastructure.acelib.CurrencyReloadPlan
-                .requireDisplayOnlyChange(this.currencies, candidate);
-        this.currencies = candidate;
+                .requireDisplayOnlyChange(display.get(), candidate);
+        display.publish(candidate);
     }
 
     public VaultEconomyProvider(EconomyApi api, CurrencyRegistry currencies,
             PlayerIdentityResolver identities) {
+        this(api, new CurrencyDisplayHolder(currencies), identities);
+    }
+
+    public VaultEconomyProvider(EconomyApi api, CurrencyDisplayHolder display,
+            PlayerIdentityResolver identities) {
         this.api = api;
-        this.currencies = currencies;
+        this.display = java.util.Objects.requireNonNull(display, "display");
         this.identities = identities != null ? identities : new BukkitPlayerIdentityResolver();
     }
 
@@ -137,23 +152,23 @@ public final class VaultEconomyProvider implements Economy {
 
     @Override
     public int fractionalDigits() {
-        return currencies.getDefault().scale();
+        return display.get().getDefault().scale();
     }
 
     @Override
     public String format(double amount) {
-        Currency def = currencies.getDefault();
+        Currency def = display.get().getDefault();
         return def.symbol() + String.format(Locale.ROOT, "%." + def.scale() + "f", amount);
     }
 
     @Override
     public String currencyNamePlural() {
-        return currencies.getDefault().displayName();
+        return display.get().getDefault().displayName();
     }
 
     @Override
     public String currencyNameSingular() {
-        return currencies.getDefault().displayName();
+        return display.get().getDefault().displayName();
     }
 
     // ---------- account ----------
@@ -222,7 +237,7 @@ public final class VaultEconomyProvider implements Economy {
     // synchronous refill runs on the calling thread.
 
     private double balanceOf(OfflinePlayer player, String currencyId) {
-        if (player == null || !currencies.contains(currencyId)) {
+        if (player == null || !display.get().contains(currencyId)) {
             return 0.0;
         }
         return api.cachedBalance(player.getUniqueId(), currencyId)
@@ -240,7 +255,7 @@ public final class VaultEconomyProvider implements Economy {
 
     @Override
     public double getBalance(OfflinePlayer player) {
-        return balanceOf(player, currencies.defaultCurrencyId());
+        return balanceOf(player, display.get().defaultCurrencyId());
     }
 
     @Override
@@ -250,7 +265,7 @@ public final class VaultEconomyProvider implements Economy {
 
     @Override
     public double getBalance(OfflinePlayer player, String worldName) {
-        return balanceOf(player, currencies.defaultCurrencyId());
+        return balanceOf(player, display.get().defaultCurrencyId());
     }
 
     @Override
@@ -263,7 +278,7 @@ public final class VaultEconomyProvider implements Economy {
 
     @Override
     public boolean has(OfflinePlayer player, double amount) {
-        return balanceOf(player, currencies.defaultCurrencyId()) >= amount;
+        return balanceOf(player, display.get().defaultCurrencyId()) >= amount;
     }
 
     @Override
@@ -300,7 +315,7 @@ public final class VaultEconomyProvider implements Economy {
     }
 
     private EconomyResponse deposit(OfflinePlayer player, double amount) {
-        String currencyId = currencies.defaultCurrencyId();
+        String currencyId = display.get().defaultCurrencyId();
         if (player == null) {
             return new EconomyResponse(0, 0, EconomyResponse.ResponseType.FAILURE, "player is null");
         }
@@ -310,7 +325,7 @@ public final class VaultEconomyProvider implements Economy {
         }
         Amount amt;
         try {
-            amt = currencies.get(currencyId).amountOf(amount);
+            amt = display.get().get(currencyId).amountOf(amount);
         } catch (IllegalArgumentException e) {
             return new EconomyResponse(0, 0, EconomyResponse.ResponseType.FAILURE,
                     "amount scale exceeds currency precision");
@@ -346,7 +361,7 @@ public final class VaultEconomyProvider implements Economy {
     }
 
     private EconomyResponse withdraw(OfflinePlayer player, double amount) {
-        String currencyId = currencies.defaultCurrencyId();
+        String currencyId = display.get().defaultCurrencyId();
         if (player == null) {
             return new EconomyResponse(0, 0, EconomyResponse.ResponseType.FAILURE, "player is null");
         }
@@ -356,7 +371,7 @@ public final class VaultEconomyProvider implements Economy {
         }
         Amount amt;
         try {
-            amt = currencies.get(currencyId).amountOf(amount);
+            amt = display.get().get(currencyId).amountOf(amount);
         } catch (IllegalArgumentException e) {
             return new EconomyResponse(0, 0, EconomyResponse.ResponseType.FAILURE,
                     "amount scale exceeds currency precision");
