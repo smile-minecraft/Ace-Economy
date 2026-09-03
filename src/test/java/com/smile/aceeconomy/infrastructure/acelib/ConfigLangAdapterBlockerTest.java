@@ -85,7 +85,7 @@ class ConfigLangAdapterBlockerTest {
         }
         if (yamlPath.equals("storage.type")) {
             if (content.contains("storage:")) {
-                content = content.replaceAll("(?m)^\\s*type:.*$", "  type: " + yamlValue);
+                content = content.replaceAll("(?m)^  type: \\w+$", "  type: " + yamlValue);
             }
             Files.writeString(cfg, content);
             return;

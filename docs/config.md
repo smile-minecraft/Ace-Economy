@@ -12,6 +12,7 @@ AceEconomy reads `config.yml` as a versioned YAML file. This page explains what 
 - [Currencies](#currencies)
 - [Locale and retained command setting](#locale-and-retained-command-setting)
 - [Leaderboard](#leaderboard)
+- [Bank GUI layout](#bank-gui-layout)
 - [Discord and secret boundaries](#discord-and-secret-boundaries)
 - [Applying changes](#applying-changes)
 
@@ -193,6 +194,62 @@ leaderboard:
 ```
 
 With `enabled: false` the plugin does not build or attach the baltop command spec in its registry, so no economy code runs for it. Because `plugin.yml` still declares the static `baltop` label, the server answers with the plain usage line instead; fully removing the label requires a release that changes `plugin.yml`. The toggle is read once at startup; restart after changing it.
+
+## Bank GUI layout
+
+The `bank-gui` section controls the `/bank` inventory: its title, size, and which slot performs which action. The shipped defaults reproduce the previous fixed behaviour (deposit on slot 4, withdraw 100 on slot 11, withdraw 500 on slot 13, close on slot 15, size 27).
+
+| Purpose | Key | Default and format | Notes |
+| --- | --- | --- | --- |
+| Turn the bank interface on or off. | `bank-gui.enabled` | `true`; boolean. | `false` makes `/bank` do nothing. Restart after changing it. |
+| Title language key. | `bank-gui.title-key` | `gui.bank-title`; non-blank language key. | Rendered through the safe component pipeline, never parsed as raw MiniMessage. |
+| Inventory size. | `bank-gui.size` | `27`; one of `9`, `18`, `27`, `36`, `45`, `54`. | Every button slot must be inside `[0, size)`. |
+| Button slot. | `bank-gui.actions.<name>.slot` | Integer; required for every action. | Slots must be unique across the section. |
+| Button behaviour. | `bank-gui.actions.<name>.type` | One of `deposit`, `withdraw`, `close`, `none`. | `none` reserves a slot without an action. |
+| Withdraw face value. | `bank-gui.actions.<name>.amount` | Positive integer; required for `withdraw`. | Must be absent for every other type. |
+| Withdraw currency. | `bank-gui.actions.<name>.currency` | Known currency id; required for `withdraw`. | Absent means the runtime default currency. Must be absent for every other type. |
+| Button display item. | `bank-gui.actions.<name>.material` | Legal Bukkit material name; required except for `none`. | Air is rejected. |
+| Button display text. | `bank-gui.actions.<name>.name-key` / `lore-keys` | Language keys; name required except for `none`, lore optional. | Operator input is never parsed as MiniMessage. |
+
+```yaml
+bank-gui:
+  enabled: true
+  title-key: "gui.bank-title"
+  size: 27
+  actions:
+    deposit:
+      slot: 4
+      type: deposit
+      material: "CHEST"
+      name-key: "gui.bank-deposit-name"
+      lore-keys: ["gui.bank-deposit-lore"]
+    withdraw100:
+      slot: 11
+      type: withdraw
+      amount: 100
+      currency: dollar
+      material: "PAPER"
+      name-key: "gui.bank-withdraw-name"
+      lore-keys: ["gui.bank-withdraw-lore"]
+    withdraw500:
+      slot: 13
+      type: withdraw
+      amount: 500
+      currency: dollar
+      material: "PAPER"
+      name-key: "gui.bank-withdraw-name"
+      lore-keys: ["gui.bank-withdraw-lore"]
+    close:
+      slot: 15
+      type: close
+      material: "BARRIER"
+      name-key: "gui.bank-close-name"
+      lore-keys: []
+```
+
+A config that violates these rules stops the plugin at startup with an error naming the exact path (for example `bank-gui.actions.withdraw100.amount`); nothing is partially applied. A config without `bank-gui` keeps loading under schema `2.0` and receives the legacy slot behaviour.
+
+The layout is read once at startup. The administrative reload action refreshes the configuration snapshot but open bank sessions keep the previous layout; changing the layout takes effect for newly opened inventories after a restart (or after every viewer reopens, as documented by the reload-scope task).
 
 ## Discord and secret boundaries
 

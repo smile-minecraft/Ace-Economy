@@ -167,7 +167,7 @@ public final class V2BankGuiSession {
                 try {
                     ClickOutcome outcome;
                     switch (action.type()) {
-                        case WITHDRAW -> outcome = runWithdraw(player, playerUuid, action.amount());
+                        case WITHDRAW -> outcome = runWithdraw(player, playerUuid, action);
                         case DEPOSIT -> {
                             if (hasSnapshot) {
                                 if (clickTimeSnapshot == null) {
@@ -208,11 +208,11 @@ public final class V2BankGuiSession {
         }
     }
 
-    private ClickOutcome runWithdraw(Player player, UUID playerUuid, long amount) {
+    private ClickOutcome runWithdraw(Player player, UUID playerUuid, BankGuiAction action) {
         if (player.getInventory().firstEmpty() == -1) {
             return ClickOutcome.inventoryFull();
         }
-        WithdrawResult r = useCase.withdraw(playerUuid, amount);
+        WithdrawResult r = useCase.withdraw(playerUuid, action.amount(), action.currencyId());
         if (r.success()) {
             player.getInventory().addItem(r.banknote());
             return ClickOutcome.success(r.banknote());

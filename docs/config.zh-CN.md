@@ -12,6 +12,7 @@ AceEconomy 会把 `config.yml` 当作有版本的 YAML 配置文件读取。本�
 - [货币](#货币)
 - [语言与保留的指令设置](#语言与保留的指令设置)
 - [排行榜](#排行榜)
+- [银行界面布局](#银行界面布局)
 - [Discord 与秘密边界](#discord-与秘密边界)
 - [应用更改](#应用更改)
 
@@ -193,6 +194,62 @@ leaderboard:
 ```
 
 设置 `enabled: false` 时，插件不会在其登录表创建或挂上 baltop 指令规格，因此不会执行任何经济代码。由于 `plugin.yml` 仍声明静态的 `baltop` 标签，服务器只会返回普通的用法说明；要完全移除该标签，需要发布修改 `plugin.yml` 的新版本。此开关只在启动时读取；修改后请重启。
+
+## 银行界面布局
+
+`bank-gui` 配置段控制 `/bank` 界面：标题、大小，以及每个槽位执行哪个动作。出货默认值重现此前的固定行为（存款 slot 4、提取 100 slot 11、提取 500 slot 13、关闭 slot 15、大小 27）。
+
+| 用途 | 配置键 | 默认值与格式 | 注意 |
+| --- | --- | --- | --- |
+| 开启或关闭银行界面。 | `bank-gui.enabled` | `true`；布尔值。 | `false` 时 `/bank` 不做任何事。修改后请重启。 |
+| 标题语言键。 | `bank-gui.title-key` | `gui.bank-title`；非空语言键。 | 经安全组件管线渲染，绝不按 raw MiniMessage 解析。 |
+| 背包大小。 | `bank-gui.size` | `27`；只能是 `9`、`18`、`27`、`36`、`45`、`54`。 | 所有按钮槽位必须在 `[0, size)` 内。 |
+| 按钮槽位。 | `bank-gui.actions.<name>.slot` | 整数；每个动作必填。 | 整个配置段内不可重复。 |
+| 按钮行为。 | `bank-gui.actions.<name>.type` | `deposit`、`withdraw`、`close`、`none` 四选一。 | `none` 只占位，不绑定动作。 |
+| 提取面额。 | `bank-gui.actions.<name>.amount` | 正整数；`withdraw` 必填。 | 其他类型不得填写。 |
+| 提取币种。 | `bank-gui.actions.<name>.currency` | 已知币种 ID；`withdraw` 必填。 | 缺省为运行时默认币种。其他类型不得填写。 |
+| 按钮显示物品。 | `bank-gui.actions.<name>.material` | 合法 Bukkit 材质名；除 `none` 外必填。 | air 会被拒绝。 |
+| 按钮显示文字。 | `bank-gui.actions.<name>.name-key` / `lore-keys` | 语言键；除 `none` 外 name 必填，lore 可选。 | 管理员输入绝不会被当成 MiniMessage 解析。 |
+
+```yaml
+bank-gui:
+  enabled: true
+  title-key: "gui.bank-title"
+  size: 27
+  actions:
+    deposit:
+      slot: 4
+      type: deposit
+      material: "CHEST"
+      name-key: "gui.bank-deposit-name"
+      lore-keys: ["gui.bank-deposit-lore"]
+    withdraw100:
+      slot: 11
+      type: withdraw
+      amount: 100
+      currency: dollar
+      material: "PAPER"
+      name-key: "gui.bank-withdraw-name"
+      lore-keys: ["gui.bank-withdraw-lore"]
+    withdraw500:
+      slot: 13
+      type: withdraw
+      amount: 500
+      currency: dollar
+      material: "PAPER"
+      name-key: "gui.bank-withdraw-name"
+      lore-keys: ["gui.bank-withdraw-lore"]
+    close:
+      slot: 15
+      type: close
+      material: "BARRIER"
+      name-key: "gui.bank-close-name"
+      lore-keys: []
+```
+
+违反这些规则的配置会让插件在启动时停止，并在错误中给出精确路径（例如 `bank-gui.actions.withdraw100.amount`）；不会有半套用的状态。没有 `bank-gui` 的旧配置仍可在 schema `2.0` 下加载，并沿用旧版槽位行为。
+
+布局只在启动时读取一次。管理员 reload 操作会更新配置快照，但已打开的银行界面维持旧布局；修改布局后请重启（或让所有玩家重开界面），新打开的界面才会生效，reload 范围任务会进一步明确该语义。
 
 ## Discord 与秘密边界
 

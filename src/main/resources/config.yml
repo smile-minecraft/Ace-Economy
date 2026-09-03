@@ -79,6 +79,54 @@ currencies:
   #   scale: 1
   #   default: false
 
+# 銀行 GUI 版面設定
+# 標題、大小、按鈕槽位與動作全部由此區塊控制；出貨預設重現舊版行為
+# （存款 slot 4、提領 100 slot 11、提領 500 slot 13、關閉 slot 15、大小 27）。
+#   enabled   布林；false 時 /bank 不再開啟介面
+#   title-key 語言鍵（非 raw 文字）；顯示經安全 Component 管線解析
+#   size      9/18/27/36/45/54 其中之一
+#   actions   每個按鈕一個條目：
+#     slot      整數，需在 [0, size) 內且不可重複
+#     type      deposit / withdraw / close / none 其中之一
+#     amount    僅 withdraw 需要，且必須為正整數
+#     currency  僅 withdraw 需要，已知幣別 ID；缺省為預設幣別
+#     material  顯示物品材質（type 為 none 時免填；air 會被拒絕）
+#     name-key / lore-keys 按鈕顯示文字的語言鍵
+# 任何格式錯誤都會讓插件啟動失敗且不半套用；修改後請重啟，已開啟的介面維持舊版面。
+bank-gui:
+  enabled: true
+  title-key: "gui.bank-title"
+  size: 27
+  actions:
+    deposit:
+      slot: 4
+      type: deposit
+      material: "CHEST"
+      name-key: "gui.bank-deposit-name"
+      lore-keys: ["gui.bank-deposit-lore"]
+    withdraw100:
+      slot: 11
+      type: withdraw
+      amount: 100
+      currency: dollar
+      material: "PAPER"
+      name-key: "gui.bank-withdraw-name"
+      lore-keys: ["gui.bank-withdraw-lore"]
+    withdraw500:
+      slot: 13
+      type: withdraw
+      amount: 500
+      currency: dollar
+      material: "PAPER"
+      name-key: "gui.bank-withdraw-name"
+      lore-keys: ["gui.bank-withdraw-lore"]
+    close:
+      slot: 15
+      type: close
+      material: "BARRIER"
+      name-key: "gui.bank-close-name"
+      lore-keys: []
+
 # 玩家新建帳戶時的預設餘額
 start-balance: 1000.0
 

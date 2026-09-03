@@ -734,7 +734,41 @@ public final class ConfigLangAdapter {
         if (webhook != null && !(webhook instanceof String)) {
             return "invalid discord.webhook-url: must be string";
         }
+        // bank-gui: operator-owned layout; the whole section is validated before
+        // any presentation wiring, so a malformed block fails the load instead
+        // of leaving a partially applied GUI behind. Currency membership is
+        // best-effort here: when the candidate currencies section itself is
+        // unreadable, format is still enforced and membership is re-checked at
+        // startup wiring with the real registry ids.
+        try {
+            BankGuiConfigParser.parse(cfg.get("bank-gui"), candidateCurrencyIds(cfg));
+        } catch (IllegalArgumentException failure) {
+            return failure.getMessage();
+        }
         return null;
+    }
+
+    private static java.util.Set<String> candidateCurrencyIds(ConfigManager cfg) {
+        try {
+            Object raw = cfg.get("currencies");
+            if (raw == null) {
+                return null;
+            }
+            Map<String, Object> entries = BankGuiConfigParser.flatten(raw, "currencies");
+            if (entries.isEmpty()) {
+                return null;
+            }
+            java.util.Set<String> ids = new java.util.HashSet<>(entries.size());
+            for (String key : entries.keySet()) {
+                if (key == null) {
+                    return null;
+                }
+                ids.add(key.trim().toLowerCase(java.util.Locale.ROOT));
+            }
+            return ids;
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
     }
 
     private static String validateStringField(Object raw, String path, boolean nonBlank, boolean mustBeString) {

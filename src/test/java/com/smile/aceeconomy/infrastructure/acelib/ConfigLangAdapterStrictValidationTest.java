@@ -218,7 +218,7 @@ class ConfigLangAdapterStrictValidationTest {
         adapter.load();
         Path cfg = tempDir.resolve("config.yml");
         String c = Files.readString(cfg);
-        c = c.replaceAll("(?m)^\\s*type:.*$", "  type: mysql");
+        c = c.replaceAll("(?m)^  type: json$", "  type: mysql");
         c = c.replaceAll("(?m)^\\s*username:.*$", "    username: 12345");
         Files.writeString(cfg, c);
         ReloadResult r = adapter.reload();
@@ -233,7 +233,7 @@ class ConfigLangAdapterStrictValidationTest {
         adapter.load();
         Path cfg = tempDir.resolve("config.yml");
         String c = Files.readString(cfg);
-        c = c.replaceAll("(?m)^\\s*type:.*$", "  type: mysql");
+        c = c.replaceAll("(?m)^  type: json$", "  type: mysql");
         c = c.replaceAll("(?m)^\\s*password:.*$", "    password: 12345");
         Files.writeString(cfg, c);
         ReloadResult r = adapter.reload();
@@ -262,7 +262,7 @@ class ConfigLangAdapterStrictValidationTest {
         adapter.load();
         Path cfg = tempDir.resolve("config.yml");
         String c = Files.readString(cfg);
-        c = c.replaceAll("(?m)^\\s*type:.*$", "  type: sqlite");
+        c = c.replaceAll("(?m)^  type: json$", "  type: sqlite");
         c = c.replaceAll("(?m)^\\s*path:.*$", "    path: 12345");
         Files.writeString(cfg, c);
         ReloadResult r = adapter.reload();
@@ -544,7 +544,7 @@ class ConfigLangAdapterStrictValidationTest {
         adapter.load();
         Path cfg = tempDir.resolve("config.yml");
         String c = Files.readString(cfg);
-        c = c.replaceAll("(?m)^\\s*type:.*$", "  type: mysql");
+        c = c.replaceAll("(?m)^  type: json$", "  type: mysql");
         c = c.replaceAll("(?m)^\\s*password:.*$", "    password: \"\"");
         Files.writeString(cfg, c);
         ReloadResult r = adapter.reload();
@@ -1137,5 +1137,51 @@ class ConfigLangAdapterStrictValidationTest {
         org.mockito.ArgumentCaptor<Object> cap = org.mockito.ArgumentCaptor.forClass(Object.class);
         Mockito.verify(mockLogger, Mockito.atLeastOnce()).log(Mockito.eq(Level.WARNING), Mockito.anyString(), cap.capture());
         for (Object o : cap.getAllValues()) if (o != null) assertFalse(String.valueOf(o).contains(marker));
+    }
+
+    // --- bank-gui layout gate (fail-closed, zero partial apply) ---
+    // The shipped config.yml already carries a valid bank-gui block, so these
+    // tests break it in place instead of appending a duplicate mapping.
+
+    @Test
+    void bankGuiInvalidSizeFailsReloadClosed() throws IOException {
+        writeConfigLocale("en_US");
+        ConfigLangAdapter adapter = new ConfigLangAdapter(plugin, Locale.US);
+        adapter.load();
+        replaceLine("(?m)^  size:.*$", "  size: 28");
+        ReloadResult r = adapter.reload();
+        assertFalse(r.configReloaded(), "invalid bank-gui.size must fail: " + r.diagnostics());
+        assertFalse(r.success());
+        assertNotNull(r.configError());
+        assertTrue(r.configError().contains("bank-gui.size"),
+                "expected size path, got: " + r.configError());
+    }
+
+    @Test
+    void bankGuiDuplicateSlotFailsReloadClosed() throws IOException {
+        writeConfigLocale("en_US");
+        ConfigLangAdapter adapter = new ConfigLangAdapter(plugin, Locale.US);
+        adapter.load();
+        replaceLine("(?m)^      slot: 15$", "      slot: 4");
+        ReloadResult r = adapter.reload();
+        assertFalse(r.configReloaded(), "duplicate slot must fail: " + r.diagnostics());
+        assertFalse(r.success());
+        assertNotNull(r.configError());
+        assertTrue(r.configError().contains("slot"),
+                "expected slot path, got: " + r.configError());
+    }
+
+    @Test
+    void bankGuiUnknownActionTypeFailsReloadClosed() throws IOException {
+        writeConfigLocale("en_US");
+        ConfigLangAdapter adapter = new ConfigLangAdapter(plugin, Locale.US);
+        adapter.load();
+        replaceLine("(?m)^      type: deposit$", "      type: teleport");
+        ReloadResult r = adapter.reload();
+        assertFalse(r.configReloaded(), "unknown action type must fail: " + r.diagnostics());
+        assertFalse(r.success());
+        assertNotNull(r.configError());
+        assertTrue(r.configError().contains("bank-gui.actions.deposit.type"),
+                "expected type path, got: " + r.configError());
     }
 }

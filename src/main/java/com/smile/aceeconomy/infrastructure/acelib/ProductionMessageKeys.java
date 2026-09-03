@@ -163,6 +163,8 @@ public final class ProductionMessageKeys {
             "gui.bank-assets-name",
             "gui.bank-close-name",
             "gui.bank-debt-name",
+            "gui.bank-deposit-lore",
+            "gui.bank-deposit-name",
             "gui.bank-history-name",
             "gui.bank-loading",
             "gui.bank-profile-name",

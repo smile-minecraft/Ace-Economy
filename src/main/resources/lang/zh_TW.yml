@@ -181,6 +181,9 @@ gui:
   bank-assets-name: "<green>💵 現金資產 (Balance)"
   bank-debt-name: "<red>📉 信用與負債 (Debt)"
   bank-history-name: "<gold>📜 近期交易紀錄"
+  bank-deposit-name: "<gold>💰 存入支票"
+  bank-deposit-lore:
+    - "<gray>手持支票點擊即可存入</gray>"
   bank-withdraw-name: "<green>💸 發行支票"
   bank-withdraw-lore:
     - "<gray>左鍵: 提領 $1,000</gray>"

@@ -181,6 +181,9 @@ gui:
   bank-assets-name: "<green>💵 Assets (Balance)"
   bank-debt-name: "<red>📉 Debt & Credit"
   bank-history-name: "<gold>📜 Transaction History"
+  bank-deposit-name: "<gold>💰 Deposit Banknote"
+  bank-deposit-lore:
+    - "<gray>Click with a banknote in hand to deposit it</gray>"
   bank-withdraw-name: "<green>💸 Withdraw Banknote"
   bank-withdraw-lore:
     - "<gray>Left-Click: $1,000</gray>"

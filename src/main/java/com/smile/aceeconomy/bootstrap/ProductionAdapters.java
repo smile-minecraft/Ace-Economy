@@ -214,11 +214,25 @@ final class ProductionAdapters {
     }
 
     static final class Bank implements BankCommandService {
-        private final V2BankGuiSession gui; private final Executor executor;
-        Bank(V2BankGuiSession gui, Executor executor) { this.gui = gui; this.executor = executor; }
+        private final V2BankGuiSession gui;
+        private final com.smile.aceeconomy.infrastructure.acelib.BankGuiLayout layout;
+        private final com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter messages;
+        private final Executor executor;
+        Bank(V2BankGuiSession gui,
+             com.smile.aceeconomy.infrastructure.acelib.BankGuiLayout layout,
+             com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter messages,
+             Executor executor) {
+            this.gui = gui; this.layout = layout; this.messages = messages; this.executor = executor;
+        }
         public void open(UUID id, String name) { executor.execute(() -> {
+            if (!layout.enabled()) {
+                return;
+            }
             Player player = Bukkit.getPlayer(id);
-            if (player != null) gui.open(player, "AceEconomy", 27, java.util.Set.of(22, 23, 24));
+            if (player != null) {
+                String title = messages.plainMessage(layout.titleKey(), java.util.Map.of());
+                gui.open(player, title, layout.size(), layout.protectedSlots());
+            }
         }); }
     }
 
@@ -238,7 +252,13 @@ final class ProductionAdapters {
             this(api, null, currencies, banknotes, validator, redemptions);
         }
         public WithdrawResult withdraw(UUID id, long value) {
-            Currency c = currencies.get(currencies.defaultCurrencyId());
+            return withdraw(id, value, null);
+        }
+        @Override
+        public WithdrawResult withdraw(UUID id, long value, String currencyId) {
+            Currency c = currencyId == null || currencyId.isBlank()
+                    ? currencies.get(currencies.defaultCurrencyId())
+                    : currencies.get(currencyId);
             EconomyResult<Amount> result = api.withdraw(id, c.id(), Amount.of(value, c.scale()));
             if (result.isFailure()) return WithdrawResult.rejected(result.message());
             BanknoteClaim claim = claim(id, c, value);

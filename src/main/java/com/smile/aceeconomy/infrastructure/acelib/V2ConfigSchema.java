@@ -25,6 +25,15 @@ import java.util.List;
  * <p>Field defaults are applied by {@code ConfigManager.load()}/{@code reload()}
  * when a key is absent, so a partial on-disk config still yields a complete,
  * valid in-memory snapshot for every declared field.</p>
+ *
+ * <p>The {@code bank-gui} section is deliberately NOT declared here: it is an
+ * operator-owned block whose scalar defaults ({@code enabled}, {@code title-key},
+ * {@code size}) and legacy slot behaviour live in {@link BankGuiConfigParser}.
+ * Declaring them as schema fields would fabricate a partial section for
+ * pre-existing configs that never defined {@code bank-gui}. The section is
+ * validated as a whole at startup by the parser, which fail-fasts on malformed
+ * input instead of applying defaults; a config without {@code bank-gui} keeps
+ * loading under schema 2.0 and receives the legacy slot behaviour.</p>
  */
 public final class V2ConfigSchema {
 

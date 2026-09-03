@@ -21,6 +21,16 @@ public interface BankGuiUseCase {
     WithdrawResult withdraw(UUID playerUuid, long amount);
 
     /**
+     * Withdraw {@code amount} in the given currency, producing a v2 banknote.
+     * A {@code null} or blank id means the runtime default currency. The
+     * default implementation delegates to {@link #withdraw(UUID, long)} so
+     * existing bindings keep working; production resolves the configured id.
+     */
+    default WithdrawResult withdraw(UUID playerUuid, long amount, String currencyId) {
+        return withdraw(playerUuid, amount);
+    }
+
+    /**
      * Redeem the banknote held as {@code heldItem} into {@code playerUuid}'s account. The item is
      * decoded and structurally validated here; the durable nonce consumption and the credit are
      * committed together by the redemption store. On any rejection the caller must keep the item.

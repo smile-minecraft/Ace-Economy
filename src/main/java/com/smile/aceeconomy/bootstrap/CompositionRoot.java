@@ -20,9 +20,12 @@ import com.smile.aceeconomy.domain.Amount;
 import com.smile.aceeconomy.domain.Currency;
 import com.smile.aceeconomy.domain.CurrencyRegistry;
 import com.smile.aceeconomy.domain.DebtPolicy;
+import com.smile.aceeconomy.infrastructure.acelib.BankGuiConfigParser;
+import com.smile.aceeconomy.infrastructure.acelib.BankGuiLayout;
 import com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter;
 import com.smile.aceeconomy.infrastructure.acelib.CurrencyConfigParser;
 import com.smile.aceeconomy.infrastructure.acelib.SafeSchedulerFoliaContext;
+import com.smile.aceeconomy.gui.v2.BankGuiActions;
 import com.smile.aceeconomy.infrastructure.integration.acelib.AceLibExternalServiceReadiness;
 import com.smile.aceeconomy.infrastructure.integration.acelib.ExternalIntegrationCoordinator;
 import com.smile.aceeconomy.infrastructure.integration.acelib.IntegrationModule;
@@ -46,7 +49,6 @@ import com.smile.aceeconomy.infrastructure.persistence.StorageConfig;
 import com.smile.aceeconomy.infrastructure.persistence.StorageConfigParser;
 import com.smile.aceeconomy.infrastructure.session.AsyncAccountSessionStore;
 import com.smile.aceeconomy.infrastructure.session.PlayerSessionManager;
-import com.smile.aceeconomy.gui.v2.BankGuiAction;
 import com.smile.aceeconomy.gui.v2.BanknoteRedeemListener;
 import com.smile.aceeconomy.gui.v2.V2BankGuiSession;
 import com.smile.aceeconomy.operations.HistoryService;
@@ -277,14 +279,16 @@ public final class CompositionRoot {
         ProductionAdapters.BankUseCase bankUseCase =
                 new ProductionAdapters.BankUseCase(api, economy, currencies, banknotes,
                         banknoteValidator, redemptions);
+        // The bank GUI layout is operator-owned: the whole section is parsed and
+        // validated before any session or listener is built, so a malformed
+        // bank-gui block aborts the presentation slice instead of leaving a
+        // partially applied GUI behind. A missing block keeps the legacy
+        // defaults (deposit 4, withdraw 100/500 on 11/13, close 15, size 27).
+        BankGuiLayout bankGuiLayout = BankGuiConfigParser.parse(
+                value("bank-gui"), Set.copyOf(currencies.all().stream().map(Currency::id).toList()));
         GuiService guiService = requireApi().getGuiService();
-        bankGui = new V2BankGuiSession(guiService, folia, bankUseCase, slot -> switch (slot) {
-            case 4 -> BankGuiAction.deposit();
-            case 11 -> BankGuiAction.withdraw(100L);
-            case 13 -> BankGuiAction.withdraw(500L);
-            case 15 -> BankGuiAction.close();
-            default -> BankGuiAction.none();
-        });
+        bankGui = new V2BankGuiSession(guiService, folia, bankUseCase,
+                BankGuiActions.resolver(bankGuiLayout));
         // Right-click redemption reuses the same atomic bank use case as the GUI deposit button
         // (durable nonce consumption + credit commit together); the listener owns its click-time
         // snapshot and region-context removal, so no other slice needs to know about interact events.
@@ -309,7 +313,8 @@ public final class CompositionRoot {
         ProductionAdapters.Leaderboards leaderboards = new ProductionAdapters.Leaderboards(
                 leaderboardService,
                 integer("leaderboard.page-size", 10), ioExecutor);
-        ProductionAdapters.Bank bankCommands = new ProductionAdapters.Bank(bankGui, ioExecutor);
+        ProductionAdapters.Bank bankCommands =
+                new ProductionAdapters.Bank(bankGui, bankGuiLayout, config, ioExecutor);
         ProductionAdapters.Admin adminCommands = new ProductionAdapters.Admin(api, ioExecutor,
                 () -> {
                     boolean ok = config.reload().success();
