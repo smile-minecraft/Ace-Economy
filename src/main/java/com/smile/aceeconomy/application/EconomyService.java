@@ -55,6 +55,11 @@ public final class EconomyService {
     private final TransactionEventPublisher events;
     private final AtomicTransferStore transferStore;
     private final LockRegistry locks = new LockRegistry();
+    /**
+     * Read-only balance acceleration. Populated only from successful persistence
+     * reads/writes and dropped on offline, write failure or reload — never a source of truth.
+     */
+    private final AccountBalanceCache balanceCache = new AccountBalanceCache();
 
     public EconomyService(CurrencyRegistry currencies, DebtPolicy debtPolicy, Amount startBalance,
                            AccountRepository accounts, AuditSink audit, Clock clock,
@@ -81,6 +86,7 @@ public final class EconomyService {
     public EconomyResult<AccountSnapshot> createAccount(UUID uuid, String ownerName) {
         Optional<Account> existing = accounts.load(uuid);
         if (existing.isPresent()) {
+            primeCache(existing.get());
             return EconomyResult.success(existing.get().snapshot());
         }
         Map<String, Amount> initial = new HashMap<>();
@@ -88,6 +94,7 @@ public final class EconomyService {
             initial.put(c.id(), c.id().equals(currencies.defaultCurrencyId()) ? startBalance : c.zero());
         }
         Account account = accounts.create(uuid, ownerName, initial);
+        primeCache(account);
         return EconomyResult.success(account.snapshot());
     }
 
@@ -105,16 +112,62 @@ public final class EconomyService {
 
     // ---------- read ----------
 
+    /**
+     * Storage-backed balance read. Refreshes the read cache on success so later synchronous
+     * queries can be served without I/O; drops the owner's entry when the account is missing
+     * or the read itself fails, so a hit can never mask a persistence problem.
+     */
     public EconomyResult<Amount> getBalance(UUID uuid, String currencyId) {
         if (!currencies.contains(currencyId)) {
             return EconomyResult.failure(EconomyError.CURRENCY_NOT_FOUND, currencyId);
         }
-        Optional<Account> acc = accounts.load(uuid);
+        AccountBalanceCache.CacheStamp stamp = balanceCache.stampOf(uuid);
+        Optional<Account> acc;
+        try {
+            acc = accounts.load(uuid);
+        } catch (PersistenceException e) {
+            balanceCache.invalidate(uuid);
+            throw e;
+        }
         if (acc.isEmpty()) {
+            balanceCache.invalidate(uuid);
             return EconomyResult.failure(EconomyError.ACCOUNT_NOT_FOUND, "no account for " + uuid);
         }
         Amount bal = acc.get().balanceOf(currencyId);
-        return EconomyResult.success(bal != null ? bal : currencies.get(currencyId).zero());
+        Amount result = bal != null ? bal : currencies.get(currencyId).zero();
+        balanceCache.putIfStamp(uuid, currencyId, result, stamp);
+        return EconomyResult.success(result);
+    }
+
+    /**
+     * Zero-I/O cached balance for synchronous callers that must never block on storage.
+     * Empty on miss or unknown currency: callers fall back to a safe default instead of
+     * waiting on the calling thread.
+     */
+    public Optional<Amount> cachedBalance(UUID uuid, String currencyId) {
+        if (uuid == null || !currencies.contains(currencyId)) {
+            return Optional.empty();
+        }
+        return balanceCache.get(uuid, currencyId);
+    }
+
+    /** Drop one owner's cached balances (offline, write conflict, reload). */
+    public void invalidateBalance(UUID uuid) {
+        balanceCache.invalidate(uuid);
+    }
+
+    /**
+     * Drop all cached balances (reload / restore / disable).
+     *
+     * <p>Accepted product contract: synchronous balance queries ({@code cachedBalance},
+     * served to Vault without touching storage) miss after this call and fall back to the
+     * safe default zero until the next persisted read or successful write re-primes the
+     * entry. There is intentionally no synchronous refill — refilling on the calling
+     * (usually server main) thread would reintroduce the blocking I/O the cache exists to
+     * avoid. Re-priming happens only through ordinary persisted reads/writes.</p>
+     */
+    public void invalidateAllBalances() {
+        balanceCache.invalidateAll();
     }
 
     // ---------- deposit ----------
@@ -130,6 +183,7 @@ public final class EconomyService {
         ReentrantLock lock = locks.lockFor(uuid);
         lock.lock();
         try {
+            AccountBalanceCache.CacheStamp stamp = balanceCache.stampOf(uuid);
             Optional<Account> acc = accounts.load(uuid);
             if (acc.isEmpty()) {
                 return EconomyResult.failure(EconomyError.ACCOUNT_NOT_FOUND, "no account for " + uuid);
@@ -141,8 +195,14 @@ public final class EconomyService {
                 return EconomyResult.failure(EconomyError.TRANSACTION_CANCELLED, "deposit cancelled");
             }
             Account updated = acc.get().deposit(currencyId, amount);
-            accounts.save(acc.get(), updated);
+            try {
+                accounts.save(acc.get(), updated);
+            } catch (PersistenceException e) {
+                balanceCache.invalidate(uuid);
+                throw e;
+            }
             Amount after = updated.balanceOf(currencyId);
+            balanceCache.putIfStamp(uuid, currencyId, after, stamp);
             return commitAudit(new Transaction(newId(), uuid, null, norm(currencyId), amount,
                     TransactionType.DEPOSIT, before, after, now(), "deposit"), after);
         } finally {
@@ -177,6 +237,7 @@ public final class EconomyService {
         ReentrantLock lock = locks.lockFor(accountId);
         lock.lock();
         try {
+            AccountBalanceCache.CacheStamp stamp = balanceCache.stampOf(accountId);
             Optional<Account> acc = accounts.load(accountId);
             if (acc.isEmpty()) {
                 return EconomyResult.failure(EconomyError.ACCOUNT_NOT_FOUND, "no account for " + accountId);
@@ -194,6 +255,7 @@ public final class EconomyService {
             try {
                 RedemptionResult r = redemptionStore.redeemPrepared(nonce, updated, tx, debtPolicy);
                 if (r.isCommitted()) {
+                    balanceCache.putIfStamp(accountId, currencyId, r.balanceAfter(), stamp);
                     return EconomyResult.success(r.balanceAfter());
                 }
                 if (r.isReplay()) {
@@ -214,14 +276,17 @@ public final class EconomyService {
                         if (committedAcc.isPresent()) {
                             Amount bal = committedAcc.get().balanceOf(currencyId);
                             if (bal != null) {
+                                balanceCache.putIfStamp(accountId, currencyId, bal, stamp);
                                 return EconomyResult.success(bal);
                             }
                         }
                     } catch (PersistenceException ignored) {
                         // provider may have been abandoned after post-commit failure; still committed
                     }
+                    balanceCache.putIfStamp(accountId, currencyId, after, stamp);
                     return EconomyResult.success(after);
                 }
+                balanceCache.invalidate(accountId);
                 return EconomyResult.failure(EconomyError.AUDIT_FAILURE, e.getMessage());
             }
         } finally {
@@ -242,6 +307,7 @@ public final class EconomyService {
         ReentrantLock lock = locks.lockFor(uuid);
         lock.lock();
         try {
+            AccountBalanceCache.CacheStamp stamp = balanceCache.stampOf(uuid);
             Optional<Account> acc = accounts.load(uuid);
             if (acc.isEmpty()) {
                 return EconomyResult.failure(EconomyError.ACCOUNT_NOT_FOUND, "no account for " + uuid);
@@ -257,7 +323,13 @@ public final class EconomyService {
                 return rejectWithdraw();
             }
             Account updated = acc.get().withdraw(currencyId, amount);
-            accounts.save(acc.get(), updated);
+            try {
+                accounts.save(acc.get(), updated);
+            } catch (PersistenceException e) {
+                balanceCache.invalidate(uuid);
+                throw e;
+            }
+            balanceCache.putIfStamp(uuid, currencyId, after, stamp);
             return commitAudit(new Transaction(newId(), uuid, null, norm(currencyId), amount,
                     TransactionType.WITHDRAW, before, after, now(), "withdraw"), after);
         } finally {
@@ -277,6 +349,7 @@ public final class EconomyService {
         ReentrantLock lock = locks.lockFor(uuid);
         lock.lock();
         try {
+            AccountBalanceCache.CacheStamp stamp = balanceCache.stampOf(uuid);
             Optional<Account> acc = accounts.load(uuid);
             if (acc.isEmpty()) {
                 return EconomyResult.failure(EconomyError.ACCOUNT_NOT_FOUND, "no account for " + uuid);
@@ -294,7 +367,13 @@ public final class EconomyService {
                 return EconomyResult.failure(EconomyError.DEBT_LIMIT_EXCEEDED, "debt limit exceeded");
             }
             Account updated = acc.get().setBalance(currencyId, amount);
-            accounts.save(acc.get(), updated);
+            try {
+                accounts.save(acc.get(), updated);
+            } catch (PersistenceException e) {
+                balanceCache.invalidate(uuid);
+                throw e;
+            }
+            balanceCache.putIfStamp(uuid, currencyId, amount, stamp);
             return commitAudit(new Transaction(newId(), uuid, null, norm(currencyId), amount,
                     TransactionType.SET, before, amount, now(), "set"), amount);
         } finally {
@@ -317,6 +396,8 @@ public final class EconomyService {
         }
         locks.lockBoth(from, to);
         try {
+            AccountBalanceCache.CacheStamp fromStamp = balanceCache.stampOf(from);
+            AccountBalanceCache.CacheStamp toStamp = balanceCache.stampOf(to);
             Optional<Account> fromAcc = accounts.load(from);
             Optional<Account> toAcc = accounts.load(to);
             if (fromAcc.isEmpty()) {
@@ -357,10 +438,14 @@ public final class EconomyService {
                             audit.record(inTx);
                         } catch (Exception ignored) { }
                     }
+                    balanceCache.putIfStamp(from, currencyId, result.fromBalance(), fromStamp);
+                    balanceCache.putIfStamp(to, currencyId, result.toBalance(), toStamp);
                     return EconomyResult.success(result);
                 } catch (AtomicTransferStore.DebtLimitExceededException e) {
                     return EconomyResult.failure(rejectWithdrawError(), rejectWithdrawMessage());
                 } catch (PersistenceException e) {
+                    balanceCache.invalidate(from);
+                    balanceCache.invalidate(to);
                     if (e.isCommitted()) {
                         // commit succeeded but cleanup failed; balances are durable, avoid retry duplicate
                         try {
@@ -372,6 +457,8 @@ public final class EconomyService {
                                 if (fromBal != null && toBal != null) {
                                     TransferResult committedResult = new TransferResult(from, to, fromBal, toBal,
                                             UUID.randomUUID(), UUID.randomUUID());
+                                    balanceCache.putIfStamp(from, currencyId, fromBal, fromStamp);
+                                    balanceCache.putIfStamp(to, currencyId, toBal, toStamp);
                                     return EconomyResult.success(committedResult);
                                 }
                             }
@@ -402,8 +489,16 @@ public final class EconomyService {
 
             Account updatedFrom = fromAcc.get().withdraw(currencyId, amount);
             Account updatedTo = toAcc.get().deposit(currencyId, amount);
-            accounts.save(fromAcc.get(), updatedFrom);
-            accounts.save(toAcc.get(), updatedTo);
+            try {
+                accounts.save(fromAcc.get(), updatedFrom);
+                accounts.save(toAcc.get(), updatedTo);
+            } catch (PersistenceException e) {
+                balanceCache.invalidate(from);
+                balanceCache.invalidate(to);
+                throw e;
+            }
+            balanceCache.putIfStamp(from, currencyId, fromAfter, fromStamp);
+            balanceCache.putIfStamp(to, currencyId, toAfter, toStamp);
 
             // deterministic audit: mutation/outcome first, then fixed-order records (out, in)
             Transaction outTx = new Transaction(newId(), from, to, norm(currencyId), amount,
@@ -427,6 +522,14 @@ public final class EconomyService {
     }
 
     // ---------- helpers ----------
+
+    private void primeCache(Account account) {
+        // Guarded publish: an offline/reload invalidation that lands while the account is
+        // being created must not be resurrected by this priming write.
+        AccountBalanceCache.CacheStamp stamp = balanceCache.stampOf(account.owner());
+        account.balances().forEach((currencyId, balance) ->
+                balanceCache.putIfStamp(account.owner(), currencyId, balance, stamp));
+    }
 
     private EconomyResult<Void> validateAmountPositive(Amount amount) {
         if (amount == null) {

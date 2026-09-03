@@ -41,6 +41,11 @@ public final class EconomyApiImpl implements EconomyApi {
     }
 
     @Override
+    public java.util.Optional<Amount> cachedBalance(UUID uuid, String currencyId) {
+        return service.cachedBalance(uuid, currencyId);
+    }
+
+    @Override
     public EconomyResult<Amount> deposit(UUID uuid, String currencyId, Amount amount) {
         return service.deposit(uuid, currencyId, amount);
     }

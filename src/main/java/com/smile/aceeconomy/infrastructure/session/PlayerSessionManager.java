@@ -160,6 +160,9 @@ public final class PlayerSessionManager {
                 flushFailures.putAll(failures); // typed failure surfaced, not swallowed
             }
             sessions.remove(uuid, session);
+            // Offline invalidation: the loaded snapshot must not survive the session, otherwise
+            // a later read could observe a departed player's balance.
+            store.invalidate(uuid);
         } finally {
             structuralLock.unlock();
         }
@@ -188,6 +191,9 @@ public final class PlayerSessionManager {
             }
             if (!pending.isEmpty()) {
                 flushFailures.putAll(coordinator.awaitFlush(pending, deadlineMillis));
+            }
+            for (PlayerSession s : sessions.values()) {
+                store.invalidate(s.uuid); // shutdown drops every snapshot with its session
             }
             sessions.clear();
         } finally {

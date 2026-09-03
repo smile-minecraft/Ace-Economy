@@ -21,6 +21,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 /**
  * Production {@link ReversalExecutor}: validates the plan against the live accounts, builds the
@@ -38,11 +39,24 @@ public final class StorageReversalExecutor implements ReversalExecutor {
     private final AccountRepository accounts;
     private final AtomicReversalStore store;
     private final Clock clock;
+    /**
+     * Best-effort balance-cache invalidation for every account a reversal touches.
+     * Production wires the application read cache here because this executor persists
+     * directly and bypasses {@code EconomyService}; without it a cached Vault read keeps
+     * serving the pre-rollback balance. Null means no cache is attached (legacy callers).
+     */
+    private final Consumer<UUID> cacheInvalidation;
 
     public StorageReversalExecutor(AccountRepository accounts, AtomicReversalStore store, Clock clock) {
+        this(accounts, store, clock, null);
+    }
+
+    public StorageReversalExecutor(AccountRepository accounts, AtomicReversalStore store, Clock clock,
+                                   Consumer<UUID> cacheInvalidation) {
         this.accounts = Objects.requireNonNull(accounts, "accounts");
         this.store = Objects.requireNonNull(store, "store");
         this.clock = Objects.requireNonNull(clock, "clock");
+        this.cacheInvalidation = cacheInvalidation;
     }
 
     @Override
@@ -69,6 +83,7 @@ public final class StorageReversalExecutor implements ReversalExecutor {
             if (base == null) {
                 base = accounts.load(d.accountId()).orElse(null);
                 if (base == null) {
+                    notifyInvalidated(current.keySet());
                     return ReversalOutcome.failure(RollbackError.EXECUTION_FAILED,
                             "account not found for reversal: " + d.accountId());
                 }
@@ -116,8 +131,10 @@ public final class StorageReversalExecutor implements ReversalExecutor {
                 for (Transaction t : reversalRecords) {
                     ids.add(t.id());
                 }
+                notifyInvalidated(current.keySet());
                 return ReversalOutcome.success(ids);
             }
+            notifyInvalidated(current.keySet());
             return ReversalOutcome.failure(RollbackError.EXECUTION_FAILED,
                     "failed to apply reversal atomically: " + e.getMessage());
         } catch (RuntimeException e) {
@@ -127,8 +144,10 @@ public final class StorageReversalExecutor implements ReversalExecutor {
                 for (Transaction t : reversalRecords) {
                     ids.add(t.id());
                 }
+                notifyInvalidated(current.keySet());
                 return ReversalOutcome.success(ids);
             }
+            notifyInvalidated(current.keySet());
             return ReversalOutcome.failure(RollbackError.EXECUTION_FAILED,
                     "failed to apply reversal atomically: " + e.getMessage());
         }
@@ -137,6 +156,23 @@ public final class StorageReversalExecutor implements ReversalExecutor {
         for (Transaction t : reversalRecords) {
             ids.add(t.id());
         }
+        notifyInvalidated(current.keySet());
         return ReversalOutcome.success(ids);
+    }
+
+    private void notifyInvalidated(java.util.Set<UUID> accountUuids) {
+        if (cacheInvalidation == null || accountUuids == null) {
+            return;
+        }
+        for (UUID uuid : accountUuids) {
+            if (uuid == null) {
+                continue;
+            }
+            try {
+                cacheInvalidation.accept(uuid);
+            } catch (RuntimeException ignored) {
+                // Best-effort: cache housekeeping must never break the reversal outcome.
+            }
+        }
     }
 }

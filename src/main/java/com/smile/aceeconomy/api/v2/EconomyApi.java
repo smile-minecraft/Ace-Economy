@@ -24,6 +24,16 @@ public interface EconomyApi {
 
     EconomyResult<Amount> getBalance(UUID uuid, String currencyId);
 
+    /**
+     * Zero-I/O cached balance for synchronous callers (such as Vault) that must never block
+     * on storage. Empty on miss or unknown currency: callers fall back to a safe default
+     * instead of waiting on the calling thread. The default implementation returns empty;
+     * storage-backed implementations override it with their read cache.
+     */
+    default java.util.Optional<Amount> cachedBalance(UUID uuid, String currencyId) {
+        return java.util.Optional.empty();
+    }
+
     EconomyResult<Amount> deposit(UUID uuid, String currencyId, Amount amount);
 
     EconomyResult<Amount> withdraw(UUID uuid, String currencyId, Amount amount);

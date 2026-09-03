@@ -48,6 +48,8 @@ Use the console command for ordinary configuration or language changes:
 
 The reload reports `AceEconomy reloaded` on success and keeps the last valid in-memory snapshot if the new configuration or language files cannot be loaded. After changing `storage.type`, the SQLite path, MySQL connection values, plugin JARs, AceLib, or optional plugins, stop and restart the full server instead.
 
+A successful reload also drops the whole synchronous balance cache. That is accepted behaviour, not a bug: Vault reads never block on storage, so until the next persisted read or successful write re-primes an entry, a balance query falls back to the safe default `0.0`. There is no synchronous refill, because refilling on the calling thread would reintroduce the blocking I/O the cache exists to avoid.
+
 Do not use Bukkit `/reload` as a maintenance or upgrade shortcut.
 
 ## Routine commands

@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 /**
  * Essentials/CMI normalized import boundary.
@@ -49,14 +50,28 @@ public final class ImportService {
     private final TransactionRepository transactions;
     private final Clock clock;
     private final IdempotencyGuard idempotency;
+    /**
+     * Best-effort balance-cache invalidation for every account this import touches.
+     * Production wires the application read cache here because this service persists
+     * directly and bypasses {@code EconomyService}; without it a cached Vault read keeps
+     * serving the pre-import balance. Null means no cache is attached (legacy callers).
+     */
+    private final Consumer<UUID> cacheInvalidation;
 
     public ImportService(CurrencyRegistry currencies, AccountRepository accounts,
                          TransactionRepository transactions, Clock clock, IdempotencyGuard idempotency) {
+        this(currencies, accounts, transactions, clock, idempotency, null);
+    }
+
+    public ImportService(CurrencyRegistry currencies, AccountRepository accounts,
+                         TransactionRepository transactions, Clock clock, IdempotencyGuard idempotency,
+                         Consumer<UUID> cacheInvalidation) {
         this.currencies = Objects.requireNonNull(currencies, "currencies");
         this.accounts = Objects.requireNonNull(accounts, "accounts");
         this.transactions = Objects.requireNonNull(transactions, "transactions");
         this.clock = Objects.requireNonNull(clock, "clock");
         this.idempotency = Objects.requireNonNull(idempotency, "idempotency");
+        this.cacheInvalidation = cacheInvalidation;
     }
 
     public ImportReport importRecords(List<ImportRecord> records, ImportOptions options) {
@@ -119,6 +134,7 @@ public final class ImportService {
                 Amount after = updated.balanceOf(cur.id());
                 UUID txId = appendImportRecord(r, cur, before, after);
                 idempotency.consume(key);
+                notifyInvalidated(r.accountUuid());
                 return ImportRecordResult.applied(r, txId, null);
             }
             if (!options.createMissingAccounts()) {
@@ -133,10 +149,25 @@ public final class ImportService {
                     r.ownerName() != null ? r.ownerName() : r.accountUuid().toString(), initial);
             UUID txId = appendImportRecord(r, cur, cur.zero(), r.amount());
             idempotency.consume(key);
+            notifyInvalidated(r.accountUuid());
             return ImportRecordResult.applied(r, txId, null);
         } catch (RuntimeException e) {
             // Isolation: do not consume the idempotency key so the record can be retried.
+            // A failed write may still have touched persistence, so drop any cached hit
+            // rather than letting a later sync read mask the problem.
+            notifyInvalidated(r.accountUuid());
             return ImportRecordResult.failed(r, "apply failed: " + e.getMessage());
+        }
+    }
+
+    private void notifyInvalidated(UUID accountUuid) {
+        if (cacheInvalidation == null || accountUuid == null) {
+            return;
+        }
+        try {
+            cacheInvalidation.accept(accountUuid);
+        } catch (RuntimeException ignored) {
+            // Best-effort: cache housekeeping must never break the import outcome.
         }
     }
 

@@ -128,13 +128,23 @@ public final class VaultEconomyProvider implements Economy {
     }
 
     // ---------- balance / has ----------
+    //
+    // Synchronous Vault queries run on the caller's thread (usually the server main thread),
+    // so they must never block on storage. Balances are served from the read cache only:
+    // a hit returns the last persisted value, a miss returns the safe default 0.0.
+    // The cache is refreshed by every successful write through the application service and
+    // dropped on offline / write failure / reload, so it is never the source of truth.
+    // A post-reload miss returning 0.0 is the accepted product contract (see the reload
+    // section of docs/operations.md): the next persisted read re-primes the entry, and no
+    // synchronous refill runs on the calling thread.
 
     private double balanceOf(OfflinePlayer player, String currencyId) {
         if (player == null || !currencies.contains(currencyId)) {
             return 0.0;
         }
-        EconomyResult<Amount> r = api.getBalance(player.getUniqueId(), currencyId);
-        return r.isSuccess() ? r.value().value().doubleValue() : 0.0;
+        return api.cachedBalance(player.getUniqueId(), currencyId)
+                .map(cached -> cached.value().doubleValue())
+                .orElse(0.0);
     }
 
     @Override

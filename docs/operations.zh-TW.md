@@ -48,6 +48,8 @@ SQLite 的路徑必須留在 `plugins/AceEconomy/` 之內。MySQL 的 `pool-size
 
 成功時會回顯 `AceEconomy reloaded`。如果新的設定或語言檔載入不了，插件會保留最後一份有效的記憶體快照，不會用半成品設定頂替。但如果你改動了 `storage.type`、SQLite 路徑、MySQL 連線值、插件 JAR、AceLib 或選用插件，就必須完整停服再啟動，光靠 reload 不夠。
 
+成功 reload 也會清空整個同步餘額快取。這是預期的接受行為，不是 bug：Vault 讀取絕不阻塞等待儲存，所以在下一次已持久化的讀取或成功寫入重新填入之前，餘額查詢會回到安全預設值 `0.0`。不會在呼叫執行緒上同步回填，因為那會把快取原本要避開的阻塞 I/O 帶回來。
+
 不要把 Bukkit 的 `/reload` 當成維護或升級的捷徑。
 
 ## 日常指令

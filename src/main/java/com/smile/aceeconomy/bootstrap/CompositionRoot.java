@@ -227,7 +227,16 @@ public final class CompositionRoot {
         // entry points to them in its own slice. The in-memory executor / guard classes
         // are replacement stubs for verification only and never appear in this graph.
         rollbacks = new RollbackService(transactions,
-                new StorageReversalExecutor(accounts, reversals, clock));
+                new StorageReversalExecutor(accounts, reversals, clock,
+                        // Rollback persists directly and bypasses EconomyService: drop the
+                        // affected read-cache entries so Vault never serves pre-rollback
+                        // balances. Guarded for unit seams where economy is not built yet.
+                        uuid -> {
+                            EconomyService live = economy;
+                            if (live != null) {
+                                live.invalidateBalance(uuid);
+                            }
+                        }));
         banknoteValidator = new BanknoteValidator(new PersistentIdempotencyGuard(nonces));
     }
 
@@ -243,6 +252,12 @@ public final class CompositionRoot {
     private void stopSessions() {
         if (sessions != null) {
             sessions.disable(SESSION_SHUTDOWN_DEADLINE_MILLIS);
+        }
+        // Disable invalidation for the balance read cache: shutdown drops every snapshot
+        // with its session, so no cached balance may survive for a later synchronous query
+        // (or a late async write, whose stamp is now stale and discarded) to resurrect.
+        if (economy != null) {
+            economy.invalidateAllBalances();
         }
     }
 
@@ -278,7 +293,15 @@ public final class CompositionRoot {
                 integer("leaderboard.page-size", 10), ioExecutor);
         ProductionAdapters.Bank bankCommands = new ProductionAdapters.Bank(bankGui, ioExecutor);
         ProductionAdapters.Admin adminCommands = new ProductionAdapters.Admin(api, ioExecutor,
-                () -> config.reload().success());
+                () -> {
+                    boolean ok = config.reload().success();
+                    // Reload invalidation: configuration (currencies, balances) may have changed,
+                    // so cached balances are dropped and re-primed by later persisted reads.
+                    if (ok && economy != null) {
+                        economy.invalidateAllBalances();
+                    }
+                    return ok;
+                });
         ProductionAdapters.History historyCommands = new ProductionAdapters.History(
                 new HistoryService(transactions), ioExecutor);
         // The rollback command surface binds to the SAME RollbackService created in the
@@ -434,6 +457,14 @@ public final class CompositionRoot {
         @EventHandler
         public void onQuit(PlayerQuitEvent event) {
             sessions.quit(event.getPlayer().getUniqueId(), SESSION_SHUTDOWN_DEADLINE_MILLIS);
+            // Offline invalidation for the balance read cache: a later synchronous query
+            // for this owner must miss (safe default) instead of serving the departed
+            // player's balance until the next persisted read re-primes it. An EconomyService
+            // write that started before this invalidation carries a stale stamp, so even if
+            // it persists afterwards its cached value is discarded rather than resurrected.
+            if (economy != null) {
+                economy.invalidateBalance(event.getPlayer().getUniqueId());
+            }
         }
     }
 
