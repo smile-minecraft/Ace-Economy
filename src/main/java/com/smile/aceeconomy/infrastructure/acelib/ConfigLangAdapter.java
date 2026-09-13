@@ -29,7 +29,7 @@ import java.util.logging.Level;
 /**
  * v2 config / language / message compatibility adapter (clean-slate).
  *
- * <p>Built only on the public AceLib v1.2.0 surface: {@link ConfigManager},
+ * <p>Built only on the public AceLib v1.2.1 surface: {@link ConfigManager},
  * {@link LangManager} and {@link MessageService}. It introduces no internal
  * datastore, performs no plugin cast and uses no reflection.</p>
  *
@@ -1306,7 +1306,7 @@ public final class ConfigLangAdapter {
         }
     }
 
-    /** Render a message to an Adventure {@link Component} using AceLib v1.2.0
+    /** Render a message to an Adventure {@link Component} using AceLib v1.2.1
      *  {@link MessageService#formatComponent(String, java.util.Map)} so user-provided
      *  values are escaped before MiniMessage parsing (prevents tag injection).
      *

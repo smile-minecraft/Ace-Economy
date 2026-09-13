@@ -13,34 +13,34 @@
 
 ## 需要準備的環境
 
-伺服器要用 Java 25，跑 Paper 或 Folia 26.1.2。AceEconomy 一定要配 `AceLib-1.2.0.jar` 才能啟動。Vault 和 PlaceholderAPI 是選用的，有裝才有對應功能，沒裝也能開服。SQLite 和 MySQL 需要的 JDBC 驅動已經包在 `AceEconomy-2.1.0.jar` 裡面，不用自己再找驅動。
+伺服器要用 Java 25，跑 Paper 或 Folia 26.1.2。AceEconomy 一定要配 `AceLib-1.2.1.jar` 才能啟動。Vault 和 PlaceholderAPI 是選用的，有裝才有對應功能，沒裝也能開服。SQLite 和 MySQL 需要的 JDBC 驅動已經包在 `AceEconomy-2.1.0.jar` 裡面，不用自己再找驅動。
 
 Paper/Folia 26.1.2 是正式支援的版本。Folia 26.2 只有特定 build 通過驗證（VERIFIED-BETA），其他 26.2 build 還沒驗證過。
 
 先準備好這兩個檔案：
 
 ```text
-plugins/AceLib-1.2.0.jar
+plugins/AceLib-1.2.1.jar
 plugins/AceEconomy-2.1.0.jar
 ```
 
 `plugins/` 裡面不要留 `AceLib-0.5.0-SNAPSHOT.jar` 或其他 AceLib。兩個 AceLib 同時存在，伺服器會分不清要用哪一個，可能開不乾淨。
 
-### AceLib v1.2.0 下載與校驗和
+### AceLib v1.2.1 下載與校驗和
 
-`AceLib-1.2.0.jar` 請從 AceLib v1.2.0 的 GitHub Release 下載：<https://github.com/smile-minecraft/AceLib/releases/tag/v1.2.0>。
+`AceLib-1.2.1.jar` 請從 AceLib v1.2.1 的 GitHub Release 下載：<https://github.com/smile-minecraft/AceLib/releases/tag/v1.2.1>。
 
 放進 `plugins/` 之前，先對一次官方公布的 SHA-256：
 
 ```text
-da9f196b47c2b28c6db443d102236b27c1a1bbdf7dd3e7c22470170420935278  AceLib-1.2.0.jar
+2da9d21e6a81eb3086aac3dcf87ad11f6dbcbfef5d3c80263270b3f074dc1d6d  AceLib-1.2.1.jar
 ```
 
 在本機算出 digest，一個字一個字比：
 
 ```text
-shasum -a 256 AceLib-1.2.0.jar   # macOS
-sha256sum AceLib-1.2.0.jar       # Linux
+shasum -a 256 AceLib-1.2.1.jar   # macOS
+sha256sum AceLib-1.2.1.jar       # Linux
 ```
 
 對不起來就不要裝這個 JAR。寧可重抓，也不要拿來路不明的檔案開服。
@@ -63,7 +63,7 @@ stop
 
 ### 2. 檢查相依插件
 
-把正式 `plugins/` 裡舊的或重複的 AceLib 移走。如果那是舊安裝留下來的，就讓它留在備份裡。接著把 `AceLib-1.2.0.jar` 和 `AceEconomy-2.1.0.jar` 放進 `plugins/`。
+把正式 `plugins/` 裡舊的或重複的 AceLib 移走。如果那是舊安裝留下來的，就讓它留在備份裡。接著把 `AceLib-1.2.1.jar` 和 `AceEconomy-2.1.0.jar` 放進 `plugins/`。
 
 有用到連動功能，才把 Vault 或 PlaceholderAPI 放進同一個 `plugins/` 目錄。沒裝這兩個，AceEconomy 照樣能啟動，不要當成安裝失敗。
 
@@ -164,7 +164,7 @@ storage:
 
 先照症狀翻 [`troubleshooting.md`](troubleshooting.zh-TW.md)。動資料之前，先看這四件事：
 
-- `AceLib-1.2.0.jar` 有放，而且沒有舊版 AceLib 同時啟用。
+- `AceLib-1.2.1.jar` 有放，而且沒有舊版 AceLib 同時啟用。
 - `config.yml` 有 `version: "2.0"`，`storage.type` 是有效值。
 - SQLite 路徑還在 `plugins/AceEconomy/` 底下。
 - MySQL 密碼和 webhook 網址只寫在本機，沒貼到工單或公開文章。

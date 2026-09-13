@@ -15,7 +15,7 @@
 
 ## 这次升级会改变什么
 
-v2 要 Java 25、Paper/Folia 26.1.2，还有 `AceLib-1.2.0.jar`。插件本体是 `AceEconomy-2.1.0.jar`。Vault 和 PlaceholderAPI 还是可选的，有装才联动。Paper/Folia 26.1.2 是正式支持的版本；Folia 26.2 只有特定 build 通过验证（VERIFIED-BETA），其余 26.2 build 还没验证。
+v2 要 Java 25、Paper/Folia 26.1.2，还有 `AceLib-1.2.1.jar`。插件本体是 `AceEconomy-2.1.0.jar`。Vault 和 PlaceholderAPI 还是可选的，有装才联动。Paper/Folia 26.1.2 是正式支持的版本；Folia 26.2 只有特定 build 通过验证（VERIFIED-BETA），其余 26.2 build 还没验证。
 
 指令也换了样子。v2 一定要加子指令：`/money balance`、`/pay send`、`/withdraw cash`、`/baltop top`、`/bank open`，管理用 `/aceeco`。不要把 v1 才有的 history、rollback、import 写法，或旧银行券的说法，直接当 v2 指令来打。
 
@@ -40,7 +40,7 @@ v2 要 Java 25、Paper/Folia 26.1.2，还有 `AceLib-1.2.0.jar`。插件本体�
 把下面两个文件放进正式的 `plugins/` 目录：
 
 ```text
-AceLib-1.2.0.jar
+AceLib-1.2.1.jar
 AceEconomy-2.1.0.jar
 ```
 
@@ -100,7 +100,7 @@ v2 的 JSON 快照有自己的 schema 版本。v1 的数据文件不是 v2 快�
 
 1. 用 `stop` 停掉 v2 服务器，等存档写完。
 2. 把当前的 v2 `plugins/AceEconomy/` 目录和 v2 数据库备份另外复制一份，留着查问题；不要盖掉 v1 的备份。
-3. 把 `AceEconomy-2.1.0.jar` 和 `AceLib-1.2.0.jar` 移出正式的 `plugins/` 目录。
+3. 把 `AceEconomy-2.1.0.jar` 和 `AceLib-1.2.1.jar` 移出正式的 `plugins/` 目录。
 4. 从带日期的备份里，把切换前的 v1 JAR、v1 配置和 v1 数据还原回来。
 5. 启动服务器，确认 v1 数据读得到，才重新开门。
 

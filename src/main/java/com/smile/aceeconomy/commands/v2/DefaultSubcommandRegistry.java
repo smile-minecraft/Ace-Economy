@@ -13,7 +13,7 @@ import java.util.Objects;
  * {@link CommandRegistry} decorator that lets a configured root command run its default
  * subcommand when a player invokes the bare label.
  *
- * <p>AceLib v1.2.0 has no root-level {@code CommandSpec} handler: an empty argument list is
+ * <p>AceLib v1.2.1 has no root-level {@code CommandSpec} handler: an empty argument list is
  * always answered with the generated help text. That makes {@code /money} show usage instead
  * of the caller's balance even though the {@code balance} subcommand already implements the
  * self-balance path with no arguments. Rewriting the empty dispatch to the configured default

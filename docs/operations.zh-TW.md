@@ -18,7 +18,7 @@
 
 ## 每次開服檢查
 
-想確認伺服器可以接人，先看兩件事。正常啟動或重啟之後，在伺服器主控台確認出現了 `AceEconomy v2.1.0` 與 `AceLib v1.2.0`，並且只載入了一個 AceLib 版本。接著用一個測試帳號執行 `/money balance`，必要時再執行 `/baltop top`。
+想確認伺服器可以接人，先看兩件事。正常啟動或重啟之後，在伺服器主控台確認出現了 `AceEconomy v2.1.0` 與 `AceLib v1.2.1`，並且只載入了一個 AceLib 版本。接著用一個測試帳號執行 `/money balance`，必要時再執行 `/baltop top`。
 
 如果伺服器還沒準備好，不要對玩家開放。保留最早出現的那條 AceEconomy、AceLib 或儲存錯誤，然後依照[故障排除](troubleshooting.zh-TW.md)處理。
 

@@ -474,7 +474,7 @@ public final class CompositionRoot {
                 MainCommandAliasPolicy.declaredBukkitLabels(declaredCommands),
                 MainCommandAliasPolicy.declaredAliasesByRoot(declaredCommands));
         // The decorator maps a bare player /money (and its /balance, /bal aliases) to the
-        // balance subcommand; AceLib v1.2.0 answers an empty argument list with help, so the
+        // balance subcommand; AceLib v1.2.1 answers an empty argument list with help, so the
         // intended self-balance UX needs this default-subcommand layer. All other labels and
         // explicit subcommands flow through untouched.
         commandRegistry = new com.smile.aceeconomy.commands.v2.DefaultSubcommandRegistry(

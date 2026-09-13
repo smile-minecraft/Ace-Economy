@@ -2,7 +2,7 @@
 
 [English](release-v2.1.0.md) · [简体中文](release-v2.1.0.zh-CN.md) · 繁體中文
 
-v2.1.0 在 v2 伺服器功能的基礎上，多了交易歷史查詢與回溯、管理式邏輯備份與還原、可自訂貨幣與指令轉送、銀行票據與銀行介面操作，以及 JSON/SQLite 持久化路徑。發布基線是 Java 25 與 Paper/Folia 26.1.2，這是正式支援的伺服器線；Folia 26.2 只在特定 build 上通過驗證（VERIFIED-BETA），其他 26.2 build 尚未驗證。`AceLib-1.2.0.jar` 是必要的執行時期相依套件，預期的插件檔案是 `AceEconomy-2.1.0.jar`。
+v2.1.0 在 v2 伺服器功能的基礎上，多了交易歷史查詢與回溯、管理式邏輯備份與還原、可自訂貨幣與指令轉送、銀行票據與銀行介面操作，以及 JSON/SQLite 持久化路徑。發布基線是 Java 25 與 Paper/Folia 26.1.2，這是正式支援的伺服器線；Folia 26.2 只在特定 build 上通過驗證（VERIFIED-BETA），其他 26.2 build 尚未驗證。`AceLib-1.2.1.jar` 是必要的執行時期相依套件，預期的插件檔案是 `AceEconomy-2.1.0.jar`。
 
 這份文件寫給要決定是否升級、如何安裝與維護的伺服器管理員：先確認環境合不合，再看這版多了什麼、怎麼裝，最後看哪些已經驗證、哪些還沒驗證。還沒通過的驗證關卡不會說成已經通過。
 
@@ -32,11 +32,11 @@ v2.1.0 在 v2 伺服器功能的基礎上，多了交易歷史查詢與回溯、
 | --- | --- |
 | Java | 25 |
 | Paper/Folia | 26.1.2 |
-| 必要相依性 | `AceLib-1.2.0.jar` |
+| 必要相依性 | `AceLib-1.2.1.jar` |
 | 插件 artifact | `AceEconomy-2.1.0.jar`（預期檔名） |
 | AceLib config schema | `version: "2.0"` |
 
-設定 schema 維持 `2.0`；這版沒有引入 `version: "2.1"`。`plugins/` 裡只留一個相容的 AceLib JAR。請從 <https://github.com/smile-minecraft/AceLib/releases/tag/v1.2.0> 下載 `AceLib-1.2.0.jar`，安裝前先核對它的 SHA-256 `da9f196b47c2b28c6db443d102236b27c1a1bbdf7dd3e7c22470170420935278`；實際命令見 [`admin-install-runbook.zh-TW.md`](admin-install-runbook.zh-TW.md)。Vault 與 PlaceholderAPI 還是選用整合，文件裡儲存路徑用到的 JDBC drivers 由插件檔案提供。
+設定 schema 維持 `2.0`；這版沒有引入 `version: "2.1"`。`plugins/` 裡只留一個相容的 AceLib JAR。請從 <https://github.com/smile-minecraft/AceLib/releases/tag/v1.2.1> 下載 `AceLib-1.2.1.jar`，安裝前先核對它的 SHA-256 `2da9d21e6a81eb3086aac3dcf87ad11f6dbcbfef5d3c80263270b3f074dc1d6d`；實際命令見 [`admin-install-runbook.zh-TW.md`](admin-install-runbook.zh-TW.md)。Vault 與 PlaceholderAPI 還是選用整合，文件裡儲存路徑用到的 JDBC drivers 由插件檔案提供。
 
 ## 這版多了什麼
 
@@ -98,7 +98,7 @@ v2.1.0 在 v2 伺服器功能的基礎上，多了交易歷史查詢與回溯、
 ### 全新安裝
 
 1. 停服，在正式伺服器目錄外建一份有日期、可還原的副本；已經有 `plugins/AceEconomy/` 的話請完整納入。
-2. 把 `AceLib-1.2.0.jar` 與預期的 `AceEconomy-2.1.0.jar` 放進 `plugins/`，不要讓其他 AceLib 版本留在旁邊。
+2. 把 `AceLib-1.2.1.jar` 與預期的 `AceEconomy-2.1.0.jar` 放進 `plugins/`，不要讓其他 AceLib 版本留在旁邊。
 3. 先啟動一次建立 v2 檔案，再確認啟用中的 `plugins/AceEconomy/config.yml` 包含 `version: "2.0"`。
 4. 選 JSON、SQLite 或設定好的 MySQL 相容後端。資料庫密碼與 webhook URL 只留在本機。
 5. 再次啟動，檢查啟用訊息並執行適用的管理員檢查。完整流程見 [`admin-install-runbook.zh-TW.md`](admin-install-runbook.zh-TW.md)。

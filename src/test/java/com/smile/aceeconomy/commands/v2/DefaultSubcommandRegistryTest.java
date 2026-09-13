@@ -40,7 +40,7 @@ import static org.mockito.Mockito.when;
 
 /**
  * Regression for the live Bedrock/Java {@code /money} symptom: a bare {@code /money} showed the
- * generated usage/help because AceLib v1.2.0 has no root-level handler and answers an empty
+ * generated usage/help because AceLib v1.2.1 has no root-level handler and answers an empty
  * argument list with help. The {@link DefaultSubcommandRegistry} decorator must route a player's
  * bare invocation to the money spec's {@code balance} subcommand, while leaving explicit
  * subcommands, other players' lookups and console behaviour untouched.

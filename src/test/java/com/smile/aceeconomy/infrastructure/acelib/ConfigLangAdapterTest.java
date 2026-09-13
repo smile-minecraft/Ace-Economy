@@ -28,7 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Behavioural contract for the v2 {@link ConfigLangAdapter}.
  *
  * <p>Exercises the clean-slate config/lang/message boundary built only on the
- * public AceLib v1.2.0 surface: v2 config schema (version 2.0, nested paths,
+ * public AceLib v1.2.1 surface: v2 config schema (version 2.0, nested paths,
  * defaults), three-locale lang resources with {@code {placeholder}} substitution,
  * MiniMessage rendering via {@link com.smile.acelib.message.MessageService},
  * and reload-failure snapshot preservation. No MockBukkit; a temp data folder

@@ -25,11 +25,11 @@
 
 **先檢查：**
 
-- 確認 `plugins/AceLib-1.2.0.jar` 與 `plugins/AceEconomy-2.1.0.jar` 都存在。
+- 確認 `plugins/AceLib-1.2.1.jar` 與 `plugins/AceEconomy-2.1.0.jar` 都存在。
 - 從正式插件資料夾裡移除 `AceLib-0.5.0-SNAPSHOT.jar` 以及其他重複的 AceLib JAR。
 - 看主控台裡最早出現的 AceLib 或 Java 錯誤，不要只盯著最後那條停用的訊息。
 
-**修正：** 使用 Java 25 配 Paper/Folia 26.1.2，安裝一個 `AceLib-1.2.0.jar`，然後完整重啟伺服器。少了必要的依賴，打 `/aceeco reload` 也沒用，先把依賴裝對。
+**修正：** 使用 Java 25 配 Paper/Folia 26.1.2，安裝一個 `AceLib-1.2.1.jar`，然後完整重啟伺服器。少了必要的依賴，打 `/aceeco reload` 也沒用，先把依賴裝對。
 
 ## Java、Paper 或 Folia 版本不符
 
