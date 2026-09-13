@@ -2,7 +2,7 @@
 
 [English](v2-capability-matrix.md) · 简体中文 · [繁體中文](v2-capability-matrix.zh-TW.md)
 
-本文是 clean-slate v2 重写前使用的 v1 能力基线，记录需要保留的产品能力和经济规则，指出 v2 可以破坏哪些 v1 兼容性，并标记需要单独决策的删除项。证据来自工作区中的实际 source、resource 和 test，而不是历史报告。当前 v2.0.0/v2.1 的接线状态和未验证事项见[v2.0.0/v2.1 范围边界](#v200-v21-范围边界)。
+本文是 v2 全新重写（clean-slate）前使用的 v1 能力基线，记录需要保留的产品能力和经济规则，指出 v2 可以在哪些地方打破 v1 兼容性，并标记需要另行决策的删除项。证据来自工作区中的实际源码、资源和测试，而不是历史报告。当前 v2.0.0/v2.1 的接线状态和未验证事项见[v2.0.0/v2.1 范围边界](#v200-v21-范围边界)。
 
 ## 目录
 
@@ -16,36 +16,36 @@
 ## 验证环境与证据基线
 
 - 命令（系统 Java 为 25.0.4，而 Gradle 8.12 Kotlin DSL 在该设置下无法解析，因此使用 Java 21）：`JAVA_HOME=<java21> ./gradlew clean test`。
-- 结果：**70 tests, 0 failures, 0 errors, 0 skipped**（49 个 v1 基线测试，加上本轮新增的 21 个 capability 测试）。
-- 锁定规则的测试位于 `src/test/java/com/smile/aceeconomy/capability/`：`EconomyCapability.java`（不含 v1 class 名称的 v2 契约介面）、`V1CurrencyManagerAdapter.java`（唯一允许引用 v1 class 的测试 adapter）、`EconomyCapabilityContractTest.java`（余额、交易、限制和取消情境）、`ConfigCapabilityTest.java`（config.yml 多货币、债务、语言、Discord 和存储契约）、`CommandSurfaceCapabilityTest.java`（plugin.yml 指令与权限表面契约）。
+- 结果：**70 项测试，0 失败、0 错误、0 跳过**（49 个 v1 基线测试，加上本轮新增的 21 个能力测试）。
+- 锁定规则的测试位于 `src/test/java/com/smile/aceeconomy/capability/`：`EconomyCapability.java`（不含 v1 类名的 v2 合约接口）、`V1CurrencyManagerAdapter.java`（唯一允许引用 v1 类的测试适配器）、`EconomyCapabilityContractTest.java`（余额、交易、限制和取消情境）、`ConfigCapabilityTest.java`（config.yml 多货币、债务、语言、Discord 和存储合约）、`CommandSurfaceCapabilityTest.java`（plugin.yml 指令与权限表面合约）。
 
 ## 能力保留矩阵
 
-- **RETAIN**——v2 必须保留该产品能力；内部可以重写，但行为契约保持不变。
-- **RESET**——保留能力，但 v2 可以破坏 v1 binary、data、config、banknote schema 和 API 兼容性。
-- **EXCLUDE**——计划删除该产品能力；需要单独决策，本基线不自行假定删除。
+- **RETAIN**（保留）——v2 必须保留该产品能力；内部可以重写，但行为合约保持不变。
+- **RESET**（重置）——保留能力，但 v2 可以打破 v1 二进制、数据、配置、banknote schema 和 API 兼容性。
+- **EXCLUDE**——计划删除该产品能力；需要另行决策，本基线不自行假定删除。
 
 | # | 产品能力 | 状态 | 已确认的 v1 证据 | 锁定方式 |
 |---|---|---|---|---|
 | 1 | 多货币系统 | RETAIN | `config.yml` `currencies:` dollar/token；`CurrencyManager` | ConfigCapabilityTest + ContractTest.currencyExists |
 | 2 | 账户与起始余额 | RETAIN | `Account`、`ConfigManager.getStartBalance()`=1000 | ContractTest.testAccountStartsAtStartBalance |
 | 3 | 存款与提款（原子交易） | RETAIN | `CurrencyManager.deposit/withdraw` | ContractTest deposit/withdraw |
-| 4 | 转账 | RETAIN | `PayCommand`、`EconomyProvider`（v1 在指令层组合 withdraw+deposit） | 契约已预留；v2 应提供明确的 transfer 入口（见风险 R3） |
+| 4 | 转账 | RETAIN | `PayCommand`、`EconomyProvider`（v1 在指令层组合 `withdraw`+`deposit`） | 合约已预留；v2 应提供明确的转账入口（见风险 R3） |
 | 5 | Vault 经济整合 | RETAIN | `hook/VaultImpl.java` | plugin.yml `softdepend: Vault`（可选；v2.0 已接线，缺少时跳过） |
 | 6 | PlaceholderAPI | RETAIN | `hook/AceEcoExpansion.java` | plugin.yml `softdepend: PlaceholderAPI` |
 | 7 | SQLite 存储 | RETAIN | `storage/implementation/SQLiteImplementation.java` | ConfigCapabilityTest.storage；v2.0.0 已接线（`storage.type: sqlite` → `SqlBackend + SqliteDialect`，文件位于插件数据目录内；`StorageConfigParser` 拒绝路径越界） |
-| 8 | MySQL 存储 | RETAIN | `storage/implementation/MySQLImplementation.java` | ConfigCapabilityTest.storage；v2.0.0 已接线（`storage.type: mysql` → `SqlBackend + MySqlDialect` + HikariCP，JDBC driver 已 shade；连接池来自 `storage.mysql.*`）；live MySQL 连接仍未验证（v2.0.0 release gate） |
-| 9 | JSON 存储 | RETAIN | `storage/JsonStorageHandler.java` | 列为保留；v1 config 未默认启用，v2 决定是否默认启用 |
-| 10 | 交易记录与审计 | RETAIN | `LogManager`、`listeners/EconomyLogListener`、`AuditListener` | 契约已预留（见风险 R4）；v2.0.0 通过 `PersistentAuditSink` 和 `TransactionRepository.append`/`appendBatch` 写入；只读查询通过 `HistoryService` 与 `ProductionAdapters.History` 接入 `/aceeco history [player] [currency] [page]`，权限为 `aceeconomy.admin.history`；live server 验证仍未完成 |
-| 11 | Rollback | RETAIN | `commands/RollbackCommand.java`；权限 `aceeconomy.admin.rollback` | v2 已通过 `RollbackService` 和 `ProductionAdapters.Rollback` 接入 `/aceeco rollback <transaction-id>`（仅主控台、root `aceeconomy.admin` 加 child `aceeconomy.admin.rollback`、atomic `StorageReversalExecutor`）；live server 验证仍未完成 |
+| 8 | MySQL 存储 | RETAIN | `storage/implementation/MySQLImplementation.java` | ConfigCapabilityTest.storage；v2.0.0 已接线（`storage.type: mysql` → `SqlBackend + MySqlDialect` + HikariCP，JDBC driver 已做 shade 处理；连接池来自 `storage.mysql.*`）；实机 MySQL 连接仍未验证（v2.0.0 发布验证关卡） |
+| 9 | JSON 存储 | RETAIN | `storage/JsonStorageHandler.java` | 列为保留；v1 配置默认未启用，v2 再决定是否默认启用 |
+| 10 | 交易记录与审计 | RETAIN | `LogManager`、`listeners/EconomyLogListener`、`AuditListener` | 合约已预留（见风险 R4）；v2.0.0 通过 `PersistentAuditSink` 和 `TransactionRepository.append`/`appendBatch` 写入；只读查询通过 `HistoryService` 与 `ProductionAdapters.History` 接入 `/aceeco history [player] [currency] [page]`，权限为 `aceeconomy.admin.history`；实机服务器验证仍未完成 |
+| 11 | Rollback | RETAIN | `commands/RollbackCommand.java`；权限 `aceeconomy.admin.rollback` | v2 已通过 `RollbackService` 和 `ProductionAdapters.Rollback` 接入 `/aceeco rollback <transaction-id>`（仅控制台、根权限 `aceeconomy.admin` 加子权限 `aceeconomy.admin.rollback`、原子的 `StorageReversalExecutor`）；实机服务器验证仍未完成 |
 | 12 | 银行票据 | RESET | `BanknoteInputListener`、`listeners/BanknoteListener` | 保留权限／指令表面；schema 可以不兼容 |
 | 13 | 银行 GUI | RETAIN | `gui/BankMenu.java`、`gui/GUIListener`；`/bank` | CommandSurfaceCapabilityTest |
 | 14 | 排行榜 | RETAIN | `LeaderboardManager`、`BaltopCommand`；`/baltop` | CommandSurfaceCapabilityTest |
 | 15 | Discord 通知 | RETAIN | `utils/DiscordWebhook`、`service/DiscordWebhook`；`config.discord` | ConfigCapabilityTest.discord |
-| 16 | 三种语言（en_US/zh_TW/zh_CN） | RETAIN | `lang/messages_*.yml`；`ConfigManager` locales | ConfigCapabilityTest.locale；v2 使用 `lang/<locale>.yml`，`messages_*.yml` 是 v1 dead keys |
-| 17 | Essentials / CMI 导入 | EXCLUDED | `migration/EssentialsMigrator.java`、`migration/CMIMigrator.java`（仅为 v1 历史证据） | 按用户决策从 v2.0.0 和 v2.1 follow-up 移除；不引入 vendor parser、import command/API 或 v1 → v2 migration 兼容层；保留的 `ImportService` 只代表一般 service/unit contract，不代表产品功能 |
+| 16 | 三种语言（en_US/zh_TW/zh_CN） | RETAIN | `lang/messages_*.yml`；`ConfigManager` locales | ConfigCapabilityTest.locale；v2 使用 `lang/<locale>.yml`，`messages_*.yml` 是 v1 遗留的失效键 |
+| 17 | Essentials / CMI 导入 | EXCLUDED | `migration/EssentialsMigrator.java`、`migration/CMIMigrator.java`（仅为 v1 历史证据） | 按用户决策从 v2.0.0 和 v2.1 后续跟进中移除；不引入厂商解析器、导入指令／API 或 v1 → v2 迁移兼容层；保留的 `ImportService` 只代表一般服务／单元合约，不代表产品功能 |
 | 18 | 债务／负余额 | RETAIN | `config.economy.allow-negative-balance`、`default-debt-limit`；`CurrencyManager.getDebtLimit` | ContractTest DebtEnabled/Disabled |
-| 19 | 权限契约（含 rollback/debt bypass） | RETAIN | `plugin.yml` permissions | CommandSurfaceCapabilityTest.permissions |
+| 19 | 权限合约（含 `rollback`/`debt bypass`） | RETAIN | `plugin.yml` permissions | CommandSurfaceCapabilityTest.permissions |
 
 ## 经济规则
 
@@ -61,24 +61,24 @@
 ## 非目标
 
 - 不升级 Gradle、Java、Paper 或 AceLib。
-- 不重写 production domain、storage 或 plugin code。
+- 不重写正式的 domain、storage 或插件代码。
 - 不执行架构重写或后续 v2 实现阶段。
 - 不发布、推送或创建外部状态。
-- 不承诺 v1 binary、data、config 或 banknote 兼容性（标为 RESET 的项目可不兼容）。
+- 不承诺 v1 二进制、数据、配置或 banknote 兼容性（标为 RESET 的项目可不兼容）。
 
 ## 剩余风险与 v2 前置条件
 
 - R1：本轮使用 Java 21；系统 Java 25 会导致 Gradle 8.12 Kotlin DSL 失败。v2 实现需要决定 CI／本机 `JAVA_HOME` 策略或升级 Gradle。
-- R2：capability tests 通过 `V1CurrencyManagerAdapter` 映射 v1 行为；v2 需要新的 adapter，契约介面不变。
-- R3：v1 没有独立的 `transfer` 方法（由指令层组合操作）；当前契约锁定 atomic deposit/withdraw，因此 v2 应明确 transfer 语意。
-- R4：审计和 rollback 边界尚未由 capability tests 锁定（需要 storage/log 参与，超出本文最小变更范围）；建议 v2 实现加入 `AuditCapability` 契约。
+- R2：能力测试通过 `V1CurrencyManagerAdapter` 映射 v1 行为；v2 需要新的适配器，合约接口不变。
+- R3：v1 没有独立的转账方法（由指令层组合操作）；当前合约锁定原子的 `deposit`／`withdraw`，因此 v2 应明确定义转账语义。
+- R4：审计和回溯边界尚未由能力测试锁定（需要存储／日志参与，超出本文最小变更范围）；建议 v2 实现加入 `AuditCapability` 合约。
 
 ## v2.0.0/v2.1 范围边界
 
-本节以当前 source 和 build 配置为准。完整接线细节见[cutover](cutover.zh-CN.md)；不要把 v1 保留契约或 unit tests 当作 v2.0.0 production availability 的证明。
+本节以当前源码和构建配置为准。完整接线细节见[cutover](cutover.zh-CN.md)；不要把 v1 保留合约或单元测试当作 v2.0.0 正式可用性的证明。
 
-- **v2.0.0 已接线：** JSON（默认）、SQLite 和 MySQL persistence；bank GUI deposit/redeem；`EconomyService`、`EconomyApiImpl`、`PersistentAuditSink`、`HistoryService`、`RollbackService`、`LeaderboardService`、banknotes、bank GUI 和可选 Vault/PAPI 整合；六个指令 `money`、`pay`、`withdraw`、`baltop`、`bank`、`aceeco`，以及八个 `aceeco` 子指令 `give`、`take`、`set`、`history`、`reload`、`rollback`、`backup`、`restore`。
-- **已接线但仍待 live 验证：** `/aceeco history`、`/aceeco rollback` 和管理式 backup/restore。canonical 指令是 `/aceeco backup [label]` 与 `/aceeco restore <backup-id> confirm`，没有 `/backup` 或 `/restore` 根指令。`restore` 仅主控台可用，拒绝有在线玩家的情况，只接受小写 `confirm`，会先做 JSON/schema/records/currency preflight，建立 safety backup，成功后清除 leaderboard cache，但不会热刷新 session 或 GUI。
-- JSON、SQLite 和 MySQL 共用 v2 logical JSON snapshot。MySQL 使用 logical snapshot，不是 native dump，因此不能取代 `mysqldump`、`mariadb-dump` 或数据库维运备份。
-- **Essentials/CMI import：** 已从本 Plan 和 v2.0.0 移除；保留的 `ImportService` 不代表产品可用性。
-- **未验证：** live Folia/Bukkit（包括 Folia 26.1.2 fresh install、RCON／游戏内检查、故障演练及 backup/restore 演练）、live MySQL 和跨进程 smoke 仍是 v2.0.0 release gate。unit tests 和 v1 `lang/messages_*.yml` dead keys 不代表 production availability；v2 语言文件是 `lang/<locale>.yml`。
+- **v2.0.0 已接线：** JSON（默认）、SQLite 和 MySQL 存储；bank GUI 存入／赎回；`EconomyService`、`EconomyApiImpl`、`PersistentAuditSink`、`HistoryService`、`RollbackService`、`LeaderboardService`、银行票据、bank GUI 和可选 Vault/PAPI 整合；六个指令 `money`、`pay`、`withdraw`、`baltop`、`bank`、`aceeco`，以及八个 `aceeco` 子指令 `give`、`take`、`set`、`history`、`reload`、`rollback`、`backup`、`restore`。
+- **已接线但仍待实机验证：** `/aceeco history`、`/aceeco rollback` 和管理式备份／还原。标准指令是 `/aceeco backup [label]` 与 `/aceeco restore <backup-id> confirm`，没有 `/backup` 或 `/restore` 根指令。`restore` 仅控制台可用，拒绝有在线玩家的情况，只接受小写 `confirm`，会先做 JSON／schema／records／currency 预检，建立安全备份，成功后清除排行榜缓存，但不会热刷新会话或 GUI。
+- JSON、SQLite 和 MySQL 共用 v2 逻辑 JSON 快照。MySQL 使用逻辑快照，不是原生转储，因此不能取代 `mysqldump`、`mariadb-dump` 或数据库维运备份。
+- **Essentials/CMI 导入：** 已从本计划和 v2.0.0 中移除；保留的 `ImportService` 不代表正式可用性。
+- **未验证：** 实机 Folia/Bukkit（包括 Folia 26.1.2 全新安装、RCON／游戏内检查、故障演练及备份／还原演练）、实机 MySQL 和跨进程冒烟测试仍是 v2.0.0 发布验证关卡。单元测试和 v1 `lang/messages_*.yml` 失效键不代表正式可用性；v2 语言文件是 `lang/<locale>.yml`。

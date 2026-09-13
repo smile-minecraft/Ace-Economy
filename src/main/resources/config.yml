@@ -127,6 +127,14 @@ bank-gui:
       name-key: "gui.bank-close-name"
       lore-keys: []
 
+# 提領（/withdraw）設定
+withdraw:
+  # 提領的 bounded-wait 上限（秒）：排程器已接受區域任務但玩家離線導致 callback 永不
+  # 執行時，探測階段逾時會直接拒絕提領（未扣款）；送出階段逾時會退款並回報失敗，
+  # 指令回覆不會永遠 pending。必須為正整數；0 或負數載入時以 1 秒的 fail-safe 下限取代，
+  # 正數則依管理者設定生效。啟動時讀取，修改後需重啟。
+  dispatch-timeout-seconds: 10
+
 # 玩家新建帳戶時的預設餘額
 start-balance: 1000.0
 

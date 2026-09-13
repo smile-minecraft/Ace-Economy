@@ -186,9 +186,7 @@ gui:
     - "<gray>手持支票點擊即可存入</gray>"
   bank-withdraw-name: "<green>💸 發行支票"
   bank-withdraw-lore:
-    - "<gray>左鍵: 提領 $1,000</gray>"
-    - "<gray>右鍵: 提領 $10,000</gray>"
-    - "<gray>Shift+點擊: 自訂金額</gray>"
+    - "<gray>點擊: 提領 {amount}</gray>"
   bank-close-name: "<!italic><red>關閉選單"
   bank-loading: "<!italic><yellow>載入中..."
   input-request: "<yellow>請在聊天欄輸入您要提領的金額：</yellow> <gray>(輸入 'cancel' 取消)</gray>"
@@ -215,10 +213,10 @@ gui:
   bank-form-invalid: "表單回應無效，沒有任何變更。"
 
 banknote:
-  name: "<green><bold>銀行支票</bold></green> <gray>(Banknote)</gray>"
-  lore-value: "<gray>價值：</gray><yellow>{value}</yellow>"
+  name: "<green><bold>銀行支票</bold></green> <yellow>{value}</yellow> <gray>{currency}</gray>"
+  lore-value: "<gray>價值：</gray><yellow>{value}</yellow> <gray>{currency}</gray>"
   lore-issuer: "<gray>簽發人：</gray><aqua>{issuer}</aqua>"
-  lore-click: "<dark_gray>右鍵點擊以兌換</dark_gray>"
+  lore-click: "<dark_gray>左鍵或右鍵點擊以兌換</dark_gray>"
   damaged: "<red>這張支票已損壞！</red>"
   voided: "<red>此支票已被銀行註銷 (Voided Check)！</red>"
   redeem-success: "<green>已兌換支票：<yellow>{amount}</yellow> <gray>(簽發人：{issuer})</gray></green>"

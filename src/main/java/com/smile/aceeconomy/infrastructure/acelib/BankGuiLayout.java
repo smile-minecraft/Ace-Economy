@@ -17,11 +17,10 @@ import java.util.Set;
  * referenced by language key, never by raw MiniMessage, so operator input is
  * rendered through the safe component pipeline and never re-parsed.</p>
  *
- * <p>Per-slot item rendering additionally depends on the GUI backend: the
- * AceLib GUI surface only accepts title / size / protected slots when opening
- * an inventory, so material / name / lore entries are validated at startup and
- * retained in this model for documentation and future rendering support. Slot
- * to action resolution, title and size are applied today.</p>
+ * <p>Per-slot item rendering is applied by the consumer renderer after every open:
+ * the production open only creates the inventory shell through AceLib, then paints the
+ * configured material / name / lore entries into the matching top slots on the player
+ * region thread. Slot to action resolution, title and size are applied at open time.</p>
  */
 public final class BankGuiLayout {
 
@@ -180,8 +179,25 @@ public final class BankGuiLayout {
         return Optional.ofNullable(actionsBySlot.get(slot));
     }
 
-    /** Every configured button slot; callers protect these from player interaction. */
-    public Set<Integer> protectedSlots() {
+    /**
+     * Every configured button slot. These are guarded by the consumer click listener (which
+     * cancels every bank top click and dispatches only configured actions), so they must
+     * <em>not</em> be passed as AceLib protected slots: AceLib rejects clicks on its own
+     * protected slots before any consumer logic runs, which would break every action button.
+     */
+    public Set<Integer> actionSlots() {
         return actionsBySlot.keySet();
+    }
+
+    /**
+     * Legacy name for {@link #actionSlots()}, kept for compatibility. Despite the name, the
+     * returned slots are consumer-guarded action slots and must not be registered as AceLib
+     * protected slots.
+     *
+     * @deprecated use {@link #actionSlots()} to avoid implying AceLib ownership.
+     */
+    @Deprecated
+    public Set<Integer> protectedSlots() {
+        return actionSlots();
     }
 }

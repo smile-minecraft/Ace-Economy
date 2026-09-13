@@ -253,8 +253,10 @@ class ReloadDisplayRollbackTest {
                 "the rollback swap must restore the old layout (slot 20 empty)");
 
         Player player = mockPlayer();
+        // Production wiring keeps the AceLib protected set empty (action slots are
+        // guarded by the consumer listener); the open below mirrors that path.
         V2BankGuiSession.OpenOutcome opened =
-                gui.open(player, "Bank", oldLayout.size(), oldLayout.protectedSlots());
+                gui.open(player, "Bank", oldLayout.size(), Set.of());
         assertTrue(opened.success(), "a post-rollback open must succeed");
         V2BankGuiSession.ClickOutcome click = gui.handleClick(
                 player.getUniqueId(), opened.session().generation(), 13);
@@ -338,7 +340,7 @@ class ReloadDisplayRollbackTest {
         // A pre-reload session proven to predate the swap.
         Player oldPlayer = mockPlayer();
         V2BankGuiSession.OpenOutcome oldOpen = gui.open(
-                oldPlayer, "Bank", oldLayout.size(), oldLayout.protectedSlots());
+                oldPlayer, "Bank", oldLayout.size(), Set.of());
         assertTrue(oldOpen.success());
 
         ReloadRuntime runtime = runtimeOf(root);
@@ -360,7 +362,7 @@ class ReloadDisplayRollbackTest {
             // completes after the invalidation snapshot but before its failure.
             Player newPlayer = mockPlayer();
             V2BankGuiSession.OpenOutcome leaked = gui.open(
-                    newPlayer, "Bank", newLayout.size(), newLayout.protectedSlots(),
+                    newPlayer, "Bank", newLayout.size(), Set.of(),
                     gui.layoutGeneration());
             assertTrue(leaked.success(), "the interleaved open binds the swapped layout");
             assertEquals(36, leaked.session().size());

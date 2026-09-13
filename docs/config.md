@@ -13,6 +13,7 @@ AceEconomy reads `config.yml` as a versioned YAML file. This page explains what 
 - [Locale and retained command setting](#locale-and-retained-command-setting)
 - [Leaderboard](#leaderboard)
 - [Bank GUI layout](#bank-gui-layout)
+- [Withdraw dispatch timeout](#withdraw-dispatch-timeout)
 - [Discord and secret boundaries](#discord-and-secret-boundaries)
 - [Applying changes](#applying-changes)
 
@@ -260,6 +261,21 @@ bank-gui:
 A config that violates these rules stops the plugin at startup with an error naming the exact path (for example `bank-gui.actions.withdraw100.amount`); nothing is partially applied. A config without `bank-gui` keeps loading under schema `2.0` and receives the legacy slot behaviour.
 
 A valid `bank-gui` candidate is accepted as part of the reload: open bank sessions are closed first so no click can run with half old, half new rules, and sessions opened afterwards resolve clicks against the new layout. An invalid layout refuses the whole reload and leaves the previous configuration untouched. The `bank-gui.enabled` toggle itself still takes effect only at startup; restart after changing it.
+
+## Withdraw dispatch timeout
+
+`/withdraw` hands a banknote over on the player's region thread. When the scheduler accepts a region task but the player leaves before it runs, the task is retired and its callback never executes. The dispatch timeout bounds how long the withdraw waits for such a callback; it does not delay normal withdrawals, which complete as soon as the region callback runs.
+
+| Purpose | Key | Default and format | Notes |
+| --- | --- | --- | --- |
+| Bound the wait for an accepted-but-never-executed region callback during a withdraw. | `withdraw.dispatch-timeout-seconds` | `10`; positive integer seconds. | Read once at startup; restart after changing it. |
+
+The failure mode is fail-closed in both phases. If the inventory-space probe never runs, the withdraw is refused before any deduction. If the delivery callback never runs after the deduction committed, the amount is refunded automatically and the command reply completes with a typed failure — a reply is never left pending, and a charged account is never left without its note. `0` or a negative value is clamped to a `1` second fail-safe floor when the configuration is loaded, so a misconfigured value can never time every withdrawal out immediately; positive values are honoured exactly as configured.
+
+```yaml
+withdraw:
+  dispatch-timeout-seconds: 10
+```
 
 ## Discord and secret boundaries
 

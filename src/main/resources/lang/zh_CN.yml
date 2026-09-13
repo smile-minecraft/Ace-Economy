@@ -186,9 +186,7 @@ gui:
     - "<gray>手持支票点击即可存入</gray>"
   bank-withdraw-name: "<green>💸 签发支票"
   bank-withdraw-lore:
-    - "<gray>左键: 提取 $1,000</gray>"
-    - "<gray>右键: 提取 $10,000</gray>"
-    - "<gray>Shift+点击: 自定义金额</gray>"
+    - "<gray>点击: 提取 {amount}</gray>"
   bank-close-name: "<!italic><red>关闭菜单"
   bank-loading: "<!italic><yellow>加载中..."
   input-request: "<yellow>请在聊天栏输入您要提取的金额：</yellow> <gray>(输入 'cancel' 取消)</gray>"
@@ -215,10 +213,10 @@ gui:
   bank-form-invalid: "表单回应无效，没有任何变更。"
 
 banknote:
-  name: "<green><bold>银行支票</bold></green> <gray>(Banknote)</gray>"
-  lore-value: "<gray>价值：</gray><yellow>{value}</yellow>"
+  name: "<green><bold>银行支票</bold></green> <yellow>{value}</yellow> <gray>{currency}</gray>"
+  lore-value: "<gray>价值：</gray><yellow>{value}</yellow> <gray>{currency}</gray>"
   lore-issuer: "<gray>签发人：</gray><aqua>{issuer}</aqua>"
-  lore-click: "<dark_gray>右键点击以兑换</dark_gray>"
+  lore-click: "<dark_gray>左键或右键点击以兑换</dark_gray>"
   damaged: "<red>这张支票已损坏！</red>"
   voided: "<red>此支票已被银行注销 (Voided Check)！</red>"
   redeem-success: "<green>已兑换支票：<yellow>{amount}</yellow> <gray>(签发人：{issuer})</gray></green>"

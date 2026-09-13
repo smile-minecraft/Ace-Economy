@@ -2,7 +2,7 @@
 
 [English](admin-install-runbook.md) · 简体中文 · [繁體中文](admin-install-runbook.zh-TW.md)
 
-本手册给负责 Paper 或 Folia 服务器的管理员使用，目的是把 AceEconomy v2 安全地上线，不用猜文件放在哪里。全新安装请按本页操作；从 v1 更换时，请改看 [`upgrade-from-v1.md`](upgrade-from-v1.zh-CN.md)。
+这本手册写给第一次装插件的管理员，目标是把 AceEconomy v2 放上 Paper 或 Folia，而且不用猜文件在哪里。照着做，装完会知道怎么确认装好了、坏掉先看哪里。全新安装看这里，从 v1 换过来请改看 [`upgrade-from-v1.md`](upgrade-from-v1.zh-CN.md)。
 
 ## 目录
 
@@ -13,61 +13,63 @@
 
 ## 需要准备的环境
 
-服务器需要使用 Java 25，并运行 Paper 或 Folia 26.1.2。AceEconomy 必须搭配 `AceLib-1.2.0.jar`；Vault 和 PlaceholderAPI 都是可选集成。SQLite 与 MySQL 的 JDBC 驱动程式已经包含在 `AceEconomy-2.1.0.jar` 中，不需要另外下载驱动程式 JAR。
+服务器要用 Java 25，跑 Paper 或 Folia 26.1.2。AceEconomy 一定要配 `AceLib-1.2.0.jar` 才能启动。Vault 和 PlaceholderAPI 是可选的，有装才有对应功能，没装也能开服。SQLite 和 MySQL 需要的 JDBC 驱动已经包在 `AceEconomy-2.1.0.jar` 里面，不用自己再找驱动。
 
-Paper/Folia 26.1.2 是正式支持的服务器线。Folia 26.2 仅在特定 build 上通过验证（VERIFIED-BETA），其余 26.2 build 未验证。
+Paper/Folia 26.1.2 是正式支持的版本。Folia 26.2 只有特定 build 通过验证（VERIFIED-BETA），其余 26.2 build 还没验证过。
 
-请先准备以下两个插件文件：
+先准备好这两个文件：
 
 ```text
 plugins/AceLib-1.2.0.jar
 plugins/AceEconomy-2.1.0.jar
 ```
 
-`plugins/` 中不要留下 `AceLib-0.5.0-SNAPSHOT.jar` 或其他 AceLib 版本。两个 AceLib 版本同时存在，可能造成依赖判断不明确，使服务器无法正常启动。
+`plugins/` 里面不要留 `AceLib-0.5.0-SNAPSHOT.jar` 或其他 AceLib。两个 AceLib 同时存在，服务器会分不清用哪一个，可能开不干净。
 
 ### AceLib v1.2.0 下载与校验和
 
-请从 AceLib v1.2.0 的 GitHub Release 下载 `AceLib-1.2.0.jar`：<https://github.com/smile-minecraft/AceLib/releases/tag/v1.2.0>。
+`AceLib-1.2.0.jar` 请从 AceLib v1.2.0 的 GitHub Release 下载：<https://github.com/smile-minecraft/AceLib/releases/tag/v1.2.0>。
 
-放入 `plugins/` 之前，请用已发布的 SHA-256 核对：
+放进 `plugins/` 之前，先对一次官方公布的 SHA-256：
 
 ```text
 da9f196b47c2b28c6db443d102236b27c1a1bbdf7dd3e7c22470170420935278  AceLib-1.2.0.jar
 ```
 
-计算本机 digest 并逐字比较：
+在本机算出 digest，一个字一个字比：
 
 ```text
 shasum -a 256 AceLib-1.2.0.jar   # macOS
 sha256sum AceLib-1.2.0.jar       # Linux
 ```
 
-digest 不一致时不要安装该 JAR。
+对不上就不要装这个 JAR。宁可重下，也不要拿来路不明的文件开服。
 
 ## 在维护时段安装
 
+下面七步要在玩家不在的时候做。先停服，装完、测完再开门。
+
 ### 1. 停服并备份
 
-请使用平常的服务器控制台或服务管理方式停止 Minecraft 服务器。控制台指令是：
+先用平时停服的方式把 Minecraft 服务器停下来。控制台指令是：
 
 ```text
 stop
 ```
 
-请等待进程退出、世界保存完成后再操作。复制插件文件前，先备份整个服务器数据，至少要包含完整的 `plugins/AceEconomy/` 文件夹。备份请放在正式服务器目录之外，并标上日期。
+等进程完全退出、世界存档写完再动手。复制插件文件之前，先把服务器数据备份起来，至少要含完整的 `plugins/AceEconomy/` 文件夹。备份放在正式服务器目录外面，文件名标上日期。
 
-全新安装时这个文件夹可能还不存在，这没有问题。重点是正式启动前要有一份可以还原的服务器备份。
+全新安装还没有这个文件夹很正常。重点是开服前手上有一份能还原的备份。
 
 ### 2. 检查依赖插件
 
-请从正式 `plugins/` 目录移走旧版或重复的 AceLib；如果它们属于旧安装，仍要保留在备份中。然后在 `plugins/` 放入 `AceLib-1.2.0.jar` 与 `AceEconomy-2.1.0.jar`。
+把正式 `plugins/` 里旧的或重复的 AceLib 移走。如果那是旧安装留下来的，就让它留在备份里。接着把 `AceLib-1.2.0.jar` 和 `AceEconomy-2.1.0.jar` 放进 `plugins/`。
 
-如果要使用集成功能，再把 Vault 和／或 PlaceholderAPI 放到同一个 `plugins/` 目录。缺少这些可选插件时 AceEconomy 仍然可以启动，不要把它们不存在当成安装失败。
+有用联动功能，才把 Vault 或 PlaceholderAPI 放进同一个 `plugins/` 目录。没装这两个，AceEconomy 照样能启动，不要当成安装失败。
 
 ### 3. 首次启动并创建 v2 文件
 
-请按平常方式启动服务器。AceEconomy 首次成功启动后，会在 `plugins/AceEconomy/` 创建 v2 配置与语言文件。使用默认 JSON 存储时，还会创建：
+照平时方式启动服务器。第一次成功启动后，AceEconomy 会在 `plugins/AceEconomy/` 建好 v2 的配置和语言文件。用默认 JSON 存储的话，还会看到：
 
 ```text
 plugins/AceEconomy/config.yml
@@ -77,20 +79,20 @@ plugins/AceEconomy/lang/zh_CN.yml
 plugins/AceEconomy/data-v2.json
 ```
 
-使用 SQLite 时，请在需要创建数据库的那次启动前设置 `storage.type: sqlite`。默认文件是 `plugins/AceEconomy/data-v2.sqlite`。
+想用 SQLite 的话，要在建数据库的那次启动前先把 `storage.type: sqlite` 写好。默认文件是 `plugins/AceEconomy/data-v2.sqlite`。
 
 ### 4. 配置存储方式与服务器行为
 
-请在停服时打开 `plugins/AceEconomy/config.yml`。文件必须是包含 `version: "2.0"` 的 v2 配置，不要把 v1 的 `config-version` 区块粘贴进去。以下是 v2 支持的存储配置格式。
+停服状态下打开 `plugins/AceEconomy/config.yml`。这份必须是含 `version: "2.0"` 的 v2 配置，不要把 v1 的 `config-version` 整段粘进来。v2 认得的存储写法只有下面几种。
 
-JSON 是默认值，不需要连接信息：
+JSON 是默认值，不用填连接信息：
 
 ```yaml
 storage:
   type: json
 ```
 
-SQLite 的数据库文件必须放在插件文件夹内：
+SQLite 的文件一定要放在插件文件夹里面：
 
 ```yaml
 storage:
@@ -99,7 +101,7 @@ storage:
     path: data-v2.sqlite
 ```
 
-使用 MySQL 或 MariaDB 时，密码只放在服务器本机，启动前再替换預留位置：
+用 MySQL 或 MariaDB 的话，密码只写在服务器本机，启动前把占位文字换掉：
 
 ```yaml
 storage:
@@ -114,19 +116,19 @@ storage:
     max-lifetime: 1800000
 ```
 
-`pool-size` 与 `max-lifetime` 必须放在 `storage.mysql` 下。插件本身已经提供 JDBC 驱动程式，不要再把 MySQL 或 SQLite 驱动程式放进 `plugins/`。
+`pool-size` 和 `max-lifetime` 一定要放在 `storage.mysql` 下面。驱动已经在插件里面了，不要再丢 MySQL 或 SQLite 的驱动 JAR 进 `plugins/`。
 
-还可以设置 `settings.locale`、`start-balance`、`currencies.*`、`economy.allow-negative-balance`、`economy.default-debt-limit` 与 `leaderboard.*`。上面的示例只列出安装时需要的存储配置；密码与 webhook 网址不要放进共享文档。
+装机时先顾好存储就好。`settings.locale`、`start-balance`、`currencies.*`、`economy.allow-negative-balance`、`economy.default-debt-limit` 和 `leaderboard.*` 可以晚点再调，意思都在配置指南里。密码和 webhook 网址不要写进会外流的文档。
 
 ### 5. 再次启动并查看控制台
 
-保存配置后重新启动服务器。请在控制台找到包含 `AceEconomy v2.1.0` 的启用消息，并确认服务器能继续进入平常的可服务状态。同时确认启用的 AceLib 只有一个版本。
+存盘后重新启动服务器。在控制台找到含 `AceEconomy v2.1.0` 的启用消息，确认服务器有进到平时能接玩家的状态。同时看一下，启用的 AceLib 只有一个版本。
 
-如果 AceEconomy 自行停用，先不要开放玩家进入。保留第一个错误以及附近的 AceEconomy／AceLib 控制台内容，再按照[故障排除指南](troubleshooting.zh-CN.md)继续检查。
+如果 AceEconomy 自己停用了，先不要放玩家进来。把第一个错误和附近 AceEconomy／AceLib 的控制台内容留下来，再按[故障排除指南](troubleshooting.zh-CN.md)往下查。
 
 ### 6. 执行管理员基本检查
 
-以下指令中，可以在控制台执行的请从控制台执行；限定玩家的指令请使用测试玩家执行。下面列出的完整子指令格式就是 v2 的正式指令集。
+能在控制台跑的指令就在控制台跑，只能玩家用的指令就开测试玩家跑。下面就是 v2 正式的指令样子，照着打：
 
 ```text
 /money balance
@@ -138,11 +140,11 @@ storage:
 /aceeco reload
 ```
 
-`/aceeco rollback` 刻意不列入上面的例行检查清单。它是具有破坏性、仅限控制台的管理操作：必须同时拥有 `aceeconomy.admin` 与 `aceeconomy.admin.rollback`、持有有效的交易 UUID，并经过人工批准或专门演练才能执行；不得当成自动化或随手的初步检查。
+`/aceeco rollback` 故意不放在上面的例行检查里。它是具有破坏性、只能在控制台做的管理操作：要同时有 `aceeconomy.admin` 和 `aceeconomy.admin.rollback`、手上有有效的交易 UUID，还要有人点头或事先演练过才能打，不能拿来当自动化或随手测试。
 
-`/aceeco rollback <transaction-id>` 也可以从控制台执行。它是具有破坏性的管理操作，会恢复一笔已记录的交易，因此不要拿来做例行安装检查，留给事故处理使用。它需要同时拥有 `aceeconomy.admin` 与 `aceeconomy.admin.rollback`，会预先拒绝玩家与无效 UUID；成功时回报 reversal 审计记录 ID，已回滚的交易视为明确的空操作，标记写入失败则要求先人工核对。
+`/aceeco rollback <transaction-id>` 也只能从控制台打。它会把一笔已记录的交易整个恢复，所以不要拿来做安装检查，留给出事时再用。它会先挡掉玩家和格式错的 UUID；成功会回报 reversal 审计记录 ID，已经回滚过的交易算明确的空操作，标记写入失败就先停下来人工核对。
 
-再使用测试玩家执行：
+再用测试玩家跑：
 
 ```text
 /pay send <player> <amount> [currency]
@@ -150,24 +152,24 @@ storage:
 /bank open
 ```
 
-`/aceeco reload` 应由控制台执行，会重新加载配置与语言文件。成功时会回报 `AceEconomy reloaded`。修改插件 JAR、AceLib、存储后端或数据库连接信息后，仍然必须完整重启服务器。
+`/aceeco reload` 请从控制台打，会重新加载配置和语言文件。成功会回 `AceEconomy reloaded`。换过插件 JAR、AceLib、存储后端或数据库连接信息，还是要整台重启，只做重新加载不够。
 
 ### 7. 开放玩家进入
 
-请在启用消息、预期的存储文件或数据库连接，以及基本指令都正常后，再开放服务器给玩家。正式公告前，先用一个测试玩家查询余额并完成一笔小额转账。
+启用消息、预期的存储文件或数据库连接、基本指令都正常了，才开门。公告之前，先拿测试玩家查一次余额，再做一笔小额转账。
 
-开放服务器后，请保留有日期的安装前备份与 v2 配置备份。不要把含有密码或 webhook 网址的副本覆盖到共享位置。
+开门之后，把带日期的安装前备份和 v2 配置备份留好。含密码或 webhook 网址的副本不要盖到共享位置。
 
 ## 首次启动不正常时
 
-请按症状查阅 [`troubleshooting.md`](troubleshooting.zh-CN.md)。修改数据前，先检查以下几点：
+先按症状翻 [`troubleshooting.md`](troubleshooting.zh-CN.md)。动数据之前，先看这四件事：
 
-- `AceLib-1.2.0.jar` 已存在，而且没有旧版 AceLib JAR 同时启用。
-- `config.yml` 含有 `version: "2.0"`，且 `storage.type` 是有效值。
-- SQLite 路径仍在 `plugins/AceEconomy/` 下。
-- MySQL 密码与 webhook 网址只在本机设置，没有贴到工单或公开文章。
+- `AceLib-1.2.0.jar` 有放，而且没有旧版 AceLib 同时启用。
+- `config.yml` 有 `version: "2.0"`，`storage.type` 是有效值。
+- SQLite 路径还在 `plugins/AceEconomy/` 底下。
+- MySQL 密码和 webhook 网址只写在本机，没贴到工单或公开文章。
 
-首次启动失败时，不要直接删除 `data-v2.json`、SQLite 文件或数据库。先复制保留；删除数据是恢复决策，不是一般安装步骤。
+第一次启动失败，不要直接删 `data-v2.json`、SQLite 文件或数据库。先复制留底；删数据是救灾时的决定，不是安装步骤。
 
 ## 接下来阅读
 

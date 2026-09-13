@@ -40,7 +40,7 @@ public final class BaltopCommandSpec {
         String rawCurrency = context.commandArgs().isEmpty() ? null : V2CommandSupport.arg(messages, context, 0);
         CurrencyInfo currency = V2CommandSupport.currency(services, rawCurrency);
         V2CommandSupport.replyValueLocalized(context, messages,
-                services.leaderboard().top(currency.id(), 1, services.leaderboard().pageSize()),
+                services.leaderboard().top(currency.id(), 0, services.leaderboard().pageSize()),
                 value -> formatComponent(messages, currency, value));
     }
 

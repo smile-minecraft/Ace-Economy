@@ -186,9 +186,7 @@ gui:
     - "<gray>Click with a banknote in hand to deposit it</gray>"
   bank-withdraw-name: "<green>💸 Withdraw Banknote"
   bank-withdraw-lore:
-    - "<gray>Left-Click: $1,000</gray>"
-    - "<gray>Right-Click: $10,000</gray>"
-    - "<gray>Shift-Click: Custom Amount</gray>"
+    - "<gray>Click: withdraw {amount}</gray>"
   bank-close-name: "<!italic><red>Close Menu"
   bank-loading: "<!italic><yellow>Loading data..."
   input-request: "<yellow>Please type the amount you want to withdraw in chat:</yellow> <gray>(Type 'cancel' to stop)</gray>"
@@ -215,10 +213,10 @@ gui:
   bank-form-invalid: "That form reply was invalid. Nothing was changed."
 
 banknote:
-  name: "<green><bold>Banknote</bold></green> <gray>(Banknote)</gray>"
-  lore-value: "<gray>Value: </gray><yellow>{value}</yellow>"
+  name: "<green><bold>Banknote</bold></green> <yellow>{value}</yellow> <gray>{currency}</gray>"
+  lore-value: "<gray>Value: </gray><yellow>{value}</yellow> <gray>{currency}</gray>"
   lore-issuer: "<gray>Issuer: </gray><aqua>{issuer}</aqua>"
-  lore-click: "<dark_gray>Right-click to redeem</dark_gray>"
+  lore-click: "<dark_gray>Left or right click to redeem</dark_gray>"
   damaged: "<red>This banknote is damaged!</red>"
   voided: "<red>This banknote has been voided!</red>"
   redeem-success: "<green>Redeemed banknote: <yellow>{amount}</yellow> <gray>(Issuer: {issuer})</gray></green>"

@@ -10,8 +10,10 @@ import com.smile.acelib.gui.GuiSession;
 import java.lang.reflect.Constructor;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Queue;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -30,6 +32,12 @@ public final class FakeGuiService implements GuiService {
     private final String unavailableReason;
     private final Map<UUID, GuiSession> sessions = new ConcurrentHashMap<>();
     private final AtomicLong generation = new AtomicLong(1);
+    // Deferred async-update callbacks, modelling the backend path where applyAsyncUpdate is
+    // accepted and the renderer runs later on the player region thread. While deferred, the
+    // callback queue holds the pending paints; flushCallbacks() runs them in order on the
+    // calling thread. Disabled by default so existing tests keep the inline behaviour.
+    private final Queue<Runnable> deferredCallbacks = new ConcurrentLinkedQueue<>();
+    private volatile boolean deferCallbacks;
 
     private FakeGuiService(boolean available, String unavailableReason) {
         this.available = available;
@@ -42,6 +50,39 @@ public final class FakeGuiService implements GuiService {
 
     public static FakeGuiService unavailable(String reason) {
         return new FakeGuiService(false, reason);
+    }
+
+    /**
+     * Fake whose async-update renderer is deferred: {@code applyAsyncUpdate} answers with the
+     * real {@code GuiResult.accepted} contract and queues the callback instead of running it
+     * inline. Tests drive the pending paint explicitly with {@link #flushCallbacks()}.
+     */
+    public static FakeGuiService deferred() {
+        FakeGuiService fake = new FakeGuiService(true, null);
+        fake.deferCallbacks = true;
+        return fake;
+    }
+
+    /** Switch between inline (default) and deferred async-update callbacks. */
+    public void setDeferredCallbacks(boolean deferred) {
+        this.deferCallbacks = deferred;
+    }
+
+    /** Number of accepted-but-not-yet-run async-update callbacks. */
+    public int pendingCallbackCount() {
+        return deferredCallbacks.size();
+    }
+
+    /**
+     * Run every queued async-update callback in order on the calling thread. A callback that
+     * throws (for example a renderer fatal rethrown by the consumer) propagates to the caller
+     * and stops the drain, like a region-thread dispatch failure would surface.
+     */
+    public void flushCallbacks() {
+        Runnable next;
+        while ((next = deferredCallbacks.poll()) != null) {
+            next.run();
+        }
     }
 
     @Override
@@ -99,6 +140,13 @@ public final class FakeGuiService implements GuiService {
         if (s.generation() != gen) {
             return GuiResult.rejected("stale-generation", "generation mismatch");
         }
+        // Mirror the production contract: a slot registered as an AceLib
+        // protected slot is rejected here (production ACELIB-GUI-010), so a
+        // consumer action slot must never be passed as an AceLib protected
+        // slot. The fake keeps its simplified code style ("slot-protected").
+        if (s.protectedSlots() != null && s.protectedSlots().contains(slot)) {
+            return GuiResult.rejected("slot-protected", "slot is protected");
+        }
         return GuiResult.allowed(s);
     }
 
@@ -129,6 +177,10 @@ public final class FakeGuiService implements GuiService {
         }
         if (req.sessionGeneration() != s.generation()) {
             return GuiResult.rejected("stale-generation", "generation mismatch");
+        }
+        if (onApplied != null && deferCallbacks) {
+            deferredCallbacks.offer(onApplied);
+            return GuiResult.accepted(s, "deferred");
         }
         if (onApplied != null) {
             onApplied.run();

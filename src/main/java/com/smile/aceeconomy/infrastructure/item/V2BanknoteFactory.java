@@ -2,6 +2,9 @@ package com.smile.aceeconomy.infrastructure.item;
 
 import com.smile.acelib.item.AceItemFactory;
 import com.smile.acelib.item.ItemIdentity;
+import com.smile.acelib.item.ItemMigration;
+import com.smile.acelib.item.ItemMigrationChain;
+import com.smile.acelib.item.ItemMigrationContext;
 import com.smile.acelib.item.ItemSchemaVersion;
 import com.smile.aceeconomy.ports.BanknoteClaim;
 import com.smile.aceeconomy.ports.BanknoteFactory;
@@ -10,6 +13,7 @@ import org.bukkit.Material;
 import org.bukkit.inventory.ItemStack;
 import org.jetbrains.annotations.NotNull;
 
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -18,19 +22,52 @@ import java.util.UUID;
  * place that converts between a Bukkit {@link ItemStack} and a {@link BanknoteClaim}, encoding the
  * v2 identity, schema, and typed gameplay tags (value / issuer / nonce / currency).
  *
- * <p>Construction calls {@link AceItemFactory#create(String)}, which requires a live server to
- * initialise AceLib's identity keys; this class is therefore instantiated by the production
- * composition root at server start, not in offline unit tests. Offline tests use a deterministic
- * fake that implements the same {@link BanknoteFactory} contract.
+ * <p>{@link #mint} calls {@link AceItemFactory#create(AceItemFactory.ItemSpec)}, which materialises
+ * a real {@link ItemStack} and therefore needs a live server; production instantiates this class
+ * from the composition root at server start. {@link #decode} only reads item metadata, so the
+ * identity / schema contract is exercised offline against a mocked stack as well.
+ *
+ * <p>The minted face (display name and lore) comes from {@link LocalizedBanknoteFace}, so the
+ * note shows its actual value and currency in the active locale. The face is display-only:
+ * {@link #decode} recognises banknotes strictly by identity, schema and gameplay tags, so notes
+ * minted with any older face remain redeemable.
  */
 public final class V2BanknoteFactory implements BanknoteFactory {
 
     private static final Material BANKNOTE_MATERIAL = Material.PAPER;
 
-    private final AceItemFactory factory;
+    /**
+     * Stamps a freshly minted note with the v2 schema. AceLib's {@link AceItemFactory.ItemSpec}
+     * carries the item identity but {@link AceItemFactory#create} always writes {@code _version}
+     * {@code 1.0} regardless of that identity, so the banknote has to advance its own schema to
+     * match the identity it recognises in {@link #decode}. The bump goes through AceLib's public
+     * migration API so the PDC key layout stays owned by the library. The chain is stateless after
+     * construction, so one shared instance is safe.
+     */
+    private static final ItemMigrationChain V2_SCHEMA_STAMP = new ItemMigrationChain()
+            .add(new ItemMigration() {
+                @Override
+                public ItemSchemaVersion fromVersion() {
+                    return ItemSchemaVersion.V1_0;
+                }
 
-    public V2BanknoteFactory() {
+                @Override
+                public ItemSchemaVersion toVersion() {
+                    return BanknoteClaim.V2_SCHEMA;
+                }
+
+                @Override
+                public void migrate(ItemMigrationContext context) {
+                    context.writeVersion(BanknoteClaim.V2_SCHEMA);
+                }
+            });
+
+    private final AceItemFactory factory;
+    private final LocalizedBanknoteFace face;
+
+    public V2BanknoteFactory(@NotNull LocalizedBanknoteFace face) {
         this.factory = AceItemFactory.create(BanknoteClaim.V2_NAMESPACE);
+        this.face = Objects.requireNonNull(face, "face");
     }
 
     @Override
@@ -47,13 +84,18 @@ public final class V2BanknoteFactory implements BanknoteFactory {
                 .material(BANKNOTE_MATERIAL)
                 .amount(1)
                 .identity(identity)
-                .displayName("Banknote " + claim.value())
+                .displayName(face.displayName(claim))
+                .lore(face.lore(claim))
                 .gameplayTag("value", Long.toString(claim.value()))
                 .gameplayTag("issuer", claim.issuer().toString())
                 .gameplayTag("nonce", claim.nonce().toString())
                 .gameplayTag("currency", claim.currency())
                 .build();
-        return Optional.of(factory.create(spec));
+        ItemStack note = factory.create(spec);
+        // AceLib stamps _version=1.0 on every create; advance it to the v2 schema so the note
+        // decodes with the same schema version the validator requires.
+        factory.migrate(note, BanknoteClaim.V2_SCHEMA, V2_SCHEMA_STAMP);
+        return Optional.of(note);
     }
 
     @Override
@@ -66,7 +108,8 @@ public final class V2BanknoteFactory implements BanknoteFactory {
             return Optional.empty();
         }
         ItemIdentity id = idOpt.get();
-        Optional<ItemSchemaVersion> schemaOpt = factory.readSchemaVersion(stack, BanknoteClaim.V2_KEY);
+        // The schema is stamped under the factory namespace (aceeconomy.v2), not the item key.
+        Optional<ItemSchemaVersion> schemaOpt = factory.readSchemaVersion(stack, BanknoteClaim.V2_NAMESPACE);
         if (schemaOpt.isEmpty()) {
             return Optional.empty();
         }

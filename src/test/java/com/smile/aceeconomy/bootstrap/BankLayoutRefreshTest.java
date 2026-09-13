@@ -25,6 +25,12 @@ import static org.mockito.Mockito.mockStatic;
  * the currently active layout on every open, so a successful reload that swaps
  * the layout changes what newly opened interfaces show. Already-open sessions
  * were dropped by {@code invalidateAll}, so only new opens matter here.
+ *
+ * <p>Wiring contract: consumer action slots are guarded by the consumer click
+ * listener, never by AceLib. The production open therefore passes an empty
+ * AceLib protected set (an action slot registered as AceLib-protected would be
+ * rejected by {@code validateClick}), then renders the configured buttons
+ * through the generation-bound async-update path.
  */
 class BankLayoutRefreshTest {
 
@@ -68,12 +74,46 @@ class BankLayoutRefreshTest {
             bukkit.when(() -> Bukkit.getPlayer(id)).thenReturn(player);
 
             bank.open(id, "someone");
-            Mockito.verify(gui).open(player, "Bank", 27, oldLayout.protectedSlots(), 0L);
+            // Action slots stay out of the AceLib protected set; the consumer
+            // listener owns click protection for them.
+            Mockito.verify(gui).open(player, "Bank", 27, Set.of(), 0L);
 
             // A successful reload swaps the reference the supplier reads.
             current.set(newLayout);
             bank.open(id, "someone");
-            Mockito.verify(gui).open(player, "Bank", 36, newLayout.protectedSlots(), 0L);
+            Mockito.verify(gui).open(player, "Bank", 36, Set.of(), 0L);
+        }
+    }
+
+    @Test
+    void openRendersConfiguredButtonsAfterOpen() {
+        BankGuiLayout layout = newLayout();
+        AtomicReference<BankGuiLayout> current = new AtomicReference<>(layout);
+        V2BankGuiSession gui = Mockito.mock(V2BankGuiSession.class);
+        ConfigLangAdapter messages = Mockito.mock(ConfigLangAdapter.class);
+        Mockito.when(messages.plainMessage(Mockito.anyString(), Mockito.anyMap()))
+                .thenReturn("Bank");
+        V2BankGuiSession.OpenOutcome opened = Mockito.mock(V2BankGuiSession.OpenOutcome.class);
+        Mockito.when(opened.success()).thenReturn(true);
+        com.smile.acelib.gui.GuiSession aceSession = new com.smile.acelib.gui.GuiSession(
+                UUID.randomUUID(), 7L, "v2-bank", "Bank", 36, Set.of());
+        Mockito.when(opened.session()).thenReturn(aceSession);
+        Mockito.when(gui.open(Mockito.any(), Mockito.anyString(), Mockito.anyInt(),
+                        Mockito.anySet(), Mockito.anyLong()))
+                .thenReturn(opened);
+        ProductionAdapters.Bank bank =
+                new ProductionAdapters.Bank(gui, current::get, messages, Runnable::run);
+
+        UUID id = UUID.randomUUID();
+        Player player = Mockito.mock(Player.class);
+        Mockito.when(player.getUniqueId()).thenReturn(id);
+        try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+            bukkit.when(() -> Bukkit.getPlayer(id)).thenReturn(player);
+
+            bank.open(id, "someone");
+            Mockito.verify(gui).renderLayout(
+                    Mockito.eq(id), Mockito.eq(7L),
+                    Mockito.same(layout), Mockito.same(messages));
         }
     }
 }

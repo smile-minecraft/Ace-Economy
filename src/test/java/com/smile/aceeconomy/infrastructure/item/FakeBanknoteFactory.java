@@ -19,11 +19,36 @@ import java.util.Optional;
  */
 public final class FakeBanknoteFactory implements BanknoteFactory {
 
+    /** When true, the next mint refuses (simulates an item factory outage). */
+    public boolean failNextMint;
+
+    /**
+     * When non-null, the next mint throws this instead of returning — a
+     * {@link RuntimeException} simulates an AceLib item/PDC failure, an {@link Error}
+     * a broken runtime. Cleared after one use, mirroring {@link #failNextMint}.
+     */
+    public Throwable throwNextMint;
+
     private final Map<ItemStack, BanknoteClaim> store = new IdentityHashMap<>();
 
     @Override
     public @NotNull Optional<ItemStack> mint(@NotNull BanknoteClaim claim) {
+        if (throwNextMint != null) {
+            Throwable toThrow = throwNextMint;
+            throwNextMint = null;
+            if (toThrow instanceof RuntimeException runtime) {
+                throw runtime;
+            }
+            if (toThrow instanceof Error error) {
+                throw error;
+            }
+            throw new IllegalStateException("only unchecked failures can be simulated", toThrow);
+        }
         if (claim.value() <= 0) {
+            return Optional.empty();
+        }
+        if (failNextMint) {
+            failNextMint = false;
             return Optional.empty();
         }
         ItemStack stack = Mockito.mock(ItemStack.class);
@@ -47,5 +72,10 @@ public final class FakeBanknoteFactory implements BanknoteFactory {
 
     public boolean wasMinted(@NotNull ItemStack stack) {
         return store.containsKey(stack);
+    }
+
+    /** All claims minted by this fake so far, in insertion order. */
+    public java.util.List<BanknoteClaim> minted() {
+        return java.util.List.copyOf(store.values());
     }
 }

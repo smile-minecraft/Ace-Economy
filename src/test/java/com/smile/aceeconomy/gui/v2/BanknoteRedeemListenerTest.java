@@ -14,6 +14,8 @@ import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.inventory.EquipmentSlot;
@@ -38,6 +40,8 @@ import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -193,7 +197,7 @@ class BanknoteRedeemListenerTest {
     }
 
     @Test
-    @DisplayName("replay keeps the item and never double-credits")
+    @DisplayName("replay across left and right clicks keeps the item and never double-credits")
     void replayKeepsItem() {
         useCase.depositMode = StubBankGuiUseCase.DepositMode.REJECTED;
         useCase.depositReason = "replay.detected";
@@ -204,7 +208,7 @@ class BanknoteRedeemListenerTest {
         Mockito.when(inv.getItemInOffHand()).thenReturn(air);
 
         BanknoteRedeemListener target = listener(immediate());
-        target.onInteract(interact(EquipmentSlot.HAND, Action.RIGHT_CLICK_AIR, false));
+        target.onInteract(interact(EquipmentSlot.HAND, Action.LEFT_CLICK_AIR, false));
         target.onInteract(interact(EquipmentSlot.HAND, Action.RIGHT_CLICK_AIR, false));
 
         assertEquals(2, useCase.depositCalls, "both attempts reach the atomic path; the store owns replay");
@@ -251,15 +255,98 @@ class BanknoteRedeemListenerTest {
     }
 
     @Test
-    @DisplayName("cancelled events are not processed")
-    void cancelledEventIgnored() {
+    @DisplayName("a valid banknote already cancelled by a protection plugin still redeems once and stays cancelled")
+    void preCancelledValidBanknoteRedeemsAndStaysCancelled() {
+        ItemStack held = stack(false, 1);
+        ItemStack snapshot = stack(false, 1);
+        Mockito.when(held.clone()).thenReturn(snapshot);
+        Mockito.when(held.isSimilar(snapshot)).thenReturn(true);
+        Mockito.when(inv.getItemInMainHand()).thenReturn(held);
+        Mockito.when(inv.getItemInOffHand()).thenReturn(air);
+        PlayerInteractEvent event = interact(EquipmentSlot.HAND, Action.RIGHT_CLICK_BLOCK, true);
+
+        listener(immediate()).onInteract(event);
+
+        assertEquals(1, useCase.depositCalls,
+                "a protection plugin's cancellation must not block a valid banknote redeem");
+        assertSame(snapshot, useCase.lastDepositItem, "the click-time snapshot must still be credited");
+        verify(event).setCancelled(true);
+        verify(inv).setItemInMainHand((ItemStack) null);
+        verify(messages).renderMessage(eq("banknote.redeem-success"), anyMap());
+    }
+
+    @Test
+    @DisplayName("a pre-cancelled left click on a valid banknote redeems through the same atomic path")
+    void preCancelledLeftClickValidBanknoteRedeems() {
+        ItemStack held = stack(false, 1);
+        ItemStack snapshot = stack(false, 1);
+        Mockito.when(held.clone()).thenReturn(snapshot);
+        Mockito.when(held.isSimilar(snapshot)).thenReturn(true);
+        Mockito.when(inv.getItemInMainHand()).thenReturn(held);
+        Mockito.when(inv.getItemInOffHand()).thenReturn(air);
+        PlayerInteractEvent event = interact(EquipmentSlot.HAND, Action.LEFT_CLICK_AIR, true);
+
+        listener(immediate()).onInteract(event);
+
+        assertEquals(1, useCase.depositCalls);
+        verify(event).setCancelled(true);
+        verify(inv).setItemInMainHand((ItemStack) null);
+        verify(messages).renderMessage(eq("banknote.redeem-success"), anyMap());
+    }
+
+    @Test
+    @DisplayName("a pre-cancelled non-banknote is left untouched and never dispatched")
+    void preCancelledNonBanknoteUntouched() {
+        banknotes.decodeResult = Optional.empty();
+        ItemStack held = stack(false, 1);
+        Mockito.when(inv.getItemInMainHand()).thenReturn(held);
+        Mockito.when(inv.getItemInOffHand()).thenReturn(air);
+        PlayerInteractEvent event = interact(EquipmentSlot.HAND, Action.RIGHT_CLICK_AIR, true);
+
+        listener(immediate()).onInteract(event);
+
+        assertEquals(0, useCase.depositCalls);
+        verify(event, never()).setCancelled(any(boolean.class));
+        verify(messages, never()).renderMessage(anyString(), anyMap());
+    }
+
+    @Test
+    @DisplayName("a pre-cancelled undecodable banknote is left untouched and never dispatched")
+    void preCancelledInvalidBanknoteUntouched() {
+        ItemStack held = stack(false, 1);
+        banknotes.failOn.add(held);
+        Mockito.when(inv.getItemInMainHand()).thenReturn(held);
+        Mockito.when(inv.getItemInOffHand()).thenReturn(air);
+        PlayerInteractEvent event = interact(EquipmentSlot.HAND, Action.RIGHT_CLICK_AIR, true);
+
+        listener(immediate()).onInteract(event);
+
+        assertEquals(0, useCase.depositCalls);
+        verify(event, never()).setCancelled(any(boolean.class));
+        verify(messages, never()).renderMessage(anyString(), anyMap());
+    }
+
+    @Test
+    @DisplayName("the pre-cancelled off-hand event pass is still ignored")
+    void preCancelledOffHandPassIgnored() {
         ItemStack held = stack(false, 1);
         Mockito.when(inv.getItemInMainHand()).thenReturn(held);
 
-        listener(immediate()).onInteract(interact(EquipmentSlot.HAND, Action.RIGHT_CLICK_AIR, true));
+        listener(immediate()).onInteract(interact(EquipmentSlot.OFF_HAND, Action.RIGHT_CLICK_AIR, true));
 
         assertEquals(0, useCase.depositCalls);
-        verify(messages, never()).renderMessage(anyString(), anyMap());
+    }
+
+    @Test
+    @DisplayName("Bukkit must deliver already-cancelled interactions and run after other plugins")
+    void handlerObservesCancelledEventsAfterOtherPlugins() throws Exception {
+        Method method = BanknoteRedeemListener.class.getMethod("onInteract", PlayerInteractEvent.class);
+        EventHandler handler = method.getAnnotation(EventHandler.class);
+        assertNotNull(handler, "onInteract must stay a registered Bukkit event handler");
+        assertFalse(handler.ignoreCancelled(),
+                "ignoreCancelled=true would stop Bukkit from delivering an interaction a protection plugin cancelled");
+        assertEquals(EventPriority.HIGHEST, handler.priority(),
+                "the handler must run after protection plugins so their cancellation is visible");
     }
 
     @Test
@@ -274,16 +361,58 @@ class BanknoteRedeemListenerTest {
     }
 
     @Test
-    @DisplayName("left-click never redeems")
-    void leftClickIgnored() {
+    @DisplayName("left-click air redeems exactly like right-click through the same atomic path")
+    void leftClickAirRedeemsLikeRightClick() {
+        ItemStack held = stack(false, 1);
+        ItemStack snapshot = stack(false, 1);
+        Mockito.when(held.clone()).thenReturn(snapshot);
+        Mockito.when(held.isSimilar(snapshot)).thenReturn(true);
+        Mockito.when(inv.getItemInMainHand()).thenReturn(held);
+        Mockito.when(inv.getItemInOffHand()).thenReturn(air);
+        PlayerInteractEvent event = interact(EquipmentSlot.HAND, Action.LEFT_CLICK_AIR, false);
+
+        listener(immediate()).onInteract(event);
+
+        assertEquals(1, useCase.depositCalls, "left-click air must reach the same atomic redeem path");
+        assertSame(snapshot, useCase.lastDepositItem, "left-click must deposit the click-time snapshot");
+        verify(event).setCancelled(true);
+        verify(inv).setItemInMainHand((ItemStack) null);
+        verify(messages).renderMessage(eq("banknote.redeem-success"), anyMap());
+    }
+
+    @Test
+    @DisplayName("left-click block redeems exactly like right-click and cancels the vanilla interaction")
+    void leftClickBlockRedeemsLikeRightClick() {
+        ItemStack held = stack(false, 1);
+        ItemStack snapshot = stack(false, 1);
+        Mockito.when(held.clone()).thenReturn(snapshot);
+        Mockito.when(held.isSimilar(snapshot)).thenReturn(true);
+        Mockito.when(inv.getItemInMainHand()).thenReturn(held);
+        Mockito.when(inv.getItemInOffHand()).thenReturn(air);
+        PlayerInteractEvent event = interact(EquipmentSlot.HAND, Action.LEFT_CLICK_BLOCK, false);
+
+        listener(immediate()).onInteract(event);
+
+        assertEquals(1, useCase.depositCalls, "left-click block must reach the same atomic redeem path");
+        verify(event).setCancelled(true);
+        verify(inv).setItemInMainHand((ItemStack) null);
+        verify(messages).renderMessage(eq("banknote.redeem-success"), anyMap());
+    }
+
+    @Test
+    @DisplayName("non-banknote left click keeps vanilla behaviour and never reaches the use case")
+    void leftClickNonBanknoteIgnored() {
+        banknotes.decodeResult = Optional.empty();
         ItemStack held = stack(false, 1);
         Mockito.when(inv.getItemInMainHand()).thenReturn(held);
+        Mockito.when(inv.getItemInOffHand()).thenReturn(air);
         PlayerInteractEvent event = interact(EquipmentSlot.HAND, Action.LEFT_CLICK_AIR, false);
 
         listener(immediate()).onInteract(event);
 
         assertEquals(0, useCase.depositCalls);
         verify(event, never()).setCancelled(any(boolean.class));
+        verify(messages, never()).renderMessage(anyString(), anyMap());
     }
 
     @Test

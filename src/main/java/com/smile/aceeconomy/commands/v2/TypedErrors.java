@@ -33,6 +33,7 @@ public final class TypedErrors {
             case TRANSACTION_CANCELLED -> "ACELIB-CMD-TRANSACTION-CANCELLED";
             case AUDIT_FAILURE -> "ACELIB-CMD-AUDIT-FAILURE";
             case REPLAY_DETECTED -> "ACELIB-CMD-REPLAY-DETECTED";
+            case INVENTORY_FULL -> "ACELIB-CMD-INVENTORY-FULL";
         };
         if (messages == null) {
             return CommandException.custom(code, result.message());
@@ -48,6 +49,7 @@ public final class TypedErrors {
             case TRANSACTION_CANCELLED -> "general.transaction-cancelled";
             case AUDIT_FAILURE -> "general.transaction-failed";
             case REPLAY_DETECTED -> "general.transaction-failed";
+            case INVENTORY_FULL -> "general.inventory-full";
         };
         String msg;
         if (err == EconomyError.CURRENCY_NOT_FOUND) {

@@ -11,5 +11,6 @@ public enum EconomyError {
     SAME_ACCOUNT,
     TRANSACTION_CANCELLED, // pre-commit event cancelled the mutation
     AUDIT_FAILURE,
-    REPLAY_DETECTED       // banknote nonce already consumed
+    REPLAY_DETECTED,      // banknote nonce already consumed
+    INVENTORY_FULL        // withdraw target has no free inventory slot for the banknote
 }

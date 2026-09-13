@@ -5,6 +5,7 @@ import com.smile.acelib.bedrock.BedrockService;
 import com.smile.acelib.form.FormService;
 import com.smile.acelib.command.BukkitCommandBridge;
 import com.smile.acelib.command.BukkitReplySink;
+import com.smile.acelib.command.CommandRegistry;
 import com.smile.acelib.command.CommandRegistryImpl;
 import com.smile.acelib.event.SafeEventRegistry;
 import com.smile.acelib.gui.GuiService;
@@ -13,6 +14,7 @@ import com.smile.aceeconomy.acelib.AceLibAccess;
 import com.smile.aceeconomy.acelib.AceLibModule;
 import com.smile.aceeconomy.api.v2.EconomyApiImpl;
 import com.smile.aceeconomy.api.v2.InMemoryTransactionEventPublisher;
+import com.smile.aceeconomy.api.v2.TransactionListener;
 import com.smile.aceeconomy.application.EconomyService;
 import com.smile.aceeconomy.commands.v2.CommandServices;
 import com.smile.aceeconomy.commands.v2.MainCommandAliasPolicy;
@@ -43,6 +45,7 @@ import com.smile.aceeconomy.infrastructure.integration.vault.VaultEconomyLifecyc
 import com.smile.aceeconomy.infrastructure.integration.vault.VaultEconomyProvider;
 import com.smile.aceeconomy.infrastructure.integration.vault.VaultIntegrationModule;
 import com.smile.aceeconomy.infrastructure.item.BanknoteValidator;
+import com.smile.aceeconomy.infrastructure.item.LocalizedBanknoteFace;
 import com.smile.aceeconomy.infrastructure.item.V2BanknoteFactory;
 import com.smile.aceeconomy.infrastructure.operations.LeaderboardCache;
 import com.smile.aceeconomy.infrastructure.operations.StorageReversalExecutor;
@@ -90,6 +93,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.Consumer;
 import java.util.logging.Logger;
 
@@ -105,6 +109,7 @@ public final class CompositionRoot {
     private final ConfigLangAdapter config;
 
     private ExecutorService ioExecutor;
+    private ScheduledExecutorService dispatchWatchdogs;
     private PersistenceLifecycle persistence;
     private AccountRepository accounts;
     private TransactionRepository transactions;
@@ -121,7 +126,11 @@ public final class CompositionRoot {
     private PlayerSessionManager sessions;
     private V2BankGuiSession bankGui;
     private BankFormSession bankForms;
-    private CommandRegistryImpl commandRegistry;
+    private CommandRegistry commandRegistry;
+    // Bound to the transaction publisher and dropped on presentation stop. Every committed
+    // balance mutation invalidates the shared leaderboard snapshot, so /baltop (and the PAPI
+    // rank placeholders reading the same cache) never wait out the TTL to see a change.
+    private TransactionListener leaderboardInvalidationListener;
     private ExternalIntegrationCoordinator integrations;
     private V2BanknoteFactory banknotes;
     private RollbackService rollbacks;
@@ -182,6 +191,18 @@ public final class CompositionRoot {
             return thread;
         });
         resources.register(() -> ioExecutor.shutdown());
+
+        // One-shot dispatch watchdogs bound the withdraw probe/delivery wait for the region
+        // callback: on Folia a task whose player leaves after acceptance may be retired
+        // without ever running, so without a bounded wait the reply future would hang and a
+        // committed deduction could never be compensated. Daemon thread, torn down with the
+        // persistence module that owns the other IO threads.
+        dispatchWatchdogs = Executors.newSingleThreadScheduledExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "aceeconomy-v2-dispatch-watchdog");
+            thread.setDaemon(true);
+            return thread;
+        });
+        resources.register(() -> dispatchWatchdogs.shutdownNow());
 
         // Config → typed StorageConfig → factory. The factory owns the JSON / SQLite /
         // MySQL backend selection and the connection / pool lifecycle. On any failure it
@@ -289,7 +310,17 @@ public final class CompositionRoot {
     }
 
     private void startPresentation(ResourceOwner resources) {
-        banknotes = new V2BanknoteFactory();
+        // The face resolves {currency} through the shared display holder, so the minted note shows
+        // the operator-configured currency display name and follows display-only reloads like every
+        // other display surface; an unknown id degrades to the raw id inside the face renderer.
+        banknotes = new V2BanknoteFactory(LocalizedBanknoteFace.production(config, currencyId -> {
+            CurrencyRegistry display = displayHolder.get();
+            return display.contains(currencyId) ? display.get(currencyId).displayName() : null;
+        }));
+        // Component replies are handed to the region dispatch seam so the send runs on the
+        // player's region thread; IO completion threads never resolve or message a Bukkit
+        // Player directly. Installed once here, uninstalled with the presentation slice.
+        com.smile.aceeconomy.commands.v2.CommandReply.installRegionDispatch(folia::runForPlayer);
         // The bank GUI use case binds to the SAME durable validator / redemption store and the
         // application economy service (lock, pre-commit, debt policy) so every redeem goes
         // through the prepared atomic path; no in-memory guard appears in this graph.
@@ -314,11 +345,27 @@ public final class CompositionRoot {
                 bankUseCase, banknotes, folia, config, plugin.getLogger());
         Bukkit.getPluginManager().registerEvents(redeemListener, plugin);
         resources.register(() -> HandlerList.unregisterAll(redeemListener));
+        // Consumer-side bank click/drag/close wiring: AceLib validates generations but
+        // never calls consumer business logic, so this listener bridges Bukkit inventory
+        // events into the session above. It runs with ignoreCancelled=false, so an event
+        // AceLib already cancelled still reaches the action dispatch.
+        com.smile.aceeconomy.gui.v2.BankGuiClickListener bankClickListener =
+                new com.smile.aceeconomy.gui.v2.BankGuiClickListener(bankGui);
+        Bukkit.getPluginManager().registerEvents(bankClickListener, plugin);
+        resources.register(() -> HandlerList.unregisterAll(bankClickListener));
 
         ProductionAdapters.Economy economyCommands =
                 new ProductionAdapters.Economy(api, displayHolder, ioExecutor);
+        // The dispatch timeout bounds how long the withdraw probe/delivery may wait for a
+        // region callback that the scheduler accepted but retired without running (player
+        // left). Beyond it the withdraw refuses or refunds instead of leaving the reply
+        // pending forever. A zero or negative operator value is floored at the one-second
+        // fail-safe minimum instead of timing every withdraw out immediately.
+        Duration withdrawDispatchTimeout =
+                effectiveDispatchTimeout(integer("withdraw.dispatch-timeout-seconds", 10));
         ProductionAdapters.Withdrawals withdrawalCommands =
-                new ProductionAdapters.Withdrawals(api, displayHolder, banknotes, ioExecutor);
+                new ProductionAdapters.Withdrawals(api, displayHolder, banknotes, ioExecutor, folia,
+                        dispatchWatchdogs, withdrawDispatchTimeout);
         // Hoisted so the backup/restore service can invalidate the SAME leaderboard cache
         // after a successful restore (single instance, single invalidation boundary).
         // The fields keep the instance and TTL alive for the PAPI resolver wiring below,
@@ -331,6 +378,11 @@ public final class CompositionRoot {
         ProductionAdapters.Leaderboards leaderboards = new ProductionAdapters.Leaderboards(
                 leaderboardService,
                 integer("leaderboard.page-size", 10), ioExecutor);
+        // Every committed balance mutation drops the shared ranking snapshot, so /baltop and the
+        // PAPI rank placeholders never wait out the TTL after give/take/set/pay/withdraw/deposit.
+        // The listener is a pure cache clear (no IO, no Bukkit), so it may run inline on the
+        // committing thread; it is unregistered with the presentation slice below.
+        leaderboardInvalidationListener = wireLeaderboardInvalidation(publisher, leaderboardService);
         ProductionAdapters.Bank javaBankCommands =
                 new ProductionAdapters.Bank(bankGui, () -> currentLayout, config, ioExecutor);
         // Bedrock native-form bank surface. The form service is resolved
@@ -421,7 +473,14 @@ public final class CompositionRoot {
                 leaderboardEnabled,
                 MainCommandAliasPolicy.declaredBukkitLabels(declaredCommands),
                 MainCommandAliasPolicy.declaredAliasesByRoot(declaredCommands));
-        commandRegistry = new CommandRegistryImpl(new BukkitReplySink(plugin));
+        // The decorator maps a bare player /money (and its /balance, /bal aliases) to the
+        // balance subcommand; AceLib v1.2.0 answers an empty argument list with help, so the
+        // intended self-balance UX needs this default-subcommand layer. All other labels and
+        // explicit subcommands flow through untouched.
+        commandRegistry = new com.smile.aceeconomy.commands.v2.DefaultSubcommandRegistry(
+                new CommandRegistryImpl(new BukkitReplySink(plugin,
+                        new com.smile.aceeconomy.infrastructure.acelib.FoliaRegionReplyBackend(folia))),
+                Map.of("money", "balance"));
         v2Commands.register(commandRegistry);
         for (var spec : v2Commands.specs()) {
             new BukkitCommandBridge(commandRegistry).attach(plugin, spec.name());
@@ -430,6 +489,15 @@ public final class CompositionRoot {
     }
 
     private void stopPresentation() {
+        // Drop the reply seam first: after this point no reply may dispatch through a
+        // scheduler that is about to be torn down.
+        com.smile.aceeconomy.commands.v2.CommandReply.installRegionDispatch(null);
+        // Unregister the transaction listener before the publisher's owner stops: a late
+        // transaction during shutdown must not touch a leaderboard slice that is going away.
+        if (publisher != null && leaderboardInvalidationListener != null) {
+            publisher.unregister(leaderboardInvalidationListener);
+            leaderboardInvalidationListener = null;
+        }
         if (bankForms != null) {
             bankForms.invalidateAll();
         }
@@ -607,6 +675,30 @@ public final class CompositionRoot {
                 }
             }
         };
+    }
+
+    /**
+     * Fail-safe floor for the withdraw dispatch timeout. A zero or negative configured
+     * value would arm every bounded wait with a zero delay and time out every withdraw
+     * immediately, so the effective timeout is never shorter than one second; positive
+     * configured values pass through unchanged.
+     */
+    static Duration effectiveDispatchTimeout(int configuredSeconds) {
+        return Duration.ofSeconds(Math.max(1, configuredSeconds));
+    }
+
+    /**
+     * Register the leaderboard invalidation listener on the transaction publisher and return it
+     * so the caller can unregister on shutdown. The pre-commit event carries no currency id, so
+     * the listener drops every cached currency ranking; that is intentionally coarser than a
+     * per-currency invalidation but keeps the listener free of IO and of any Bukkit access, so
+     * it is safe to run inline on whatever thread commits the transaction.
+     */
+    static TransactionListener wireLeaderboardInvalidation(
+            InMemoryTransactionEventPublisher publisher, LeaderboardService leaderboard) {
+        TransactionListener listener = event -> leaderboard.invalidateAll();
+        publisher.register(listener);
+        return listener;
     }
 
     private Object value(String path) {

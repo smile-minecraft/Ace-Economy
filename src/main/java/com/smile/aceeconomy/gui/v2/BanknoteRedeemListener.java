@@ -10,6 +10,7 @@ import com.smile.aceeconomy.ports.FoliaContextExecutor;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.player.PlayerInteractEvent;
@@ -24,10 +25,11 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * Right-click redemption for v2 banknotes. A right-click holding a recognisable banknote in the
+ * Click redemption for v2 banknotes. A left or right click holding a recognisable banknote in the
  * main or off hand is credited through the same atomic {@link BankGuiUseCase} path as the bank GUI
  * deposit button, so the durable nonce consumption and the balance credit commit together and a
- * replay can never credit twice.
+ * replay can never credit twice. Non-banknote items never reach this path, so vanilla and
+ * third-party interaction behaviour is untouched for them.
  *
  * <p>Ordering guarantees:
  *
@@ -52,6 +54,16 @@ import java.util.logging.Logger;
  * the region dispatch runs). Cancelling after the deferred credit would have no effect on the
  * already-processed interaction, while items that are not banknotes return before this point and
  * keep their vanilla and third-party behaviour untouched.
+ *
+ * <p>Cancellation boundary: the handler runs at {@link EventPriority#HIGHEST} with
+ * {@code ignoreCancelled = false}, so a valid banknote still redeems when an earlier protection
+ * plugin (for example a land-claim plugin) has already cancelled the interaction. Redemption is a
+ * self-contained economy action on the held item rather than a world interaction, so it must not
+ * be silently blocked by an unrelated protection cancellation. Only a decodable banknote crosses
+ * that boundary: non-banknote and undecodable items return without reading or writing the
+ * cancellation state, so their cancellation and vanilla behaviour is preserved. A valid note keeps
+ * the event cancelled, and {@code HIGHEST} is the last priority still allowed to modify an event
+ * ({@code MONITOR} is observation-only), so no later handler can re-enable the interaction.
  */
 public final class BanknoteRedeemListener implements Listener {
 
@@ -73,17 +85,19 @@ public final class BanknoteRedeemListener implements Listener {
         this.audit = Objects.requireNonNull(audit, "audit");
     }
 
-    @EventHandler(ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
     public void onInteract(@NotNull PlayerInteractEvent event) {
-        if (event.isCancelled()) {
-            return;
-        }
+        // A pre-cancelled event must still be decoded: a protection plugin cancelling the
+        // interaction does not make a held banknote unreadable, and only items that fail
+        // candidate/decode below leave the cancellation state untouched.
         EquipmentSlot hand = event.getHand();
         if (hand != null && hand != EquipmentSlot.HAND) {
             return;
         }
         Action action = event.getAction();
-        if (action != Action.RIGHT_CLICK_AIR && action != Action.RIGHT_CLICK_BLOCK) {
+        boolean redeemClick = action == Action.RIGHT_CLICK_AIR || action == Action.RIGHT_CLICK_BLOCK
+                || action == Action.LEFT_CLICK_AIR || action == Action.LEFT_CLICK_BLOCK;
+        if (!redeemClick) {
             return;
         }
         Player player = event.getPlayer();

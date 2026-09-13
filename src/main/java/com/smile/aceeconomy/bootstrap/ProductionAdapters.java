@@ -35,6 +35,7 @@ import com.smile.aceeconomy.ports.BankGuiUseCase;
 import com.smile.aceeconomy.ports.BanknoteClaim;
 import com.smile.aceeconomy.ports.BanknoteFactory;
 import com.smile.aceeconomy.ports.DepositResult;
+import com.smile.aceeconomy.ports.FoliaContextExecutor;
 import com.smile.aceeconomy.ports.WithdrawResult;
 import com.smile.aceeconomy.ports.persistence.AtomicRedemptionStore;
 import com.smile.aceeconomy.ports.persistence.RedemptionResult;
@@ -51,6 +52,9 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 
 final class ProductionAdapters {
@@ -139,12 +143,20 @@ final class ProductionAdapters {
     }
 
     static final class Withdrawals implements WithdrawCommandService {
+        private static final System.Logger LOGGER = System.getLogger(ProductionAdapters.class.getName());
+
         private final EconomyApi api; private final CurrencyDisplayHolder display; private final BanknoteFactory banknotes;
-        private final Executor executor;
-        Withdrawals(EconomyApi api, CurrencyDisplayHolder display, BanknoteFactory banknotes, Executor executor) {
+        private final Executor executor; private final FoliaContextExecutor folia;
+        private final ScheduledExecutorService dispatchWatchdogs; private final Duration dispatchTimeout;
+        Withdrawals(EconomyApi api, CurrencyDisplayHolder display, BanknoteFactory banknotes,
+                    Executor executor, FoliaContextExecutor folia,
+                    ScheduledExecutorService dispatchWatchdogs, Duration dispatchTimeout) {
             this.api = api;
             this.display = java.util.Objects.requireNonNull(display, "display");
             this.banknotes = banknotes; this.executor = executor;
+            this.folia = java.util.Objects.requireNonNull(folia, "folia");
+            this.dispatchWatchdogs = java.util.Objects.requireNonNull(dispatchWatchdogs, "dispatchWatchdogs");
+            this.dispatchTimeout = java.util.Objects.requireNonNull(dispatchTimeout, "dispatchTimeout");
         }
         /**
          * Hot-swap display-only currency metadata after a validated reload. Shares one
@@ -155,15 +167,212 @@ final class ProductionAdapters {
                     .requireDisplayOnlyChange(display.get(), candidate);
             display.publish(candidate);
         }
+        /**
+         * Withdraw a banknote: probe inventory space on the player's region thread, deduct and
+         * mint on the IO executor, then hand the note over on the region thread again. A full
+         * inventory is refused before any deduction (GUI parity); the same holds for a currency
+         * the display registry cannot resolve and for an amount that cannot back a whole-number
+         * banknote claim. If the note cannot be placed after the deduction — inventory filled in
+         * between, player gone, delivery error — the deduction is compensated with a refund so
+         * no charge is ever left without a note.
+         *
+         * <p>Dispatch acceptance is not execution: on Folia a region task whose player leaves
+         * after acceptance may be retired without ever running its callback. Both the probe
+         * and the delivery arm a bounded wait when the scheduler accepts the dispatch, so an
+         * accepted-but-never-executed callback completes the reply future with a typed failure
+         * instead of leaving it pending forever.
+         */
         public CompletableFuture<EconomyResult<CommandModels.WithdrawReceipt>> withdraw(UUID id, String c, Amount a) {
-            return CompletableFuture.supplyAsync(() -> {
-                EconomyResult<Amount> result = api.withdraw(id, c, a);
-                if (result.isFailure()) return EconomyResult.failure(result.error(), result.message());
-                Currency currency = display.get().get(c); BanknoteClaim claim = claim(id, currency, a.value().longValueExact());
-                if (banknotes.mint(claim).isEmpty()) return EconomyResult.failure(EconomyError.INVALID_AMOUNT,
-                        "banknote could not be created");
-                return EconomyResult.success(new CommandModels.WithdrawReceipt(claim.nonce(), id.toString(), currency.id(), a.value()));
-            }, executor);
+            // Three-state probe outcome: present=true has space, present=false full,
+            // empty = the accepted region callback never ran (bounded wait fired).
+            CompletableFuture<Optional<Boolean>> probed = new CompletableFuture<>();
+            boolean dispatched = folia.runForPlayer(id, player -> {
+                try {
+                    probed.complete(Optional.of(player.getInventory().firstEmpty() != -1));
+                } catch (Throwable t) {
+                    probed.completeExceptionally(t);
+                }
+            });
+            if (!dispatched) {
+                // Nothing has happened yet: the player is unresolvable, so refuse without deducting.
+                return CompletableFuture.completedFuture(EconomyResult.failure(
+                        EconomyError.TRANSACTION_CANCELLED, "player left before the withdraw could start"));
+            }
+            // If the region callback already completed the probe this is a no-op; if the task
+            // was accepted but retired without running, refuse before any deduction. The
+            // lambda completes a future (value-compatible), so bind it to an explicit Runnable:
+            // otherwise javac binds the call to schedule(Callable, ...) and schedulers that
+            // only implement the Runnable seam silently never fire the watchdog.
+            Runnable probeTimeout = () -> probed.complete(Optional.empty());
+            dispatchWatchdogs.schedule(probeTimeout, dispatchTimeout.toMillis(), TimeUnit.MILLISECONDS);
+            return probed.thenCompose(probe -> {
+                if (probe.isEmpty()) {
+                    return CompletableFuture.completedFuture(EconomyResult.failure(
+                            EconomyError.TRANSACTION_CANCELLED, "player left before the withdraw could start"));
+                }
+                if (!probe.get()) {
+                    return CompletableFuture.completedFuture(EconomyResult.failure(
+                            EconomyError.INVENTORY_FULL, "inventory full"));
+                }
+                return CompletableFuture.supplyAsync(() -> deductAndMint(id, c, a), executor)
+                        .thenCompose(minted -> minted.isFailure()
+                                ? CompletableFuture.completedFuture(
+                                        EconomyResult.<CommandModels.WithdrawReceipt>failure(minted.error(), minted.message()))
+                                : deliver(id, minted.value()));
+            });
+        }
+
+        /**
+         * Compensate a committed deduction whose note was never materialised (mint returned
+         * empty or threw): refund the withdrawn amount exactly once, in the deduction's
+         * currency. The amount to put back is the requested withdrawal {@code a} — never the
+         * post-withdrawal balance that the withdraw result carries. A failed refund is logged
+         * at ERROR with full context for manual reconciliation and is never retried here, so
+         * a refund outage can neither silently lose the money nor double-refund.
+         */
+        private EconomyResult<MintedNote> compensateFailedMint(
+                UUID id, String currencyId, Amount a, String failureDetail) {
+            EconomyResult<Amount> refund = api.deposit(id, currencyId, a);
+            if (refund.isFailure()) {
+                LOGGER.log(System.Logger.Level.ERROR,
+                        "withdraw compensation failed: player={0}, currency={1}, amount={2}, reason={3}",
+                        new Object[] { id, currencyId, a, refund.message() });
+            }
+            return EconomyResult.failure(EconomyError.INVALID_AMOUNT, failureDetail);
+        }
+
+        /** Internal carrier for a minted note plus everything compensation needs. */
+        private record MintedNote(CommandModels.WithdrawReceipt receipt, ItemStack note,
+                                  UUID playerId, String currencyId, Amount amount, Throwable auditError) {
+        }
+
+        private EconomyResult<MintedNote> deductAndMint(UUID id, String c, Amount a) {
+            // Both fallible inputs are resolved BEFORE the deduction commits: a currency
+            // the display registry cannot resolve, or an amount that cannot back a
+            // whole-number banknote claim, must refuse without charging. Resolving them
+            // only after the committed withdrawal would leave the account deducted with
+            // neither a note nor a refund (charge-then-throw). Only minting, which runs
+            // after the commit, may still fail — and that path compensates below.
+            Currency currency;
+            try {
+                currency = display.get().get(c);
+            } catch (IllegalArgumentException unknownCurrency) {
+                return EconomyResult.failure(EconomyError.CURRENCY_NOT_FOUND, "unknown currency");
+            }
+            BanknoteClaim claim;
+            try {
+                claim = claim(id, currency, a.value().longValueExact());
+            } catch (ArithmeticException unissuable) {
+                return EconomyResult.failure(EconomyError.INVALID_AMOUNT,
+                        "amount cannot be issued as a banknote");
+            }
+            EconomyResult<Amount> result = api.withdraw(id, c, a);
+            if (result.isFailure()) return EconomyResult.failure(result.error(), result.message());
+            ItemStack note;
+            try {
+                note = banknotes.mint(claim).orElse(null);
+            } catch (RuntimeException mintThrew) {
+                // Minting that throws an unchecked exception is the same money-safety hole
+                // as an empty result: the deduction has already committed, so the charge
+                // must be compensated and the caller must see a closed typed failure, not
+                // an exceptional future. The type goes into the message and the stack into
+                // the log; Errors are deliberately not caught — a broken VM must surface,
+                // never masquerade as a failed issuance.
+                LOGGER.log(System.Logger.Level.WARNING,
+                        "banknote mint threw: player={0}, currency={1}, amount={2}, type={3}",
+                        new Object[] { id, currency.id(), a, mintThrew.getClass().getName() });
+                return compensateFailedMint(id, currency.id(), a,
+                        "banknote mint failed: " + mintThrew.getClass().getSimpleName());
+            }
+            if (note == null) {
+                // The deduction committed but the item could not be materialised: compensate on
+                // the same IO executor so the account is never charged without a note. A failed
+                // refund is logged at SEVERE, never swallowed.
+                return compensateFailedMint(id, currency.id(), a, "banknote could not be created");
+            }
+            return EconomyResult.success(new MintedNote(
+                    new CommandModels.WithdrawReceipt(claim.nonce(), id.toString(), currency.id(), a.value()),
+                    note, id, currency.id(), a, result.auditFailure().orElse(null)));
+        }
+
+        /**
+         * Hand the minted note over on the player's region thread and complete only after the
+         * outcome is known, so the command reply reflects the delivery. Any path that leaves the
+         * note undelivered after the deduction refunds the amount and completes with a typed
+         * failure; the reply future never stays pending.
+         *
+         * <p>Settlement fence: the region callback and the bounded wait race for one one-shot
+         * claim. Exactly one of them settles the delivery — the callback hands over the note,
+         * or the watchdog refunds; the loser is a no-op. A retired task that finally runs after
+         * the timeout can therefore neither deliver the note (which would pay the player twice:
+         * refund plus item) nor trigger a second refund.
+         */
+        private CompletableFuture<EconomyResult<CommandModels.WithdrawReceipt>> deliver(UUID playerId, MintedNote minted) {
+            CompletableFuture<EconomyResult<CommandModels.WithdrawReceipt>> done = new CompletableFuture<>();
+            AtomicBoolean settled = new AtomicBoolean(false);
+            boolean dispatched = folia.runForPlayer(playerId, player -> {
+                if (!settled.compareAndSet(false, true)) {
+                    // The bounded wait already refunded and failed the reply; delivering the
+                    // note now would leave the player compensated and paid at the same time.
+                    return;
+                }
+                try {
+                    if (player.getInventory().firstEmpty() == -1) {
+                        // Filled between the pre-check and this dispatch: fail closed with
+                        // compensation instead of forcing a paid note into a full inventory.
+                        refundAndFail(minted, EconomyError.INVENTORY_FULL, "inventory full", done);
+                        return;
+                    }
+                    player.getInventory().addItem(minted.note());
+                    done.complete(EconomyResult.success(minted.receipt(), minted.auditError()));
+                } catch (Throwable t) {
+                    // A throw inside the region context must not leave the reply pending or the
+                    // charge uncompensated; the note's placement is unknown, so refund. The
+                    // stack is logged for diagnosis; the typed failure carries only the class.
+                    LOGGER.log(System.Logger.Level.WARNING,
+                            "banknote delivery failed: player=" + playerId, t);
+                    refundAndFail(minted, EconomyError.TRANSACTION_CANCELLED,
+                            "banknote delivery failed: " + t.getClass().getSimpleName(), done);
+                }
+            });
+            if (!dispatched) {
+                refundAndFail(minted, EconomyError.TRANSACTION_CANCELLED,
+                        "player left before the banknote could be delivered", done);
+                return done;
+            }
+            dispatchWatchdogs.schedule(() -> {
+                // Accepted but never executed (player left, Folia retired the task): refund
+                // the committed deduction so no charge is left without a note. If the region
+                // callback already settled the delivery this claim loses and does nothing.
+                if (settled.compareAndSet(false, true)) {
+                    refundAndFail(minted, EconomyError.TRANSACTION_CANCELLED,
+                            "banknote delivery timed out before the region task ran", done);
+                }
+            }, dispatchTimeout.toMillis(), TimeUnit.MILLISECONDS);
+            return done;
+        }
+
+        /**
+         * Compensate a committed deduction whose note was not handed over, then complete the
+         * caller's future with the typed failure. The refund runs on the IO executor; its own
+         * failure is logged at SEVERE with enough context for manual reconciliation — it is
+         * surfaced, never swallowed.
+         */
+        private void refundAndFail(MintedNote minted, EconomyError error, String message,
+                                   CompletableFuture<EconomyResult<CommandModels.WithdrawReceipt>> done) {
+            CompletableFuture.supplyAsync(
+                            () -> api.deposit(minted.playerId(), minted.currencyId(), minted.amount()), executor)
+                    .whenComplete((refund, failure) -> {
+                        if (failure != null || refund == null || refund.isFailure()) {
+                            LOGGER.log(System.Logger.Level.ERROR,
+                                    "withdraw compensation failed: player={0}, currency={1}, amount={2}, nonce={3}, reason={4}",
+                                    new Object[] { minted.playerId(), minted.currencyId(), minted.amount(),
+                                            minted.receipt().noteId(),
+                                            failure == null ? (refund == null ? "no result" : refund.message())
+                                                    : failure.getClass().getSimpleName() });
+                        }
+                        done.complete(EconomyResult.failure(error, message));
+                    });
         }
     }
 
@@ -259,6 +468,15 @@ final class ProductionAdapters {
      * open whose layout read raced a reload is rejected instead of building an
      * old-version session the invalidation snapshot already missed; it retries
      * once from the fresh layout so the player still gets the current GUI.
+     *
+     * <p>Click protection split: consumer action slots are guarded by the
+     * consumer click listener (which cancels every bank top click and dispatches
+     * only configured actions), never by AceLib. The AceLib protected set passed
+     * here therefore stays empty: registering an action slot as AceLib-protected
+     * would make {@code validateClick} reject the click before any business logic
+     * runs. After a successful open the configured buttons are painted through
+     * the generation-bound async-update render; the open inventory would otherwise
+     * stay empty because AceLib only creates the shell.
      */
     static final class Bank implements BankCommandService {
         private final V2BankGuiSession gui;
@@ -302,17 +520,27 @@ final class ProductionAdapters {
             if (player != null) {
                 String title = messages.plainMessage(layout.titleKey(), java.util.Map.of());
                 V2BankGuiSession.OpenOutcome outcome =
-                        gui.open(player, title, layout.size(), layout.protectedSlots(), expected);
+                        gui.open(player, title, layout.size(), java.util.Set.of(), expected);
                 boolean stale = outcome != null && !outcome.success()
                         && "stale-layout".equals(outcome.errorCode());
                 if (!isRetry && stale) {
                     openOnce(id, true);
+                    return;
+                }
+                // Paint the configured buttons into the freshly opened shell. The
+                // render re-validates the generation on both begin and apply and
+                // only binds the view tag after every planned button was written,
+                // so a failed paint reports render.failed and leaves the shell
+                // inoperable instead of reporting success with an empty GUI.
+                if (outcome != null && outcome.success() && outcome.session() != null) {
+                    gui.renderLayout(id, outcome.session().generation(), layout, messages);
                 }
             }
         }
     }
 
     static final class BankUseCase implements BankGuiUseCase {
+        private static final System.Logger LOGGER = System.getLogger(ProductionAdapters.class.getName());
         private final EconomyApi api; private final EconomyService economy; private final CurrencyRegistry currencies;
         private final BanknoteFactory banknotes; private final BanknoteValidator validator;
         private final AtomicRedemptionStore redemptions;
@@ -335,10 +563,53 @@ final class ProductionAdapters {
             Currency c = currencyId == null || currencyId.isBlank()
                     ? currencies.get(currencies.defaultCurrencyId())
                     : currencies.get(currencyId);
-            EconomyResult<Amount> result = api.withdraw(id, c.id(), Amount.of(value, c.scale()));
+            Amount amount = Amount.of(value, c.scale());
+            EconomyResult<Amount> result = api.withdraw(id, c.id(), amount);
             if (result.isFailure()) return WithdrawResult.rejected(result.message());
+            // Keep the requested amount: a successful withdrawal resolves to the AFTER
+            // balance (before − amount), which must never be mistaken for the refund.
             BanknoteClaim claim = claim(id, c, value);
-            return banknotes.mint(claim).map(WithdrawResult::success).orElseGet(() -> WithdrawResult.rejected("banknote could not be created"));
+            ItemStack note;
+            try {
+                note = banknotes.mint(claim).orElse(null);
+            } catch (RuntimeException mintThrew) {
+                // A throwing mint is the same money-safety hole as an empty one: the
+                // deduction has already committed, so the account must be compensated
+                // exactly once and the reply must stay a typed rejection. Errors are
+                // deliberately not caught — a broken VM must surface, never masquerade
+                // as a failed issuance.
+                LOGGER.log(System.Logger.Level.WARNING,
+                        "banknote mint threw: player={0}, currency={1}, amount={2}, type={3}",
+                        new Object[] { id, c.id(), amount, mintThrew.getClass().getName() });
+                return refundAndReject(id, c.id(), amount,
+                        "banknote mint failed: " + mintThrew.getClass().getSimpleName());
+            }
+            if (note == null) {
+                // The deduction committed but the item could not be materialised: compensate
+                // exactly once with the amount that actually left the account, in the same
+                // currency — the same money-safety rule the command path applies. A failed
+                // refund is logged at ERROR and stays observable; it is never retried here,
+                // so a refund outage can neither silently lose the money nor double-refund.
+                return refundAndReject(id, c.id(), amount, "banknote could not be created");
+            }
+            return WithdrawResult.success(note);
+        }
+
+        /**
+         * Compensate a committed deduction after a mint failure, then close the withdraw
+         * with a typed rejection. The refund carries the withdrawn amount (never the
+         * after-balance a withdrawal result resolves to), runs at most once and is never
+         * retried; a refund outage is logged at ERROR with full context so it stays
+         * observable for manual reconciliation instead of silently losing the money.
+         */
+        private WithdrawResult refundAndReject(UUID id, String currencyId, Amount withdrawn, String reason) {
+            EconomyResult<Amount> refund = api.deposit(id, currencyId, withdrawn);
+            if (refund.isFailure()) {
+                LOGGER.log(System.Logger.Level.ERROR,
+                        "gui withdraw compensation failed: player={0}, currency={1}, amount={2}, reason={3}",
+                        new Object[] { id, currencyId, withdrawn, refund.message() });
+            }
+            return WithdrawResult.rejected(reason);
         }
 
         /**

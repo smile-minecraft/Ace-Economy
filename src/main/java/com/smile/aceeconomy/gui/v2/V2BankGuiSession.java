@@ -11,9 +11,11 @@ import com.smile.aceeconomy.ports.FoliaContextExecutor;
 import com.smile.aceeconomy.ports.WithdrawResult;
 
 import org.bukkit.entity.Player;
+import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
 import org.jetbrains.annotations.NotNull;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -59,6 +61,45 @@ public final class V2BankGuiSession {
     // two still sees the previous tag while sessions already holds the new
     // session, and trusting the generation alone would let the candidate live on.
     private final Map<UUID, SessionTag> sessionLayoutGenerations = new ConcurrentHashMap<>();
+    // Generation-bound view identity: the actual top inventory object the
+    // player-region render painted into, stapled to the backend session
+    // generation it was painted for. The consumer listener only treats an event
+    // as a bank event when the event's top inventory is this exact object, so a
+    // same-title/same-size inventory from another plugin can never dispatch.
+    // Bound inside the AceLib async-update renderer (which re-validates the
+    // session, the request and the open-inventory link first), never at open
+    // time, when the shell is not open yet and the calling thread may be off
+    // the player region.
+    private final Map<UUID, ViewTag> viewTags = new ConcurrentHashMap<>();
+    // Failed-view guard: the exact top inventory object a render painted into
+    // before failing, stapled to the backend session generation it was painted
+    // for. A partial/empty shell stays open on the player side, so the
+    // consumer listener cancels every top click, shift-click into it and drag
+    // touching it until the view closes — never dispatching bank business.
+    // Bound when the player-region paint reports incomplete (or throws), never
+    // at open time; identity ({@code ==}) plus generation is the ownership
+    // proof, so a same-title/same-size foreign inventory is never matched.
+    private final Map<UUID, ViewTag> failedViews = new ConcurrentHashMap<>();
+    // Pending-view guard: the exact top inventory captured on the player region
+    // while an accepted async render is still queued, stapled to the backend
+    // session generation it was captured for. The consumer listener cancels
+    // every top click, shift-click into it and drag touching it until the
+    // paint converts it into a bound view (or a failed guard), never
+    // dispatching bank business. Bound through the player-region capture
+    // below and refreshed at renderer start, never at open time; identity
+    // ({@code ==}) plus generation is the ownership proof, so a
+    // same-title/same-size foreign inventory is never matched.
+    private final Map<UUID, ViewTag> pendingViews = new ConcurrentHashMap<>();
+    // Pending-render intent: a generation with an accepted render whose
+    // player-region capture has not run yet (or whose paint is still
+    // queued). Published synchronously on the calling thread before the
+    // chained region task is dispatched, so the consumer listener can
+    // fail-closed the shell even before the exact pending guard exists.
+    // Honoured only together with the active backend generation plus the
+    // existing size/title sanity, and cleared when the paint converts to
+    // bound/failed or when the generation closes/is invalidated. Never read
+    // from Bukkit; never dispatched.
+    private final Map<UUID, Long> pendingIntents = new ConcurrentHashMap<>();
     // Per-player publish fence: the three bookkeeping puts of an open and the
     // per-key removals of a rollback/invalidation for the same player meet
     // here. Fixed stripes bound memory under UUID churn: the same player
@@ -89,6 +130,18 @@ public final class V2BankGuiSession {
     static final record SessionTag(long layoutGeneration, GuiSession owner) {
         SessionTag {
             Objects.requireNonNull(owner, "owner");
+        }
+    }
+
+    /**
+     * The top inventory object a backend session generation was painted into.
+     * Identity ({@code ==}) is the ownership proof the consumer listener checks;
+     * the generation staples the tag to one backend session so a stale close can
+     * never clean up a newer reopen that rebound the tag afterwards.
+     */
+    static final record ViewTag(long generation, Inventory top) {
+        ViewTag {
+            Objects.requireNonNull(top, "top");
         }
     }
 
@@ -213,6 +266,17 @@ public final class V2BankGuiSession {
             }
             return current;
         });
+        if (staleSession != null) {
+            long staleGeneration = staleSession.generation();
+            viewTags.computeIfPresent(playerUuid, (key, tag) ->
+                    tag.generation() <= staleGeneration ? null : tag);
+            failedViews.computeIfPresent(playerUuid, (key, tag) ->
+                    tag.generation() <= staleGeneration ? null : tag);
+            pendingViews.computeIfPresent(playerUuid, (key, tag) ->
+                    tag.generation() <= staleGeneration ? null : tag);
+            pendingIntents.computeIfPresent(playerUuid, (key, intent) ->
+                    intent <= staleGeneration ? null : intent);
+        }
         if (!sessions.containsKey(playerUuid)) {
             sessionLayoutGenerations.remove(playerUuid);
             players.remove(playerUuid);
@@ -483,6 +547,723 @@ public final class V2BankGuiSession {
         return RefreshOutcome.success();
     }
 
+    /**
+     * Resolve the configured action for a top-inventory slot without touching the business
+     * layer. The consumer click listener uses this to decide whether a cancelled bank click
+     * carries an action worth dispatching; the dispatch itself re-resolves inside
+     * {@link #handleClickAsync} on the authoritative path, so a layout swap in between can
+     * only turn an action into a no-op, never into a wrong action.
+     */
+    public @NotNull BankGuiAction actionForSlot(int slot) {
+        BankGuiAction action = actionResolver.apply(slot);
+        return action == null ? BankGuiAction.none() : action;
+    }
+
+    /**
+     * Render the configured button items into the player's open bank view through the
+     * generation-bound async-update path. Item creation and inventory writes happen inside
+     * the AceLib renderer, which runs on the player's region thread, so the caller's thread
+     * never touches Bukkit. A stale generation rejects before the renderer runs.
+     *
+      * <p>A render only counts as success when every planned action button was written:
+      * the generation-bound view tag is created after the complete paint, never before.
+      * A partial paint, a renderer exception, or a missing/mismatched view reports
+      * {@code render.failed} (synchronously when the backend runs the renderer inline)
+      * without binding an operable tag; instead the exact failed shell is bound as a
+      * failed view, so the consumer listener cancels every top click, shift-click
+      * into it and drag touching it until the view closes. The backend session is
+      * left for the normal close / reload path; a deferred async paint that later
+      * fails binds its failed guard the same way even though this call already returned.
+      *
+      * <p>An accepted render guards the shell in two stages. First, a
+      * pending-render intent for this generation is published synchronously
+      * before anything is dispatched: until the paint converts it into a
+      * bound view (or a failed guard), the consumer listener cancels every
+      * top click, shift-click into the shell and drag touching it for the
+      * active generation that still passes the size/title sanity — never
+      * dispatching bank business. This closes the window where the capture
+      * has not run yet and no exact guard exists.
+      *
+      * <p>Second, one chained player-region task runs the exact capture and
+      * then the apply, in that order, on the region thread (via the
+      * {@link FoliaContextExecutor} seam, never a raw Bukkit read): the
+      * capture binds the exact open top inventory as the pending view for
+      * this generation, and only afterwards is the paint queued. The paint
+      * itself refreshes the same guard from its link-verified top before
+      * writing. A newer reopen (larger generation, rebound tag) is never
+      * shadowed.
+      *
+      * <p>A rejected capture dispatch, a thrown apply, or a rejected apply
+      * never clears the guards to fail-open: the call reports
+      * {@code render.failed} (or the apply error) while the intent — and any
+      * exact pending guard the capture already bound — stays until the paint
+      * converts it, or until close/reload/a newer reopen cleans it up.
+      *
+      * <p>Narrow trade-off while only the intent (not yet the exact guard)
+      * is active: a same-title/same-size inventory from another plugin is a
+      * different object the intent cannot tell apart, so its risky clicks
+      * are cancelled too until the capture pins the exact shell. Plain
+      * bottom-inventory clicks still pass through; live-server ordering of
+      * this window needs a human Folia/client check.
+      *
+      * @param renderer item construction seam; production callers use
+      *                 {@link BankGuiRenderer#production()}
+      */
+    public @NotNull RefreshOutcome renderLayout(@NotNull UUID playerUuid, long generation,
+                                                @NotNull com.smile.aceeconomy.infrastructure.acelib.BankGuiLayout layout,
+                                                @NotNull com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter messages,
+                                                @NotNull BankGuiRenderer renderer) {
+        Objects.requireNonNull(layout, "layout");
+        Objects.requireNonNull(messages, "messages");
+        Objects.requireNonNull(renderer, "renderer");
+        GuiResult begin;
+        try {
+            begin = guiService.beginAsyncUpdate(playerUuid, generation, 0);
+        } catch (Throwable t) {
+            // The async update never began, so no paint may enqueue. Publish the
+            // memory-only intent only when this render still owns the active
+            // backend generation, so the freshly opened shell stays fail-closed
+            // until close or a newer reopen.
+            publishBeginFailureIntent(playerUuid, generation);
+            return RefreshOutcome.rejected("render.failed");
+        }
+        if (begin == null || !begin.isSuccess() || begin.asyncRequest() == null) {
+            // Same fail-closed publish: the shell is already open on the player
+            // side while no exact guard exists yet, so the consumer listener
+            // must keep cancelling dangerous clicks and drags for it.
+            publishBeginFailureIntent(playerUuid, generation);
+            String errorCode;
+            try {
+                errorCode = begin == null ? "render.failed" : begin.errorCode();
+            } catch (Throwable t) {
+                errorCode = "render.failed";
+            }
+            return RefreshOutcome.rejected(errorCode);
+        }
+        Player player;
+        try {
+            player = players.get(playerUuid);
+        } catch (Throwable t) {
+            return RefreshOutcome.rejected("render.failed");
+        }
+        if (player == null) {
+            return RefreshOutcome.rejected("render.failed");
+        }
+        // Fail-closed first: publish the intent before dispatching anything,
+        // so the shell is guarded even while the region capture is queued.
+        publishPendingIntent(playerUuid, generation);
+        // Single content page; the actual inventory writes happen in the renderer below,
+        // which AceLib runs on the player's region thread only after re-validating the
+        // session, the request and the open inventory binding.
+        GuiPage<ItemStack> page = GuiPage.content(0, 1, List.of());
+        java.util.concurrent.atomic.AtomicReference<Boolean> painted =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<Throwable> paintFailure =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<GuiResult> applyResult =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        try {
+            // One chained region task: capture first, then apply. The apply is
+            // never enqueued before the capture ran, so no unguarded window
+            // remains between them. Every Bukkit read stays inside this task.
+            folia.runForPlayer(player, () -> {
+                capturePendingViewOnRegion(playerUuid, generation, layout);
+                GuiResult apply;
+                try {
+                    apply = guiService.applyAsyncUpdate(begin.asyncRequest(), page,
+                            () -> {
+                                try {
+                                    boolean ok = paintLayout(playerUuid, generation, layout, messages, renderer);
+                                    painted.set(ok);
+                                    if (!ok) {
+                                        failIncompleteRender(playerUuid, generation, currentTop(playerUuid));
+                                    }
+                                } catch (Throwable t) {
+                                    paintFailure.set(t);
+                                    failIncompleteRender(playerUuid, generation, currentTop(playerUuid));
+                                    throw t;
+                                }
+                            });
+                } catch (Throwable t) {
+                    // The paint never queued: keep the intent (and any exact
+                    // guard the capture already bound) fail-closed instead of
+                    // clearing the only safe state. The outcome below reports
+                    // the failure; close/reload/newer reopen converges it.
+                    if (paintFailure.get() == null) {
+                        paintFailure.set(t);
+                    }
+                    return;
+                }
+                applyResult.set(apply);
+                // A rejected apply likewise keeps the guards: the shell is
+                // still open on this generation until close/reload/newer.
+            });
+        } catch (Throwable t) {
+            // The region dispatch itself was rejected: the chained task never
+            // ran, so the intent published above stays fail-closed until
+            // close/reload/newer reopen. Report the failure, never success.
+            if (paintFailure.get() != null) {
+                return RefreshOutcome.rejected("render.failed");
+            }
+            GuiResult apply = applyResult.get();
+            if (apply != null && !apply.isSuccess() && !apply.isAccepted()) {
+                return RefreshOutcome.rejected(apply.errorCode());
+            }
+            return RefreshOutcome.rejected("render.failed");
+        }
+        if (paintFailure.get() != null) {
+            return RefreshOutcome.rejected("render.failed");
+        }
+        if (Boolean.FALSE.equals(painted.get())) {
+            return RefreshOutcome.rejected("render.failed");
+        }
+        GuiResult apply = applyResult.get();
+        if (apply != null && !apply.isSuccess() && !apply.isAccepted()) {
+            return RefreshOutcome.rejected(apply.errorCode());
+        }
+        return RefreshOutcome.success();
+    }
+
+    /**
+     * Drop the view tag for a paint that did not complete, and bind the exact
+     * failed shell so the consumer listener keeps it inoperable until close.
+     * The backend session is deliberately left alone: a missing view can be
+     * transient (or an offline test mock without an open inventory), and the
+     * normal close / reload path owns the session lifecycle. A newer reopen
+     * (larger generation, rebound tag) is never touched: the failed bind is
+     * skipped when a newer session or tag already exists. Never throws.
+     *
+     * @param failedTop the top inventory the failed paint ran against, or
+     *                  {@code null} when it was never resolved (no shell to guard)
+     */
+    private void failIncompleteRender(UUID playerUuid, long generation, Inventory failedTop) {
+        try {
+            synchronized (guardFor(playerUuid)) {
+                // Drop the failed generation's tag plus any older orphan it
+                // superseded; a newer reopen carries a larger generation and stays.
+                // The pending guard for the same generation converts into the
+                // failed guard below (or is dropped when there is no shell).
+                viewTags.computeIfPresent(playerUuid, (key, tag) ->
+                        tag.generation() <= generation ? null : tag);
+                pendingViews.computeIfPresent(playerUuid, (key, tag) ->
+                        tag.generation() <= generation ? null : tag);
+                recordFailedViewLocked(playerUuid, generation, failedTop);
+            }
+        } catch (Throwable ignored) {
+            // Cleanup is best-effort; the missing view tag already keeps clicks safe.
+        }
+    }
+
+    /**
+     * Publish the pending-render intent for a generation whose async update
+     * already began. Runs on the calling thread and touches no Bukkit state:
+     * it only records that an accepted render is in flight, so the consumer
+     * listener can fail-closed the shell before the region capture pins the
+     * exact inventory. Skips stale renders (the backend no longer carries
+     * this generation) and never shadows a newer intent. Never throws.
+     */
+    private void publishPendingIntent(UUID playerUuid, long generation) {
+        try {
+            synchronized (guardFor(playerUuid)) {
+                try {
+                    GuiResult active = guiService.getActiveSession(playerUuid);
+                    if (active == null || !active.isSuccess() || active.session() == null) {
+                        return;
+                    }
+                    if (active.session().generation() != generation) {
+                        return;
+                    }
+                } catch (Throwable t) {
+                    // Backend unreadable: publish fail-closed; close converges it.
+                }
+                GuiSession current = sessions.get(playerUuid);
+                if (current != null && current.generation() > generation) {
+                    return;
+                }
+                Long existing = pendingIntents.get(playerUuid);
+                if (existing != null && existing > generation) {
+                    return;
+                }
+                pendingIntents.put(playerUuid, generation);
+            }
+        } catch (Throwable ignored) {
+            // Without the intent the exact capture still guards once it runs.
+        }
+    }
+
+    /**
+     * Fail-closed publish for a render whose async begin was rejected or threw.
+     * Binds the memory-only pending intent only when the requested generation
+     * still owns the active backend session: a stale failure racing a newer
+     * reopen must invent nothing, and a failure with no active session guards
+     * no shell, so nothing is published and no fake state is invented. Touches
+     * no Bukkit state. Never throws.
+     */
+    private void publishBeginFailureIntent(UUID playerUuid, long requestedGeneration) {
+        try {
+            long activeGeneration;
+            try {
+                GuiResult active = guiService.getActiveSession(playerUuid);
+                if (active == null || !active.isSuccess() || active.session() == null) {
+                    return;
+                }
+                activeGeneration = active.session().generation();
+            } catch (Throwable t) {
+                return;
+            }
+            if (activeGeneration != requestedGeneration) {
+                return;
+            }
+            publishPendingIntent(playerUuid, activeGeneration);
+        } catch (Throwable ignored) {
+            // Without the intent the shell keeps its previous guards; close converges it.
+        }
+    }
+
+    /**
+     * Whether a pending-render intent is active for this generation. The
+     * consumer listener honours it only together with the active backend
+     * session and the size/title sanity it already checked, so it can never
+     * reach beyond the player's own bank-sized view.
+     */
+    boolean hasPendingIntent(UUID playerUuid, long generation) {
+        if (playerUuid == null) {
+            return false;
+        }
+        try {
+            Long intent = pendingIntents.get(playerUuid);
+            return intent != null && intent == generation;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
+     * Clear the intent for a paint that converted it into a bound or failed
+     * guard. A newer intent (larger generation) is never touched. Callers
+     * must hold {@code guardFor(playerUuid)}.
+     */
+    private void clearPendingIntentAtOrBelowLocked(UUID playerUuid, long generation) {
+        try {
+            pendingIntents.computeIfPresent(playerUuid, (key, intent) ->
+                    intent <= generation ? null : intent);
+        } catch (Throwable ignored) {
+            // Cleanup is best-effort.
+        }
+    }
+
+    /**
+     * Bind the currently open top inventory as the pending view for this
+     * generation. Runs on the player region thread only. The size/title
+     * sanity keeps a foreign or not-yet-opened view from being claimed: only
+     * a top matching the active session's size and title is bound, and the
+     * stale-safe bind below never shadows a newer reopen. Never throws.
+     */
+    private void capturePendingViewOnRegion(UUID playerUuid, long generation,
+                                            com.smile.aceeconomy.infrastructure.acelib.BankGuiLayout layout) {
+        Player player;
+        try {
+            player = players.get(playerUuid);
+        } catch (Throwable t) {
+            return;
+        }
+        if (player == null) {
+            return;
+        }
+        Inventory top;
+        String viewTitle;
+        try {
+            top = player.getOpenInventory().getTopInventory();
+            viewTitle = player.getOpenInventory().getTitle();
+        } catch (Throwable t) {
+            return;
+        }
+        if (top == null) {
+            return;
+        }
+        int topSize;
+        try {
+            topSize = top.getSize();
+        } catch (Throwable t) {
+            return;
+        }
+        if (layout != null && topSize != layout.size()) {
+            return;
+        }
+        try {
+            GuiResult active = guiService.getActiveSession(playerUuid);
+            if (active == null || !active.isSuccess() || active.session() == null) {
+                return;
+            }
+            if (active.session().generation() != generation) {
+                return;
+            }
+            if (active.session().size() != topSize) {
+                return;
+            }
+            if (viewTitle == null || !viewTitle.equals(active.session().title())) {
+                return;
+            }
+        } catch (Throwable t) {
+            return;
+        }
+        bindPendingView(playerUuid, generation, top);
+    }
+
+    /**
+     * Bind a pending shell under the per-key fence. Skips stale captures: a
+     * newer session, a newer bound/failed tag, or an already-operable view
+     * for this generation means a reopen or a completed paint already owns
+     * the player, so the stale capture must not shadow it. Never throws.
+     */
+    private void bindPendingView(UUID playerUuid, long generation, Inventory top) {
+        try {
+            synchronized (guardFor(playerUuid)) {
+                bindPendingViewLocked(playerUuid, generation, top);
+            }
+        } catch (Throwable ignored) {
+            // Best-effort guard; the pending intent still fail-closes until paint.
+        }
+    }
+
+    /**
+     * Stale-safe pending bind. Callers must hold {@code guardFor(playerUuid)}.
+     */
+    private void bindPendingViewLocked(UUID playerUuid, long generation, Inventory top) {
+        if (playerUuid == null || top == null) {
+            return;
+        }
+        try {
+            if (!sessions.containsKey(playerUuid)) {
+                return;
+            }
+            GuiSession current = sessions.get(playerUuid);
+            if (current != null && current.generation() > generation) {
+                return;
+            }
+            ViewTag bound = viewTags.get(playerUuid);
+            if (bound != null && bound.generation() >= generation) {
+                return;
+            }
+            ViewTag failed = failedViews.get(playerUuid);
+            if (failed != null && failed.generation() >= generation) {
+                return;
+            }
+            ViewTag pending = pendingViews.get(playerUuid);
+            if (pending != null && pending.generation() > generation) {
+                return;
+            }
+            pendingViews.put(playerUuid, new ViewTag(generation, top));
+        } catch (Throwable ignored) {
+            // Best-effort guard; the pending intent still fail-closes until paint.
+        }
+    }
+
+    /**
+     * Convert the intent into the exact failed guard (or drop it when there
+     * is no shell to guard). Callers must hold {@code guardFor(playerUuid)}.
+     * A newer intent (larger generation) is never touched.
+     */
+    private void recordFailedViewLocked(UUID playerUuid, long generation, Inventory failedTop) {
+        if (playerUuid == null || failedTop == null) {
+            return;
+        }
+        try {
+            if (!sessions.containsKey(playerUuid)) {
+                return;
+            }
+            GuiSession current = sessions.get(playerUuid);
+            if (current != null && current.generation() > generation) {
+                return;
+            }
+            ViewTag bound = viewTags.get(playerUuid);
+            if (bound != null && bound.generation() > generation) {
+                return;
+            }
+            ViewTag existing = failedViews.get(playerUuid);
+            if (existing != null && existing.generation() > generation) {
+                return;
+            }
+            failedViews.put(playerUuid, new ViewTag(generation, failedTop));
+            // The failed guard supersedes the pending one for this generation
+            // and any older orphan it replaced; a newer pending reopen stays.
+            // The converted intent goes with it; a newer intent stays.
+            pendingViews.computeIfPresent(playerUuid, (key, tag) ->
+                    tag.generation() <= generation ? null : tag);
+            clearPendingIntentAtOrBelowLocked(playerUuid, generation);
+        } catch (Throwable ignored) {
+            // Best-effort guard; the dropped view tag already keeps clicks safe.
+        }
+    }
+
+    /** Best-effort read of the currently open top inventory; {@code null} when unknown. */
+    private Inventory currentTop(UUID playerUuid) {
+        try {
+            Player player = players.get(playerUuid);
+            if (player == null) {
+                return null;
+            }
+            return player.getOpenInventory().getTopInventory();
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /**
+     * Paint the configured buttons into the player's currently open top inventory. Runs on
+     * the player region thread (called from the AceLib async-update renderer).
+     *
+      * <p>The generation-bound view tag is created only after every planned action button
+      * was written. A missing player, a replaced view, or any per-slot failure binds the
+      * exact failed shell as a failed-view guard instead, so the consumer listener
+      * cancels every interaction with the blank or partial GUI without dispatching.
+      * Expected per-slot problems are reported as {@code false};
+      * VM/Bukkit fatal errors ({@link Error}) propagate instead of counting as success.
+     *
+     * @return true when the full paint completed and the view tag was bound
+     */
+    private boolean paintLayout(UUID playerUuid, long generation,
+                             com.smile.aceeconomy.infrastructure.acelib.BankGuiLayout layout,
+                             com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter messages,
+                             BankGuiRenderer renderer) {
+        Player player = players.get(playerUuid);
+        if (player == null) {
+            return false;
+        }
+        org.bukkit.inventory.Inventory top;
+        try {
+            top = player.getOpenInventory().getTopInventory();
+        } catch (Exception e) {
+            return false;
+        }
+        if (top == null) {
+            return false;
+        }
+        int topSize;
+        try {
+            topSize = top.getSize();
+        } catch (Exception e) {
+            return false;
+        }
+        if (topSize != layout.size()) {
+            bindFailedView(playerUuid, generation, top);
+            return false;
+        }
+        // The renderer runs on the player region after AceLib re-validated the
+        // session, the request and the open-inventory link, so this top is the
+        // linked shell: refresh the pending guard from it before painting, in
+        // case the pre-apply capture saw a stale or not-yet-opened view.
+        bindPendingView(playerUuid, generation, top);
+        Map<Integer, com.smile.aceeconomy.infrastructure.acelib.BankGuiLayout.SlotConfig> planned;
+        try {
+            planned = renderer.plan(layout);
+        } catch (Throwable t) {
+            bindFailedView(playerUuid, generation, top);
+            if (t instanceof Error error) {
+                throw error;
+            }
+            return false;
+        }
+        Set<Integer> written;
+        try {
+            written = renderer.renderInto(top, layout, messages);
+        } catch (Throwable t) {
+            bindFailedView(playerUuid, generation, top);
+            if (t instanceof Error error) {
+                throw error;
+            }
+            return false;
+        }
+        if (written == null || !written.containsAll(planned.keySet())) {
+            bindFailedView(playerUuid, generation, top);
+            return false;
+        }
+        bindBoundView(playerUuid, generation, top);
+        return true;
+    }
+
+    /**
+     * Record a failed shell for a paint that ran against a known top
+     * inventory. Stale-safe through {@link #recordFailedViewLocked}: a newer
+     * reopen is never shadowed. Never throws.
+     */
+    private void bindFailedView(UUID playerUuid, long generation, Inventory top) {
+        try {
+            synchronized (guardFor(playerUuid)) {
+                recordFailedViewLocked(playerUuid, generation, top);
+            }
+        } catch (Throwable ignored) {
+            // Best-effort guard; the dropped view tag already keeps clicks safe.
+        }
+    }
+
+    /**
+     * Bind a fully painted view and drop any failed guard at or below the
+     * painted generation. The pending guard for the painted generation
+     * converts into the bound view the same way. A stale paint for an older
+     * generation never binds:
+     * the current session or an existing newer tag proves a reopen already
+     * owns the player. Never throws.
+     */
+    private void bindBoundView(UUID playerUuid, long generation, Inventory top) {
+        try {
+            synchronized (guardFor(playerUuid)) {
+                GuiSession current = sessions.get(playerUuid);
+                if (current != null && current.generation() > generation) {
+                    return;
+                }
+                ViewTag bound = viewTags.get(playerUuid);
+                if (bound != null && bound.generation() > generation) {
+                    return;
+                }
+                viewTags.put(playerUuid, new ViewTag(generation, top));
+                failedViews.computeIfPresent(playerUuid, (key, tag) ->
+                        tag.generation() <= generation ? null : tag);
+                pendingViews.computeIfPresent(playerUuid, (key, tag) ->
+                        tag.generation() <= generation ? null : tag);
+                clearPendingIntentAtOrBelowLocked(playerUuid, generation);
+            }
+        } catch (Throwable ignored) {
+            // Binding is best-effort; without the tag the shell stays inoperable.
+        }
+    }
+
+    /**
+     * Whether an exact pending or failed guard is bound for this generation
+     * (any inventory object). While one exists, the exact mechanism owns the
+     * decision: the matching shell is cancelled by identity, and any other
+     * object — including a same-title/same-size foreign inventory — passes
+     * through. The intent fallback therefore applies only when no exact guard
+     * exists yet for the generation. Never throws.
+     */
+    boolean hasExactGuard(UUID playerUuid, long generation) {
+        if (playerUuid == null) {
+            return false;
+        }
+        try {
+            ViewTag pending = pendingViews.get(playerUuid);
+            if (pending != null && pending.generation() == generation) {
+                return true;
+            }
+            ViewTag failed = failedViews.get(playerUuid);
+            return failed != null && failed.generation() == generation;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
+     * Ownership proof for a pending shell: the event's top inventory must be
+     * the exact object captured on the player region for the same backend
+     * session generation. A same-title/same-size inventory from another
+     * plugin is a different object and is rejected here, before any cancel.
+     */
+    boolean isPendingView(UUID playerUuid, long generation, Inventory top) {
+        if (playerUuid == null || top == null) {
+            return false;
+        }
+        try {
+            ViewTag tag = pendingViews.get(playerUuid);
+            return tag != null && tag.generation() == generation && tag.top() == top;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
+     * Ownership proof for consumer events: the event's top inventory must be the exact
+     * object the player-region render bound to this backend session generation. A
+     * same-title/same-size inventory from another plugin is a different object and is
+     * rejected here, before any cancel or dispatch.
+     */
+    boolean isBoundView(UUID playerUuid, long generation, Inventory top) {
+        if (playerUuid == null || top == null) {
+            return false;
+        }
+        try {
+            ViewTag tag = viewTags.get(playerUuid);
+            return tag != null && tag.generation() == generation && tag.top() == top;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
+     * Ownership proof for a failed shell: the event's top inventory must be
+     * the exact object the failed paint ran against, stapled to the same
+     * backend session generation. A same-title/same-size inventory from
+     * another plugin is a different object and is rejected here, before any
+     * cancel.
+     */
+    boolean isFailedView(UUID playerUuid, long generation, Inventory top) {
+        if (playerUuid == null || top == null) {
+            return false;
+        }
+        try {
+            ViewTag tag = failedViews.get(playerUuid);
+            return tag != null && tag.generation() == generation && tag.top() == top;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
+     * Fallback close cleanup for a bound, failed or still-pending bank view whose backend session is already gone
+     * (the backend's own close listener ran first on the same event). Only the local
+     * bookkeeping still carrying the closed view's generation is dropped; a newer reopen that
+     * rebound the tag, or any entry with a different generation, is kept.
+     *
+     * @return true when the closing view was the bound, failed or pending bank inventory and its
+     *         generation's local bookkeeping was dropped
+     */
+    boolean discardViewIfBound(UUID playerUuid, Inventory top) {
+        if (playerUuid == null || top == null) {
+            return false;
+        }
+        try {
+            ViewTag tag = viewTags.get(playerUuid);
+            if (tag != null && tag.top() == top) {
+                dropLocalIfGenerationMatches(playerUuid, tag.generation());
+                return true;
+            }
+            ViewTag failed = failedViews.get(playerUuid);
+            if (failed != null && failed.top() == top) {
+                dropLocalIfGenerationMatches(playerUuid, failed.generation());
+                return true;
+            }
+            ViewTag pending = pendingViews.get(playerUuid);
+            if (pending != null && pending.top() == top) {
+                dropLocalIfGenerationMatches(playerUuid, pending.generation());
+                return true;
+            }
+            return false;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** Read-only test seam: whether local session bookkeeping is still tracked. */
+    boolean hasTrackedSession(UUID playerUuid) {
+        if (playerUuid == null) {
+            return false;
+        }
+        try {
+            return sessions.containsKey(playerUuid);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
+     * Render with the production item construction. See
+     * {@link #renderLayout(UUID, long, com.smile.aceeconomy.infrastructure.acelib.BankGuiLayout, com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter, BankGuiRenderer)}.
+     */
+    public @NotNull RefreshOutcome renderLayout(@NotNull UUID playerUuid, long generation,
+                                                @NotNull com.smile.aceeconomy.infrastructure.acelib.BankGuiLayout layout,
+                                                @NotNull com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter messages) {
+        return renderLayout(playerUuid, generation, layout, messages, BankGuiRenderer.production());
+    }
+
     public @NotNull CloseOutcome close(@NotNull UUID playerUuid, long generation) {
         GuiResult result = guiService.closeInventory(playerUuid, generation);
         if (!result.isSuccess()) {
@@ -491,6 +1272,27 @@ public final class V2BankGuiSession {
         // Conditional for the same reason as the stale-open cleanup: a
         // concurrent reopen already replaced the entry with a larger
         // generation, and the unconditional remove would delete it.
+        dropLocalIfGenerationMatches(playerUuid, generation);
+        return CloseOutcome.closed();
+    }
+
+    /**
+     * Best-effort local cleanup for a bank view that closed without going through
+     * {@link #close} (for example the player pressed ESC and the GUI backend already
+     * dropped its own session, so a backend close here would be rejected). Only the
+     * entry still carrying {@code generation} is dropped; a newer reopen is kept.
+     * Never throws.
+     */
+    public void noteViewClosed(@NotNull UUID playerUuid, long generation) {
+        try {
+            dropLocalIfGenerationMatches(playerUuid, generation);
+        } catch (Throwable ignored) {
+            // Local bookkeeping is best-effort; a later click re-validates against
+            // the backend session and is rejected when nothing is open.
+        }
+    }
+
+    private void dropLocalIfGenerationMatches(UUID playerUuid, long generation) {
         synchronized (guardFor(playerUuid)) {
             sessions.computeIfPresent(playerUuid, (key, current) ->
                     current.generation() == generation ? null : current);
@@ -498,8 +1300,20 @@ public final class V2BankGuiSession {
                 sessionLayoutGenerations.remove(playerUuid);
                 players.remove(playerUuid);
             }
+            // The view tag belongs to the dropped generation only; a newer reopen
+            // that rebound the tag carries a larger generation and is kept. The
+            // failed-view and pending-view guards follow the same rule: only the
+            // closed generation's guards are dropped, never a newer one. The
+            // pending intent for the closed generation goes with them.
+            viewTags.computeIfPresent(playerUuid, (key, tag) ->
+                    tag.generation() == generation ? null : tag);
+            failedViews.computeIfPresent(playerUuid, (key, tag) ->
+                    tag.generation() == generation ? null : tag);
+            pendingViews.computeIfPresent(playerUuid, (key, tag) ->
+                    tag.generation() == generation ? null : tag);
+            pendingIntents.computeIfPresent(playerUuid, (key, intent) ->
+                    intent == generation ? null : intent);
         }
-        return CloseOutcome.closed();
     }
 
     public @NotNull Optional<GuiSession> activeSession(@NotNull UUID playerUuid) {
@@ -564,6 +1378,20 @@ public final class V2BankGuiSession {
                         } else {
                             sessionLayoutGenerations.remove(uuid, knownTag);
                         }
+                        // The view tag belongs to the dropped backend session only;
+                        // a concurrent reopen that rebound it carries a larger
+                        // generation and survives the conditional removal. The
+                        // failed-view and pending-view guards for the same
+                        // generation go with it, as does its pending intent.
+                        long droppedGeneration = known.generation();
+                        viewTags.computeIfPresent(uuid, (key, tag) ->
+                                tag.generation() == droppedGeneration ? null : tag);
+                        failedViews.computeIfPresent(uuid, (key, tag) ->
+                                tag.generation() == droppedGeneration ? null : tag);
+                        pendingViews.computeIfPresent(uuid, (key, tag) ->
+                                tag.generation() == droppedGeneration ? null : tag);
+                        pendingIntents.computeIfPresent(uuid, (key, intent) ->
+                                intent == droppedGeneration ? null : intent);
                         dropped++;
                     }
                     if (!sessions.containsKey(uuid)) {
@@ -656,6 +1484,15 @@ public final class V2BankGuiSession {
                     if (!sessions.containsKey(uuid)) {
                         players.remove(uuid);
                     }
+                    long droppedGeneration = known.generation();
+                    viewTags.computeIfPresent(uuid, (key, viewTag) ->
+                            viewTag.generation() == droppedGeneration ? null : viewTag);
+                    failedViews.computeIfPresent(uuid, (key, failedTag) ->
+                            failedTag.generation() == droppedGeneration ? null : failedTag);
+                    pendingViews.computeIfPresent(uuid, (key, pendingTag) ->
+                            pendingTag.generation() == droppedGeneration ? null : pendingTag);
+                    pendingIntents.computeIfPresent(uuid, (key, intent) ->
+                            intent == droppedGeneration ? null : intent);
                     return true;
                 }
                 return false;
@@ -682,6 +1519,34 @@ public final class V2BankGuiSession {
             synchronized (guardFor(key)) {
                 if (!sessions.containsKey(key)) {
                     sessionLayoutGenerations.remove(key);
+                }
+            }
+        }
+        for (UUID key : new java.util.ArrayList<>(viewTags.keySet())) {
+            synchronized (guardFor(key)) {
+                if (!sessions.containsKey(key)) {
+                    viewTags.remove(key);
+                }
+            }
+        }
+        for (UUID key : new java.util.ArrayList<>(failedViews.keySet())) {
+            synchronized (guardFor(key)) {
+                if (!sessions.containsKey(key)) {
+                    failedViews.remove(key);
+                }
+            }
+        }
+        for (UUID key : new java.util.ArrayList<>(pendingViews.keySet())) {
+            synchronized (guardFor(key)) {
+                if (!sessions.containsKey(key)) {
+                    pendingViews.remove(key);
+                }
+            }
+        }
+        for (UUID key : new java.util.ArrayList<>(pendingIntents.keySet())) {
+            synchronized (guardFor(key)) {
+                if (!sessions.containsKey(key)) {
+                    pendingIntents.remove(key);
                 }
             }
         }
