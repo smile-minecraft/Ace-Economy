@@ -43,17 +43,25 @@ AceEconomy v2.2.0 是 v2 伺服器線的正式發布版本。這版新增在地�
 
 ## 驗證發布檔案
 
-v2.2.0 已發布為 GitHub Release `v2.2.0`。Publish Release workflow 會附上 full、slim、sources、javadoc 四種 JAR，以及 `SHA256SUMS` asset。請以 Release 上的這份 `SHA256SUMS` 為準：把它放在下載的檔案旁邊，驗證不帶路徑的檔名項目：
+v2.2.0 已發布為 GitHub Release `v2.2.0`。Publish Release workflow 會附上 full、slim、sources、javadoc 四種 JAR，以及 `SHA256SUMS` asset。請以 Release 上的這份 `SHA256SUMS` 為準。
+
+如果你只需要安裝並驗證主插件，把 `AceEconomy-2.2.0.jar` 與 `SHA256SUMS` 放在同一個目錄，只比對主 JAR 那一行。Linux 用 coreutils 的 `sha256sum`，macOS 用 `shasum`：
+
+```text
+# Linux
+grep ' AceEconomy-2.2.0.jar$' SHA256SUMS | sha256sum -c -
+
+# macOS
+grep ' AceEconomy-2.2.0.jar$' SHA256SUMS | shasum -a 256 -c -
+```
+
+若要一次驗證全部附件，請把四個 JAR 都下載到 `SHA256SUMS` 所在的同一個目錄，再執行：
 
 ```text
 sha256sum -c SHA256SUMS
 ```
 
-macOS 上可以這樣算本地摘要：
-
-```text
-shasum -a 256 AceEconomy-2.2.0.jar
-```
+`SHA256SUMS` 以不帶路徑的檔名逐行列出一份 JAR，所以這個指令會檢查全部四個；macOS 上沒有 `sha256sum` 時，改用 `shasum -a 256 -c SHA256SUMS`。目錄裡只有主 JAR 時，slim、sources、javadoc 三行會回報找不到檔案，這是預期行為，不代表主 JAR 沒通過比對。
 
 把第一欄跟 `SHA256SUMS` 裡 `AceEconomy-2.2.0.jar` 的項目比對後，再把插件放到正式伺服器。根目錄的 `SHA256SUMS` 是本地建置紀錄，不是發布附件，不要拿它來驗證；也不要拿舊版本複製來的值代替這次比對。
 

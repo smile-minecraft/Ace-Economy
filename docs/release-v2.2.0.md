@@ -43,17 +43,25 @@ The baseline matches the released v2.1.0 line. v2.2.0 changes the plugin surface
 
 ## Verify the release file
 
-The v2.2.0 release is published as GitHub Release `v2.2.0`. The Publish Release workflow attaches the full, slim, sources, and javadoc JARs together with a `SHA256SUMS` asset. Use that published `SHA256SUMS` as the source of truth: place it beside the artifact you downloaded and verify the bare filename entry:
+The v2.2.0 release is published as GitHub Release `v2.2.0`. The Publish Release workflow attaches the full, slim, sources, and javadoc JARs together with a `SHA256SUMS` asset. Use that published `SHA256SUMS` as the source of truth.
+
+If you only need to install and verify the main plugin, put `AceEconomy-2.2.0.jar` and `SHA256SUMS` in the same directory and check the main JAR entry alone. Linux uses coreutils `sha256sum`; macOS uses `shasum`:
+
+```text
+# Linux
+grep ' AceEconomy-2.2.0.jar$' SHA256SUMS | sha256sum -c -
+
+# macOS
+grep ' AceEconomy-2.2.0.jar$' SHA256SUMS | shasum -a 256 -c -
+```
+
+To verify every attachment at once, download all four JARs into the same directory as `SHA256SUMS` and run:
 
 ```text
 sha256sum -c SHA256SUMS
 ```
 
-On macOS, calculate the local digest with:
-
-```text
-shasum -a 256 AceEconomy-2.2.0.jar
-```
+`SHA256SUMS` lists each JAR by its bare filename, so this checks all four; on macOS without `sha256sum`, use `shasum -a 256 -c SHA256SUMS`. If only the main JAR is present, the slim, sources, and javadoc lines report a missing file. That is expected and does not mean the main JAR failed its check.
 
 Compare the first column with the `AceEconomy-2.2.0.jar` entry in `SHA256SUMS` before placing the plugin on a live server. The `SHA256SUMS` file in the repository root is a local build record, not a published asset; do not verify against it. Do not replace the comparison with a value copied from an earlier release.
 
