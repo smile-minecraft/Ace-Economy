@@ -46,7 +46,7 @@ public final class CmiParser {
     public static ImportParseResult parse(Path root, String currencyId, int scale) {
         ImportPathGate.GatedImport baseline;
         try {
-            baseline = ImportPathGate.snapshot(root, display(root));
+            baseline = ImportPathGate.snapshotRoot(root, display(root));
         } catch (ImportPathRejectedException e) {
             return new ImportParseResult(List.of(), List.of(display(root) + ": " + e.getMessage()));
         }

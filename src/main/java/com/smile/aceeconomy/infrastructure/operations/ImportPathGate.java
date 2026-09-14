@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
@@ -37,6 +38,16 @@ public final class ImportPathGate {
 
     /** Single input files larger than this are rejected to bound memory. */
     public static final long MAX_FILE_BYTES = 8L * 1024 * 1024;
+
+    /**
+     * Upper bound on directory entries the gate is willing to list and bind.
+     * The approved-listing fingerprint holds one canonical line per entry and
+     * hashes every regular member, so an unbounded directory would let a
+     * hostile or broken import tree dictate unbounded listing work. The bound
+     * is well above any realistic userdata directory and above the parser's
+     * own record cap.
+     */
+    static final int MAX_DIRECTORY_ENTRIES = 100_000;
 
     private static final Set<String> ESSENTIALS_EXTENSIONS = Set.of("yml", "yaml");
     private static final Set<String> CMI_EXTENSIONS = Set.of("csv", "txt");
@@ -153,6 +164,17 @@ public final class ImportPathGate {
      * The secure readers hash what they actually read and refuse the content
      * when the two digests differ.</p>
      *
+     * <p>Directory identity cannot rest on {@code fileKey} alone: inode
+     * numbers may be reused after a directory is deleted and recreated, so a
+     * swap can keep the same identity and still change every member. Nor can it
+     * rest on listing metadata alone: a rebuilt directory can reproduce every
+     * name, kind, size, timestamp and identity while the member bytes differ.
+     * Directories therefore carry {@code directoryFingerprint}, a digest of the
+     * approved listing (per-entry kind, size, timestamp and identity, plus the
+     * SHA-256 of every regular member's bytes) that changes whenever the
+     * directory is rebuilt or any member's content changes, even on a
+     * filesystem that hands out the same {@code fileKey} again.</p>
+     *
      * @param path      the validated absolute real path returned by the gate
      * @param fileKey   filesystem identity at gate time, may be null when the
      *                  filesystem does not provide one
@@ -161,9 +183,11 @@ public final class ImportPathGate {
      * @param modified  last-modified time at gate time, null for directories
      * @param contentHash SHA-256 hex of the file bytes at gate time, null for
      *                  directories
+     * @param directoryFingerprint digest of the approved listing including
+     *                  member content, null for regular files
      */
     public record GatedImport(Path path, Object fileKey, boolean directory, long size, FileTime modified,
-            String contentHash) {
+            String contentHash, String directoryFingerprint) {
     }
 
     /**
@@ -174,7 +198,7 @@ public final class ImportPathGate {
      * @throws ImportPathRejectedException before any content is read
      */
     public static GatedImport gate(Path dataFolder, String userPath, ImportSource source) {
-        return snapshot(resolve(dataFolder, userPath, source), truncate(userPath == null ? "" : userPath));
+        return snapshotRoot(resolve(dataFolder, userPath, source), truncate(userPath == null ? "" : userPath));
     }
 
     /**
@@ -185,6 +209,22 @@ public final class ImportPathGate {
      * before parsing started.
      */
     static GatedImport snapshot(Path real, String displayName) {
+        return snapshot(real, displayName, false);
+    }
+
+    /**
+     * Snapshot a root path whose directory listing must be bound, so a later
+     * directory swap is detectable even when the filesystem reuses the
+     * directory identity. Member snapshots taken while expanding an approved
+     * directory use {@link #snapshot(Path, String)} instead: their parent
+     * already carries the listing fingerprint, and expanding nested
+     * directories is neither needed nor bounded here.
+     */
+    static GatedImport snapshotRoot(Path real, String displayName) {
+        return snapshot(real, displayName, true);
+    }
+
+    private static GatedImport snapshot(Path real, String displayName, boolean fingerprintDirectory) {
         if (Files.isSymbolicLink(real)) {
             throw new ImportPathRejectedException(
                     "import path must not be a symbolic link: " + displayName);
@@ -196,7 +236,8 @@ public final class ImportPathGate {
                     "import path is not a regular file or directory: " + displayName);
         }
         if (dir) {
-            return new GatedImport(real, attrs.fileKey(), true, -1, null, null);
+            String fingerprint = fingerprintDirectory ? directoryFingerprint(real, displayName) : null;
+            return new GatedImport(real, attrs.fileKey(), true, -1, null, null, fingerprint);
         }
         if (attrs.size() > MAX_FILE_BYTES) {
             throw new ImportPathRejectedException("import file is too large (max "
@@ -223,7 +264,7 @@ public final class ImportPathGate {
                     displayName + ": import path changed during approval; refusing to read");
         }
         return new GatedImport(real, again.fileKey(), false, again.size(),
-                again.lastModifiedTime(), sha256Hex(bytes));
+                again.lastModifiedTime(), sha256Hex(bytes), null);
     }
 
     /**
@@ -231,6 +272,11 @@ public final class ImportPathGate {
      * still no symlink, still the same kind (file stays a file, directory
      * stays a directory) and still the same identity. Anything else means the
      * path was swapped after the gate passed and must not be read.
+     *
+     * <p>For directories this is only the cheap identity check; a filesystem
+     * that reuses the identity would slip past it, so directory enumeration
+     * goes through {@link #listMembersSecure}, which also matches the approved
+     * listing fingerprint.</p>
      *
      * @throws ImportPathRejectedException when the path no longer matches
      */
@@ -276,25 +322,48 @@ public final class ImportPathGate {
     }
 
     /**
-     * List the members of a gate-approved directory, failing closed when the
-     * directory itself was swapped while being listed. Each returned member
-     * carries the identity seen at enumeration time; {@link #readMemberSecure}
-     * refuses the member when it no longer matches that snapshot, so a file
-     * swapped in after the listing is never parsed.
+     * List the members of a gate-approved directory and bind them to the
+     * approved listing in a single pass.
+     *
+     * <p>Snapshotting the members and then checking the directory afterwards
+     * is not enough: a directory swapped for approved-looking content only
+     * while the listing is read would let the swapped bytes become the
+     * baseline the reader trusts. Here the canonical listing rebuilt from the
+     * very snapshots that are returned is compared with the fingerprint the
+     * gate approved, so those snapshots are only ever returned when their
+     * content hashes are the approved ones. The member bytes are then checked
+     * again at read time, so a swap after this point is refused too.</p>
+     *
+     * <p>The identity check brackets the pass. The approved fingerprint must
+     * be present (a directory that was never bound fails closed) and must match
+     * exactly; a directory deleted and recreated with the same {@code fileKey}
+     * or the same listing metadata is still rejected because the member content
+     * is part of the fingerprint.</p>
      *
      * @throws ImportPathRejectedException when the directory no longer matches
      */
     static List<GatedImport> listMembersSecure(GatedImport root, String displayName) {
         verifyUnchanged(root, displayName);
-        List<Path> names;
-        try (Stream<Path> stream = Files.list(root.path())) {
-            names = stream.sorted(Comparator.comparing(path -> path.getFileName().toString())).toList();
-        } catch (IOException e) {
-            throw new ImportPathRejectedException(displayName + ": cannot list input; refusing to read");
+        if (!root.directory()) {
+            throw new ImportPathRejectedException(
+                    displayName + ": import path is not a directory; refusing to read");
         }
+        String approved = root.directoryFingerprint();
+        if (approved == null) {
+            throw new ImportPathRejectedException(
+                    displayName + ": import directory was never approved; refusing to read");
+        }
+        List<Path> names = listEntries(root.path(), displayName);
         List<GatedImport> members = new ArrayList<>(names.size());
+        StringBuilder canonical = new StringBuilder();
         for (Path name : names) {
-            members.add(snapshot(name, displayName));
+            GatedImport member = snapshot(name, displayName);
+            members.add(member);
+            appendMemberCanonicalEntry(canonical, member);
+        }
+        if (!approved.equals(sha256Hex(canonical.toString().getBytes(StandardCharsets.UTF_8)))) {
+            throw new ImportPathRejectedException(
+                    displayName + ": import directory was replaced after approval; refusing to read");
         }
         verifyUnchanged(root, displayName);
         return members;
@@ -329,10 +398,13 @@ public final class ImportPathGate {
      * still match the identity captured at enumeration time, be a plain
      * regular file both before and after the read, still be contained in the
      * directory, and stay within the size bound. The bytes actually read are
-     * hashed against the enumeration-time digest, so a member rewritten in
-     * place with the same size and timestamp is refused as well. A
-     * whole-directory swap after the listing, or a member swapped or rewritten
-     * in place, is refused and the content is discarded, never parsed.
+     * hashed against the digest bound into the approved listing, so a member
+     * rewritten in place with the same size and timestamp is refused as well.
+     * That binding is stronger than re-reading the directory fingerprint: the
+     * expected digest is the gate-approved content, not a snapshot taken from
+     * whatever the directory contained during listing. A whole-directory swap
+     * after the listing, or a member swapped or rewritten in place, is refused
+     * and the content is discarded, never parsed.
      *
      * @param root     the gate identity of the approved directory
      * @param expected the member identity captured by {@link #listMembersSecure}
@@ -523,6 +595,130 @@ public final class ImportPathGate {
             return Files.readAttributes(path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
         } catch (IOException e) {
             throw new ImportPathRejectedException(displayName + ": cannot inspect import path; refusing to read");
+        }
+    }
+
+    /**
+     * Digest of a directory's approved listing: one canonical line per entry
+     * (name, kind, size, timestamp, identity and, for regular files, the
+     * SHA-256 of the bytes), hashed. Binding member content is deliberate: a
+     * directory deleted and recreated can reproduce every metadata field while
+     * the bytes differ, so metadata alone would let a rebuilt directory collide
+     * with the approved one. Each regular member is read through the bounded
+     * reader, so a single entry never exceeds {@link #MAX_FILE_BYTES}, and the
+     * listing itself is capped by {@link #MAX_DIRECTORY_ENTRIES}.
+     */
+    private static String directoryFingerprint(Path dir, String displayName) {
+        StringBuilder canonical = new StringBuilder();
+        for (Path entry : listEntries(dir, displayName)) {
+            BasicFileAttributes attrs = readAttributes(entry, displayName);
+            String name = entry.getFileName().toString();
+            String identity = attrs.fileKey() == null ? null : attrs.fileKey().toString();
+            if (attrs.isDirectory()) {
+                // Directory members are not expanded, so bind the entry itself.
+                appendCanonicalEntry(canonical, name, 'd', -1, null, identity, null);
+            } else if (attrs.isRegularFile()) {
+                appendCanonicalEntry(canonical, name, 'f', attrs.size(),
+                        attrs.lastModifiedTime().toInstant().toString(), identity,
+                        contentHashBounded(entry, displayName));
+            } else {
+                appendCanonicalEntry(canonical, name, 'o', attrs.size(),
+                        attrs.lastModifiedTime().toInstant().toString(), identity, null);
+            }
+        }
+        return sha256Hex(canonical.toString().getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
+     * List a directory and refuse it past {@link #MAX_DIRECTORY_ENTRIES} so
+     * neither the fingerprint nor the enumeration can be forced to grow without
+     * bound. The stream is opened here and closed with try-with-resources; the
+     * bounded collection below only reads from it.
+     */
+    private static List<Path> listEntries(Path dir, String displayName) {
+        try (Stream<Path> stream = Files.list(dir)) {
+            return boundedEntries(stream, displayName, MAX_DIRECTORY_ENTRIES);
+        } catch (IOException e) {
+            throw new ImportPathRejectedException(displayName + ": cannot list input; refusing to read");
+        }
+    }
+
+    /**
+     * Collect at most {@code maxEntries + 1} entries and refuse the listing when
+     * that one extra entry proves the source is past the cap, so neither the
+     * fingerprint nor the enumeration can be forced to grow without bound.
+     *
+     * <p>The cap is applied while collecting, before any sorting: only
+     * {@code maxEntries + 1} entries are ever pulled, which is enough to detect
+     * that the source is past the limit. Collecting and sorting the whole source
+     * first would let a hostile or broken tree dictate unbounded listing and
+     * sort work. A source at or under the limit is returned sorted with the same
+     * members as before. The caller owns {@code stream} and closes it.</p>
+     *
+     * <p>Package-private so tests can exercise the same bounded collection with
+     * a small cap and a lazily generated stream: the fail-closed decision and
+     * the size bound are then verified without a real directory of
+     * {@code MAX_DIRECTORY_ENTRIES} members or static mocking of
+     * {@code Files.list}. Production always passes
+     * {@link #MAX_DIRECTORY_ENTRIES}.</p>
+     */
+    static List<Path> boundedEntries(Stream<Path> stream, String displayName, int maxEntries) {
+        List<Path> names = stream.limit((long) maxEntries + 1)
+                .collect(Collectors.toCollection(ArrayList::new));
+        if (names.size() > maxEntries) {
+            throw new ImportPathRejectedException(displayName + ": import directory has too many entries (max "
+                    + maxEntries + "); refusing to read");
+        }
+        names.sort(Comparator.comparing(path -> path.getFileName().toString()));
+        return names;
+    }
+
+    /**
+     * One canonical listing line, shared by the approved-fingerprint computation
+     * and the enumeration check so both agree on what a member contributes.
+     */
+    private static void appendCanonicalEntry(StringBuilder canonical, String name, char kind, long size,
+            String modified, String identity, String contentHash) {
+        canonical.append(name).append('\u0000')
+                .append(kind).append('\u0000')
+                .append(size).append('\u0000')
+                .append(modified == null ? "-" : modified).append('\u0000')
+                .append(identity == null ? "-" : identity).append('\u0000')
+                .append(contentHash == null ? "-" : contentHash)
+                .append('\n');
+    }
+
+    /** Canonical line for a member snapshot taken while enumerating a directory. */
+    private static void appendMemberCanonicalEntry(StringBuilder canonical, GatedImport member) {
+        String name = member.path().getFileName().toString();
+        String identity = member.fileKey() == null ? null : member.fileKey().toString();
+        if (member.directory()) {
+            appendCanonicalEntry(canonical, name, 'd', -1, null, identity, null);
+        } else {
+            appendCanonicalEntry(canonical, name, 'f', member.size(),
+                    member.modified().toInstant().toString(), identity, member.contentHash());
+        }
+    }
+
+    /**
+     * SHA-256 of a member's bytes, read through the bounded reader. A file
+     * larger than the size bound is not read — it is refused when actually
+     * parsed — so it contributes a fixed marker instead of an unbounded read.
+     */
+    private static String contentHashBounded(Path file, String displayName) {
+        try {
+            if (Files.size(file) > MAX_FILE_BYTES) {
+                return "oversized";
+            }
+        } catch (IOException e) {
+            throw new ImportPathRejectedException(
+                    displayName + ": cannot inspect import path; refusing to read");
+        }
+        try {
+            return sha256Hex(readBytesSecure(file, displayName));
+        } catch (IOException e) {
+            throw new ImportPathRejectedException(
+                    displayName + ": cannot read import entry; refusing to read");
         }
     }
 
