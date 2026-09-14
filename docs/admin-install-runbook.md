@@ -13,7 +13,7 @@ This runbook is for whoever looks after a Paper or Folia server and is installin
 
 ## What you need
 
-Use a Java 25 server running Paper or Folia 26.1.2. AceEconomy requires `AceLib-1.2.1.jar`; Vault and PlaceholderAPI are optional. The SQLite and MySQL JDBC drivers are already included in `AceEconomy-2.1.0.jar`, so do not download separate driver JARs.
+Use a Java 25 server running Paper or Folia 26.1.2. AceEconomy requires `AceLib-1.2.1.jar`; Vault and PlaceholderAPI are optional. The SQLite and MySQL JDBC drivers are already included in `AceEconomy-2.2.0.jar`, so do not download separate driver JARs.
 
 Paper/Folia 26.1.2 is the officially supported server line. Folia 26.2 has been validated only on specific builds (VERIFIED-BETA); other 26.2 builds are unverified.
 
@@ -21,7 +21,7 @@ Prepare these two plugin files:
 
 ```text
 plugins/AceLib-1.2.1.jar
-plugins/AceEconomy-2.1.0.jar
+plugins/AceEconomy-2.2.0.jar
 ```
 
 Do not leave `AceLib-0.5.0-SNAPSHOT.jar` or another AceLib version in `plugins/`. Two AceLib versions can make the server report an ambiguous dependency and prevent a clean start.
@@ -61,7 +61,7 @@ On a fresh installation the directory may not exist yet. That is fine; the impor
 
 ### 2. Check the dependency set
 
-Remove old or duplicate AceLib files from the live `plugins/` directory, but keep them in the backup if they belong to the previous installation. Place exactly `AceLib-1.2.1.jar` and `AceEconomy-2.1.0.jar` in `plugins/`.
+Remove old or duplicate AceLib files from the live `plugins/` directory, but keep them in the backup if they belong to the previous installation. Place exactly `AceLib-1.2.1.jar` and `AceEconomy-2.2.0.jar` in `plugins/`.
 
 If you use integrations, place Vault and/or PlaceholderAPI in the same `plugins/` directory. AceEconomy starts without either optional plugin, so do not treat their absence as an installation failure.
 
@@ -120,7 +120,7 @@ You can also set `settings.locale`, `start-balance`, the `currencies.*` entries,
 
 ### 5. Start again and read the console
 
-Start the server after saving the configuration. Look for an enable message containing `AceEconomy v2.1.0`, and confirm that the server continues to its normal ready state. Also check that there is only one `AceLib` version enabled.
+Start the server after saving the configuration. Look for an enable message containing `AceEconomy v2.2.0`, and confirm that the server continues to its normal ready state. Also check that there is only one `AceLib` version enabled.
 
 If AceEconomy disables itself, stop opening the server to players. Keep the first error and the nearby AceEconomy/AceLib lines; the [troubleshooting guide](troubleshooting.md) explains what to check next.
 
@@ -170,4 +170,4 @@ Do not delete `data-v2.json`, a SQLite file, or a database simply because the fi
 ## Next reading
 
 - [Server operations](operations.md): routine backups, reloads, restarts, and integrations.
-- [AceEconomy v2.1.0 release](release-v2.1.0.md): version requirements and the v2 feature overview.
+- [AceEconomy v2.2.0 release](release-v2.2.0.md): version requirements and the v2 feature overview.

@@ -20,7 +20,7 @@ Paper/Folia 26.1.2 is the officially supported server line. Folia 26.2 has been 
 ## Quick start
 
 1. Stop the server before installing the plugins.
-2. Place `AceLib-1.2.1.jar` and `AceEconomy-2.1.0.jar` in the server's `plugins` folder. Download `AceLib-1.2.1.jar` from <https://github.com/smile-minecraft/AceLib/releases/tag/v1.2.1> and verify its SHA-256 (`2da9d21e6a81eb3086aac3dcf87ad11f6dbcbfef5d3c80263270b3f074dc1d6d`) before copying it in; the [admin installation runbook](docs/admin-install-runbook.md) shows the exact command.
+2. Place `AceLib-1.2.1.jar` and `AceEconomy-2.2.0.jar` in the server's `plugins` folder. Download `AceEconomy-2.2.0.jar` from the [v2.2.0 Release](https://github.com/smile-minecraft/Ace-Economy/releases/tag/v2.2.0) and check it against that Release's `SHA256SUMS`; the [v2.2.0 release notes](docs/release-v2.2.0.md) show the exact command. Download `AceLib-1.2.1.jar` from <https://github.com/smile-minecraft/AceLib/releases/tag/v1.2.1> and verify its SHA-256 (`2da9d21e6a81eb3086aac3dcf87ad11f6dbcbfef5d3c80263270b3f074dc1d6d`) before copying it in; the [admin installation runbook](docs/admin-install-runbook.md) shows the exact command.
 3. Add Vault or PlaceholderAPI if you want those integrations.
 4. Start the server. AceEconomy creates its default configuration and storage on first start.
 5. Adjust `config.yml` for your storage, locale, currencies, and integrations. The [configuration guide](docs/config.md) explains each setting.
@@ -85,12 +85,12 @@ For argument rules, permissions, administrator commands, and the full reference,
 | Guide | Use it when you want to |
 | --- | --- |
 | [AceEconomy v2.1.0 release](docs/release-v2.1.0.md) | Review the v2.1.0 release contents and validation boundaries |
-| [AceEconomy v2.2.0 release draft](docs/release-v2.2.0.md) | Preview the v2.2.0 scope and the gates still open before release (draft, not installable) |
+| [AceEconomy v2.2.0 release](docs/release-v2.2.0.md) | Review the v2.2.0 release contents, download verification, and validation record |
 | [AceEconomy v2.0.0 release](docs/release-v2.0.0.md) | Review the v2.0.0 release contents and upgrade notes |
 | [Database concepts and upgrades](docs/database.md) | Understand the v2 data model and upgrade path |
 
 ## Support
 
-Read the guide that matches your task first. If something still looks wrong, open an issue in the [AceEconomy repository](https://github.com/SmileX-AI/AceEconomy/issues) and include the plugin version, server software, command or setting involved, and the message you saw. Remove passwords, tokens, and Webhook URLs before posting.
+Read the guide that matches your task first. If something still looks wrong, open an issue in the [AceEconomy repository](https://github.com/smile-minecraft/Ace-Economy/issues) and include the plugin version, server software, command or setting involved, and the message you saw. Remove passwords, tokens, and Webhook URLs before posting.
 
 **AceEconomy** © 2024–2026 Developed by Smile

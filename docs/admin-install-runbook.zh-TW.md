@@ -13,7 +13,7 @@
 
 ## 需要準備的環境
 
-伺服器要用 Java 25，跑 Paper 或 Folia 26.1.2。AceEconomy 一定要配 `AceLib-1.2.1.jar` 才能啟動。Vault 和 PlaceholderAPI 是選用的，有裝才有對應功能，沒裝也能開服。SQLite 和 MySQL 需要的 JDBC 驅動已經包在 `AceEconomy-2.1.0.jar` 裡面，不用自己再找驅動。
+伺服器要用 Java 25，跑 Paper 或 Folia 26.1.2。AceEconomy 一定要配 `AceLib-1.2.1.jar` 才能啟動。Vault 和 PlaceholderAPI 是選用的，有裝才有對應功能，沒裝也能開服。SQLite 和 MySQL 需要的 JDBC 驅動已經包在 `AceEconomy-2.2.0.jar` 裡面，不用自己再找驅動。
 
 Paper/Folia 26.1.2 是正式支援的版本。Folia 26.2 只有特定 build 通過驗證（VERIFIED-BETA），其他 26.2 build 還沒驗證過。
 
@@ -21,7 +21,7 @@ Paper/Folia 26.1.2 是正式支援的版本。Folia 26.2 只有特定 build 通�
 
 ```text
 plugins/AceLib-1.2.1.jar
-plugins/AceEconomy-2.1.0.jar
+plugins/AceEconomy-2.2.0.jar
 ```
 
 `plugins/` 裡面不要留 `AceLib-0.5.0-SNAPSHOT.jar` 或其他 AceLib。兩個 AceLib 同時存在，伺服器會分不清要用哪一個，可能開不乾淨。
@@ -63,7 +63,7 @@ stop
 
 ### 2. 檢查相依插件
 
-把正式 `plugins/` 裡舊的或重複的 AceLib 移走。如果那是舊安裝留下來的，就讓它留在備份裡。接著把 `AceLib-1.2.1.jar` 和 `AceEconomy-2.1.0.jar` 放進 `plugins/`。
+把正式 `plugins/` 裡舊的或重複的 AceLib 移走。如果那是舊安裝留下來的，就讓它留在備份裡。接著把 `AceLib-1.2.1.jar` 和 `AceEconomy-2.2.0.jar` 放進 `plugins/`。
 
 有用到連動功能，才把 Vault 或 PlaceholderAPI 放進同一個 `plugins/` 目錄。沒裝這兩個，AceEconomy 照樣能啟動，不要當成安裝失敗。
 
@@ -122,7 +122,7 @@ storage:
 
 ### 5. 再次啟動並查看主控台
 
-存檔後重新啟動伺服器。在主控台找到含 `AceEconomy v2.1.0` 的啟用訊息，確認伺服器有進到平常能接玩家的狀態。同時看一下，啟用的 AceLib 只有一個版本。
+存檔後重新啟動伺服器。在主控台找到含 `AceEconomy v2.2.0` 的啟用訊息，確認伺服器有進到平常能接玩家的狀態。同時看一下，啟用的 AceLib 只有一個版本。
 
 如果 AceEconomy 自己停用了，先不要放玩家進來。把第一個錯誤和附近 AceEconomy／AceLib 的主控台內容留下來，再照[故障排除指南](troubleshooting.zh-TW.md)往下查。
 
@@ -172,4 +172,4 @@ storage:
 ## 接下來閱讀
 
 - [伺服器維運](operations.zh-TW.md)：日常備份、重新載入、重啟與整合管理。
-- [AceEconomy v2.1.0 發布說明](release-v2.1.0.zh-TW.md)：版本需求與 v2 功能總覽。
+- [AceEconomy v2.2.0 發布說明](release-v2.2.0.zh-TW.md)：版本需求與 v2 功能總覽。

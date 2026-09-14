@@ -20,7 +20,7 @@ Paper/Folia 26.1.2 是正式支持的服务器线。Folia 26.2 仅在特定 buil
 ## 快速开始
 
 1. 安装插件前先停止服务器。
-2. 将 `AceLib-1.2.1.jar` 和 `AceEconomy-2.1.0.jar` 放入服务器的 `plugins` 文件夹。请从 <https://github.com/smile-minecraft/AceLib/releases/tag/v1.2.1> 下载 `AceLib-1.2.1.jar`，并在放入前核对其 SHA-256（`2da9d21e6a81eb3086aac3dcf87ad11f6dbcbfef5d3c80263270b3f074dc1d6d`）；具体命令见[管理员安装手册](docs/admin-install-runbook.zh-CN.md)。
+2. 将 `AceLib-1.2.1.jar` 和 `AceEconomy-2.2.0.jar` 放入服务器的 `plugins` 文件夹。请从 [v2.2.0 Release](https://github.com/smile-minecraft/Ace-Economy/releases/tag/v2.2.0) 下载 `AceEconomy-2.2.0.jar`，并对照该 Release 的 `SHA256SUMS` 核对，方式见 [v2.2.0 发布说明](docs/release-v2.2.0.zh-CN.md)。`AceLib-1.2.1.jar` 则从 <https://github.com/smile-minecraft/AceLib/releases/tag/v1.2.1> 下载，放入前核对其 SHA-256（`2da9d21e6a81eb3086aac3dcf87ad11f6dbcbfef5d3c80263270b3f074dc1d6d`），方式见[管理员安装手册](docs/admin-install-runbook.zh-CN.md)。
 3. 如果需要这些整合功能，再安装 Vault 或 PlaceholderAPI。
 4. 启动服务器。AceEconomy 首次启动时会创建默认配置和存储。
 5. 根据需要调整 `config.yml` 中的存储、语言、货币和整合设置。[配置指南](docs/config.zh-CN.md) 解释了各项设置。
@@ -85,12 +85,12 @@ Paper/Folia 26.1.2 是正式支持的服务器线。Folia 26.2 仅在特定 buil
 | 文档 | 适合在以下情况下阅读 |
 | --- | --- |
 | [AceEconomy v2.1.0 发布说明](docs/release-v2.1.0.zh-CN.md) | 查看 v2.1.0 的内容和验证边界 |
-| [AceEconomy v2.2.0 发布准备稿](docs/release-v2.2.0.zh-CN.md) | 预览 v2.2.0 的范围和发布前仍待完成的关卡（草稿，尚不可安装） |
+| [AceEconomy v2.2.0 发布说明](docs/release-v2.2.0.zh-CN.md) | 查看 v2.2.0 的内容、下载验证与验证记录 |
 | [AceEconomy v2.0.0 发布说明](docs/release-v2.0.0.zh-CN.md) | 查看 v2.0.0 的内容和升级说明 |
 | [数据库概念与升级](docs/database.zh-CN.md) | 了解 v2 数据模型和升级路径 |
 
 ## 获取帮助
 
-先阅读与当前任务相符的指南。如果问题仍未解决，请在 [AceEconomy repository](https://github.com/SmileX-AI/AceEconomy/issues) 提交 Issue，并附上插件版本、服务器软件、相关指令或设置，以及你看到的消息。发布前请删除密码、Token 和 Webhook URL。
+先阅读与当前任务相符的指南。如果问题仍未解决，请在 [AceEconomy repository](https://github.com/smile-minecraft/Ace-Economy/issues) 提交 Issue，并附上插件版本、服务器软件、相关指令或设置，以及你看到的消息。发布前请删除密码、Token 和 Webhook URL。
 
 **AceEconomy** © 2024–2026 Developed by Smile
