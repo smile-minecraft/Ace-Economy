@@ -85,6 +85,7 @@ Paper/Folia 26.1.2 是正式支持的服务器线。Folia 26.2 仅在特定 buil
 | 文档 | 适合在以下情况下阅读 |
 | --- | --- |
 | [AceEconomy v2.1.0 发布说明](docs/release-v2.1.0.zh-CN.md) | 查看 v2.1.0 的内容和验证边界 |
+| [AceEconomy v2.2.0 发布准备稿](docs/release-v2.2.0.zh-CN.md) | 预览 v2.2.0 的范围和发布前仍待完成的关卡（草稿，尚不可安装） |
 | [AceEconomy v2.0.0 发布说明](docs/release-v2.0.0.zh-CN.md) | 查看 v2.0.0 的内容和升级说明 |
 | [数据库概念与升级](docs/database.zh-CN.md) | 了解 v2 数据模型和升级路径 |
 

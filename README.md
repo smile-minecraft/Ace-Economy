@@ -85,6 +85,7 @@ For argument rules, permissions, administrator commands, and the full reference,
 | Guide | Use it when you want to |
 | --- | --- |
 | [AceEconomy v2.1.0 release](docs/release-v2.1.0.md) | Review the v2.1.0 release contents and validation boundaries |
+| [AceEconomy v2.2.0 release draft](docs/release-v2.2.0.md) | Preview the v2.2.0 scope and the gates still open before release (draft, not installable) |
 | [AceEconomy v2.0.0 release](docs/release-v2.0.0.md) | Review the v2.0.0 release contents and upgrade notes |
 | [Database concepts and upgrades](docs/database.md) | Understand the v2 data model and upgrade path |
 

@@ -142,7 +142,7 @@ The following items are explicitly not-run or still open. A future release or op
 
 ## Explicit non-goals
 
-- Essentials/CMI import is not included.
+- No automatic Essentials/CMI migration. Import is included, but only through the explicit, console-only `/aceeco import <essentials|cmi> <path> [currency] [apply confirm]` command. It requires `aceeconomy.admin` and `aceeconomy.admin.import`; without the exact `apply confirm` pair it only previews. It stays inside the plugin-controlled `import/` directory and is bounded by the supported source formats (EssentialsX 2.x userdata, or an operator-prepared CMI balance sheet; the raw `cmi.sqlite.db` is rejected), a pre-import safety backup, and idempotent re-runs that skip already-applied records. See [`commands.md`](commands.md).
 - Native database dump replacement is not included.
 - Right-click banknote redemption is not included.
 - Independent `/backup` and `/restore` root commands are not included; use the `/aceeco` subcommands.

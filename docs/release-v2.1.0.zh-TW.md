@@ -137,8 +137,7 @@ shasum -a 256 AceEconomy-2.1.0.jar
 
 ## 明確不做的事
 
-- 不包含自動遷移。
-- 不包含 Essentials/CMI import。
+- Essentials/CMI 匯入功能已包含，但不是自動遷移：只能透過明確的、僅限主控台的 `/aceeco import <essentials|cmi> <path> [currency] [apply confirm]` 指令執行。它需要 `aceeconomy.admin` 與 `aceeconomy.admin.import`，少了精確的 `apply confirm` 組合只會做預演。來源限定在插件控管的 `import/` 目錄，並受支援的來源格式（EssentialsX 2.x userdata，或管理員準備好的 CMI 餘額表；原始 `cmi.sqlite.db` 會被拒絕）、匯入前安全備份，以及重跑時略過已套用紀錄的可重複執行等條件限制。完整約定見 [`commands.zh-TW.md`](commands.zh-TW.md)。
 - 不包含原生資料庫傾印替代方案。
 - 不包含右鍵兌回銀行票據。
 - 不包含獨立的 `/backup` 與 `/restore` 根指令；請用 `/aceeco` 子指令。
