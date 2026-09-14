@@ -2,7 +2,7 @@
 
 English · [简体中文](persistence.zh-CN.md) · [繁體中文](persistence.zh-TW.md)
 
-Use this guide when you need to choose a storage backend, copy data safely, create a managed snapshot, or restore a known-good v2 snapshot. It covers both routine operation and the limits of the current live validation.
+Use this guide to choose a storage backend, copy data safely, create a managed snapshot, or restore a known-good v2 snapshot. Where the current live validation has limits, they are called out next to the operation they affect.
 
 ## Contents
 

@@ -2,7 +2,7 @@
 
 [English](admin-install-runbook.md) · 简体中文 · [繁體中文](admin-install-runbook.zh-TW.md)
 
-这本手册写给第一次装插件的管理员，目标是把 AceEconomy v2 放上 Paper 或 Folia，而且不用猜文件在哪里。照着做，装完会知道怎么确认装好了、坏掉先看哪里。
+这本手册写给第一次安装 AceEconomy v2 的服务器管理员，从放好 JAR 一路带到第一次上线前的检查。
 
 ## 目录
 
@@ -140,9 +140,7 @@ storage:
 /aceeco reload
 ```
 
-`/aceeco rollback` 故意不放在上面的例行检查里。它是具有破坏性、只能在控制台做的管理操作：要同时有 `aceeconomy.admin` 和 `aceeconomy.admin.rollback`、手上有有效的交易 UUID，还要有人点头或事先演练过才能打，不能拿来当自动化或随手测试。
-
-`/aceeco rollback <transaction-id>` 也只能从控制台打。它会把一笔已记录的交易整个恢复，所以不要拿来做安装检查，留给出事时再用。它会先挡掉玩家和格式错的 UUID；成功会回报 reversal 审计记录 ID，已经回滚过的交易算明确的空操作，标记写入失败就先停下来人工核对。
+`/aceeco rollback <transaction-id>` 故意不放在上面的例行检查里。它会把一笔已记录的交易整个恢复，属于具有破坏性、只能在控制台执行的管理操作：要同时有 `aceeconomy.admin` 和 `aceeconomy.admin.rollback`、手上有有效的交易 UUID，还要有人点头或事先演练过才能打，不能拿来当自动化或随手测试。它会先挡掉玩家和格式错的 UUID；成功会回报 reversal 审计记录 ID，已经回滚过的交易算明确的空操作，标记写入失败就先停下来人工核对。
 
 再用测试玩家跑：
 
@@ -173,5 +171,5 @@ storage:
 
 ## 接下来阅读
 
-- [`operations.md`](operations.zh-CN.md)：日常备份、重新加载、重启与集成管理。
-- [`release-v2.1.0.md`](release-v2.1.0.zh-CN.md)：版本要求与 v2 功能总览。
+- [服务器维运](operations.zh-CN.md)：日常备份、重新加载、重启与集成管理。
+- [AceEconomy v2.1.0 发布说明](release-v2.1.0.zh-CN.md)：版本要求与 v2 功能总览。

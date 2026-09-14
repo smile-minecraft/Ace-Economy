@@ -2,7 +2,7 @@
 
 English · [简体中文](admin-install-runbook.zh-CN.md) · [繁體中文](admin-install-runbook.zh-TW.md)
 
-This runbook is for the person who looks after a Paper or Folia server and wants to put AceEconomy v2 into service without guessing which file belongs where. Follow it for a fresh installation.
+This runbook is for whoever looks after a Paper or Folia server and is installing AceEconomy v2 for the first time. It covers a fresh installation, from placing the JARs to the first operator checks.
 
 ## Contents
 
@@ -138,9 +138,7 @@ Run these from the server console where the command is console-safe, and use a t
 /aceeco reload
 ```
 
-`/aceeco rollback` is deliberately not part of the routine checklist above. It is a destructive, console-only administrative action: run it only with both `aceeconomy.admin` and `aceeconomy.admin.rollback`, a valid transaction UUID, and explicit human approval or a dedicated drill — never as an automated or casual smoke check.
-
-`/aceeco rollback <transaction-id>` is also available from the console. It is a destructive administrative action that reverses a recorded transaction, so do not run it as part of routine installation checks; keep it for incident handling. It requires both `aceeconomy.admin` and `aceeconomy.admin.rollback`, rejects players and invalid UUIDs up front, reports the reversal audit record ids on success, treats an already reverted transaction as an explicit no-op, and reports a marker persist failure as needing manual reconciliation.
+`/aceeco rollback <transaction-id>` is deliberately outside the routine checklist above. It reverses a recorded transaction, so it is a destructive, console-only action: run it only with both `aceeconomy.admin` and `aceeconomy.admin.rollback`, a valid transaction UUID, and explicit human approval or a dedicated drill — never as an automated smoke check. It rejects players and invalid UUIDs up front, reports the reversal audit record ids on success, treats an already reverted transaction as an explicit no-op, and reports a marker persist failure as needing manual reconciliation.
 
 With a test player, also check:
 
@@ -171,5 +169,5 @@ Do not delete `data-v2.json`, a SQLite file, or a database simply because the fi
 
 ## Next reading
 
-- [`operations.md`](operations.md): routine backups, reloads, restarts, and integrations.
-- [`release-v2.1.0.md`](release-v2.1.0.md): version requirements and the v2 feature overview.
+- [Server operations](operations.md): routine backups, reloads, restarts, and integrations.
+- [AceEconomy v2.1.0 release](release-v2.1.0.md): version requirements and the v2 feature overview.

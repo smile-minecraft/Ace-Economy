@@ -2,55 +2,9 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md) · 繁體中文
 
-AceEconomy 為 Paper 與 Folia 伺服器提供遊戲內經濟系統。玩家可以查詢餘額、互相付款、提領銀行鈔票、開啟銀行面板，並在排行榜上比較名次。伺服器管理員可以選擇儲存後端、定義貨幣、接入 Vault 或 PlaceholderAPI，並將交易通知送到 Discord。
+AceEconomy 為 Paper 與 Folia 伺服器加入遊戲內經濟系統。玩家可以查詢餘額、互相付款、提領銀行支票、開啟銀行面板，並在排行榜上比較名次。伺服器管理員可以選擇儲存後端、定義貨幣、接入 Vault 或 PlaceholderAPI，並把交易通知送到 Discord。
 
-## 文件索引
-
-### 開始使用
-
-| 文件 | 適合在以下情況閱讀 |
-| --- | --- |
-| [玩家指南](docs/player-guide.zh-TW.md) | 查詢餘額、向玩家付款、使用銀行鈔票或開啟銀行面板 |
-| [管理員安裝手冊](docs/admin-install-runbook.zh-TW.md) | 安裝 AceEconomy v2 並完成伺服器首次檢查 |
-
-### 日常使用
-
-| 文件 | 適合在以下情況閱讀 |
-| --- | --- |
-| [指令與權限](docs/commands.zh-TW.md) | 查詢指令語法、權限、執行者與別名 |
-| [設定指南](docs/config.zh-TW.md) | 設定儲存方式、貨幣、語系、經濟規則與 Discord |
-
-### 維運與升級
-
-| 文件 | 適合在以下情況閱讀 |
-| --- | --- |
-| [伺服器維運](docs/operations.zh-TW.md) | 執行日常檢查、安全修改設定、備份資料或復原伺服器 |
-| [持久化、備份與還原](docs/persistence.zh-TW.md) | 選擇儲存方式，或了解備份與還原行為 |
-| [故障排除](docs/troubleshooting.zh-TW.md) | 排查啟動、儲存、整合或指令問題 |
-
-### 整合與開發
-
-| 文件 | 適合在以下情況閱讀 |
-| --- | --- |
-| [整合功能](docs/integrations.zh-TW.md) | 接入 AceLib、Vault、PlaceholderAPI 或 Discord |
-| [整合 API](docs/integration-api.zh-TW.md) | 使用 Vault 或 PlaceholderAPI 開發插件整合 |
-| [多語系](docs/localization.zh-TW.md) | 修改或維護伺服器語系檔 |
-
-### 發布與技術參考
-
-| 文件 | 適合在以下情況閱讀 |
-| --- | --- |
-| [AceEconomy v2.1.0 發布說明](docs/release-v2.1.0.zh-TW.md) | 查看 v2.1.0 的內容與驗證邊界 |
-| [AceEconomy v2.0.0 發布說明](docs/release-v2.0.0.zh-TW.md) | 查看 v2.0.0 的內容與安裝說明 |
-| [資料庫概念與升級](docs/database.zh-TW.md) | 了解 v2 資料模型與升級路徑 |
-
-## 目錄
-
-- [執行需求](#執行需求)
-- [快速開始](#快速開始)
-- [主要功能](#主要功能)
-- [玩家指令](#玩家指令)
-- [取得協助](#取得協助)
+第一次安裝嗎？請從[管理員安裝手冊](docs/admin-install-runbook.zh-TW.md)開始。如果你是在既有伺服器上遊玩，[玩家指南](docs/player-guide.zh-TW.md) 是最快的入口。
 
 ## 執行需求
 
@@ -74,7 +28,7 @@ Paper/Folia 26.1.2 是正式支援的伺服器線。Folia 26.2 僅在特定 buil
 
 ## 主要功能
 
-- **玩家經濟：** 查詢餘額、付款給其他玩家，或提領銀行鈔票。
+- **玩家經濟：** 查詢餘額、付款給其他玩家，或提領銀行支票。
 - **銀行面板：** 開啟玩家可使用的帳戶與提領操作選單。
 - **排行榜：** 查看指定貨幣的富豪玩家。
 - **多種貨幣：** 使用設定的預設貨幣，也能在指令中指定其他貨幣。
@@ -88,11 +42,51 @@ Paper/Folia 26.1.2 是正式支援的伺服器線。Folia 26.2 僅在特定 buil
 | --- | --- |
 | `/money balance [player] [currency]` | 查看餘額 |
 | `/pay send <player> <amount> [currency]` | 付款給其他玩家 |
-| `/withdraw cash <amount> [currency]` | 提領實體銀行鈔票 |
+| `/withdraw cash <amount> [currency]` | 提領實體銀行支票 |
 | `/baltop top [currency]` | 查看餘額排行榜 |
 | `/bank open` | 開啟銀行面板 |
 
 參數規則、權限、管理員指令與完整參考請查看[指令與權限](docs/commands.zh-TW.md)。想依情境操作時，可以從[玩家指南](docs/player-guide.zh-TW.md)開始。
+
+## 文件索引
+
+**開始使用**
+
+| 文件 | 適合在以下情況閱讀 |
+| --- | --- |
+| [玩家指南](docs/player-guide.zh-TW.md) | 查詢餘額、向玩家付款、使用銀行支票或開啟銀行面板 |
+| [管理員安裝手冊](docs/admin-install-runbook.zh-TW.md) | 安裝 AceEconomy v2 並完成伺服器首次檢查 |
+
+**日常使用**
+
+| 文件 | 適合在以下情況閱讀 |
+| --- | --- |
+| [指令與權限](docs/commands.zh-TW.md) | 查詢指令語法、權限、執行者與別名 |
+| [設定指南](docs/config.zh-TW.md) | 設定儲存方式、貨幣、語系、經濟規則與 Discord |
+
+**維運與升級**
+
+| 文件 | 適合在以下情況閱讀 |
+| --- | --- |
+| [伺服器維運](docs/operations.zh-TW.md) | 執行日常檢查、安全修改設定、備份資料或復原伺服器 |
+| [持久化、備份與還原](docs/persistence.zh-TW.md) | 選擇儲存方式，或了解備份與還原行為 |
+| [故障排除](docs/troubleshooting.zh-TW.md) | 排查啟動、儲存、整合或指令問題 |
+
+**整合與開發**
+
+| 文件 | 適合在以下情況閱讀 |
+| --- | --- |
+| [整合功能](docs/integrations.zh-TW.md) | 接入 AceLib、Vault、PlaceholderAPI 或 Discord |
+| [整合 API](docs/integration-api.zh-TW.md) | 使用 Vault 或 PlaceholderAPI 開發插件整合 |
+| [多語系](docs/localization.zh-TW.md) | 修改或維護伺服器語系檔 |
+
+**發布與技術參考**
+
+| 文件 | 適合在以下情況閱讀 |
+| --- | --- |
+| [AceEconomy v2.1.0 發布說明](docs/release-v2.1.0.zh-TW.md) | 查看 v2.1.0 的內容與驗證邊界 |
+| [AceEconomy v2.0.0 發布說明](docs/release-v2.0.0.zh-TW.md) | 查看 v2.0.0 的內容與安裝說明 |
+| [資料庫概念與升級](docs/database.zh-TW.md) | 了解 v2 資料模型與升級路徑 |
 
 ## 取得協助
 

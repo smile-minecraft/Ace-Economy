@@ -118,7 +118,7 @@ Verify the URL locally and check surrounding Discord messages. Never include the
 
 **Check first:** confirm Floodgate is installed and enabled, and that the affected player joins through Bedrock. Java players intentionally keep working buttons and never see the hint.
 
-**Fix:** install or enable Floodgate and restart. Do not claim full Bedrock support: hover text is not guaranteed, and only click actions degrade. If Floodgate is absent, the original messages are the expected behaviour, not an error.
+**Fix:** install or enable Floodgate and restart. Bedrock support is only partial — hover text is not guaranteed, and only click actions degrade. With Floodgate absent, the original messages are the expected behaviour, not an error.
 
 ## Configuration reload fails
 

@@ -22,9 +22,7 @@ Vault、PlaceholderAPI 和 Floodgate 是可选的软依赖。插件没装或没�
 
 ## AceLib
 
-请安装与本版本匹配的 AceLib，再启动带 AceEconomy 的服务器。AceLib 必须先就绪，AceEconomy 才能注册指令、消息和整合。
-
-正常时，AceEconomy 会完成启动，相关指令也能用。如果 AceLib 缺失或还没就绪，插件会直接停用，而不是带着残缺的服务勉强跑。
+请安装与本版本匹配的 AceLib，再启动带 AceEconomy 的服务器。AceLib 必须先就绪，AceEconomy 才能注册指令、消息和整合；如果 AceLib 缺失或还没就绪，插件会直接停用，而不是带着残缺的服务勉强跑。
 
 无法启动时：
 

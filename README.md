@@ -4,53 +4,7 @@ English · [简体中文](README.zh-CN.md) · [繁體中文](README.zh-TW.md)
 
 AceEconomy adds an in-game economy to Paper and Folia servers. Players can check balances, pay each other, withdraw banknotes, open the bank dashboard, and compare standings on a leaderboard. Server owners can pick a storage backend, define currencies, connect Vault or PlaceholderAPI, and send transaction alerts to Discord.
 
-## Documentation
-
-### Getting started
-
-| Guide | Use it when you want to |
-| --- | --- |
-| [Player guide](docs/player-guide.md) | Check balances, pay players, use banknotes, or open the bank dashboard |
-| [Admin installation runbook](docs/admin-install-runbook.md) | Install AceEconomy v2 and complete the first server checks |
-
-### Everyday use
-
-| Guide | Use it when you want to |
-| --- | --- |
-| [Commands and permissions](docs/commands.md) | Look up command syntax, permissions, senders, and aliases |
-| [Configuration guide](docs/config.md) | Configure storage, currencies, locale, economy rules, and Discord |
-
-### Operations and upgrades
-
-| Guide | Use it when you want to |
-| --- | --- |
-| [Server operations](docs/operations.md) | Run daily checks, change settings safely, back up data, or recover a server |
-| [Persistence, backup, and restore](docs/persistence.md) | Choose a backend or work through backup and restore behaviour |
-| [Troubleshooting](docs/troubleshooting.md) | Investigate startup, storage, integration, or command problems |
-
-### Integrations and development
-
-| Guide | Use it when you want to |
-| --- | --- |
-| [Integrations](docs/integrations.md) | Connect AceLib, Vault, PlaceholderAPI, or Discord |
-| [Integration API](docs/integration-api.md) | Build a plugin integration with Vault or PlaceholderAPI |
-| [Localization](docs/localization.md) | Change or maintain the server language files |
-
-### Releases and technical reference
-
-| Guide | Use it when you want to |
-| --- | --- |
-| [AceEconomy v2.1.0 release](docs/release-v2.1.0.md) | Review the v2.1.0 release contents and validation boundaries |
-| [AceEconomy v2.0.0 release](docs/release-v2.0.0.md) | Review the v2.0.0 release contents and upgrade notes |
-| [Database concepts and upgrades](docs/database.md) | Understand the v2 data model and upgrade path |
-
-## Contents
-
-- [Requirements](#requirements)
-- [Quick start](#quick-start)
-- [Core features](#core-features)
-- [Player commands](#player-commands)
-- [Support](#support)
+Installing it for the first time? Start with the [admin installation runbook](docs/admin-install-runbook.md). If you play on a server that already runs AceEconomy, the [player guide](docs/player-guide.md) is the shortest path.
 
 ## Requirements
 
@@ -93,6 +47,46 @@ Paper/Folia 26.1.2 is the officially supported server line. Folia 26.2 has been 
 | `/bank open` | Open the bank dashboard |
 
 For argument rules, permissions, administrator commands, and the full reference, see [Commands and permissions](docs/commands.md). For guided player-focused examples, start with the [player guide](docs/player-guide.md).
+
+## Documentation
+
+**Getting started**
+
+| Guide | Use it when you want to |
+| --- | --- |
+| [Player guide](docs/player-guide.md) | Check balances, pay players, use banknotes, or open the bank dashboard |
+| [Admin installation runbook](docs/admin-install-runbook.md) | Install AceEconomy v2 and complete the first server checks |
+
+**Everyday use**
+
+| Guide | Use it when you want to |
+| --- | --- |
+| [Commands and permissions](docs/commands.md) | Look up command syntax, permissions, senders, and aliases |
+| [Configuration guide](docs/config.md) | Configure storage, currencies, locale, economy rules, and Discord |
+
+**Operations and upgrades**
+
+| Guide | Use it when you want to |
+| --- | --- |
+| [Server operations](docs/operations.md) | Run daily checks, change settings safely, back up data, or recover a server |
+| [Persistence, backup, and restore](docs/persistence.md) | Choose a backend or work through backup and restore behaviour |
+| [Troubleshooting](docs/troubleshooting.md) | Investigate startup, storage, integration, or command problems |
+
+**Integrations and development**
+
+| Guide | Use it when you want to |
+| --- | --- |
+| [Integrations](docs/integrations.md) | Connect AceLib, Vault, PlaceholderAPI, or Discord |
+| [Integration API](docs/integration-api.md) | Build a plugin integration with Vault or PlaceholderAPI |
+| [Localization](docs/localization.md) | Change or maintain the server language files |
+
+**Releases and technical reference**
+
+| Guide | Use it when you want to |
+| --- | --- |
+| [AceEconomy v2.1.0 release](docs/release-v2.1.0.md) | Review the v2.1.0 release contents and validation boundaries |
+| [AceEconomy v2.0.0 release](docs/release-v2.0.0.md) | Review the v2.0.0 release contents and upgrade notes |
+| [Database concepts and upgrades](docs/database.md) | Understand the v2 data model and upgrade path |
 
 ## Support
 

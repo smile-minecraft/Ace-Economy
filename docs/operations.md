@@ -66,7 +66,7 @@ The reply tells you what happened. A failure shows the refusal reason — for ex
 
 A successful reload also closes every open bank session before the new layout takes effect, so no click can run with half old, half new rules; affected players simply reopen `/bank`. An open that races the reload is rejected and retried once from the fresh layout; if the retry also misses, the open fails and the player simply reopens `/bank`.
 
-A successful reload also drops the whole synchronous balance cache. That is accepted behaviour, not a bug: Vault reads never block on storage, so until the next persisted read or successful write re-primes an entry, a balance query falls back to the safe default `0.0`. There is no synchronous refill, because refilling on the calling thread would reintroduce the blocking I/O the cache exists to avoid.
+The same reload drops the whole synchronous balance cache. That is accepted behaviour, not a bug: Vault reads never block on storage, so until the next persisted read or successful write re-primes an entry, a balance query falls back to the safe default `0.0`. There is no synchronous refill, because refilling on the calling thread would reintroduce the blocking I/O the cache exists to avoid.
 
 Do not use Bukkit `/reload` as a maintenance or upgrade shortcut.
 
@@ -105,7 +105,9 @@ The console and authorized administrators can create a managed logical snapshot:
 /aceeco backup [label]
 ```
 
-This command can run while the server is running. It writes a credential-free v2 JSON logical snapshot under the plugin-controlled `<plugin data folder>/backups/` directory using a verified secure directory handle. It creates `<backup-id>.json` with handle-relative `CREATE_NEW`, writes and forces the complete content, then creates `<backup-id>.ready` with handle-relative `CREATE_NEW`. The ready file contains a SHA-256 digest and is the application-level logical commit point; restore requires the marker and a matching, fully validated JSON snapshot. Existing target or marker names are never replaced. The optional label accepts only letters, digits, `.`, `_` and `-`. The snapshot contains accounts, balances, transactions including reverted markers, and consumed nonces, never storage passwords or webhook URLs. For MySQL it reads through the live connection; it is a logical snapshot, not a `mysqldump`/`mariabackup` native or physical backup.
+This command can run while the server is running. It writes a credential-free v2 JSON logical snapshot under the plugin-controlled `<plugin data folder>/backups/` directory using a verified secure directory handle. It creates `<backup-id>.json` with handle-relative `CREATE_NEW`, writes and forces the complete content, then creates `<backup-id>.ready` with handle-relative `CREATE_NEW`. The ready file contains a SHA-256 digest and is the application-level logical commit point; restore requires the marker and a matching, fully validated JSON snapshot. Existing target or marker names are never replaced.
+
+The optional label accepts only letters, digits, `.`, `_` and `-`. The snapshot contains accounts, balances, transactions including reverted markers, and consumed nonces, never storage passwords or webhook URLs. For MySQL it reads through the live connection; it is a logical snapshot, not a `mysqldump`/`mariabackup` native or physical backup.
 
 Snapshot publication requires a filesystem that supports secure directory handles, no-follow attribute checks, regular-file checks, and forced file channels. The protocol is an application-level commit-marker protocol; it does not claim an OS atomic rename or hard-link publication. On an unsupported filesystem, or after a partial target/marker failure, the command fails closed instead of falling back to an unsafe write. Keep the `.json` and matching `.ready` files together when moving a snapshot; a bare JSON file is not a committed backup. An unmarked orphan may remain and restore will reject it.
 

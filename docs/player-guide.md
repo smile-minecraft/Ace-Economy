@@ -2,7 +2,7 @@
 
 English · [简体中文](player-guide.zh-CN.md) · [繁體中文](player-guide.zh-TW.md)
 
-AceEconomy is easiest to use when you start with the task in front of you. This guide keeps the commands short, explains when to add a currency, and points out the few input details that commonly cause a command to fail.
+Every task below shows the command, the permission it needs, and what happens when it runs. If an argument gets rejected, [Common input problems](#common-input-problems) lists the usual causes.
 
 ## Contents
 
@@ -99,7 +99,11 @@ AceEconomy removes the amount from your balance and gives you a physical banknot
 
 ### Redeem a banknote
 
-Open the bank dashboard with `/bank open`, hold the banknote in your main hand, and click the deposit button (the top-middle slot). The amount is credited to your account and the banknote disappears from your hand. Right-clicking while holding a banknote redeems it too; both paths share the same atomic credit. A banknote can be redeemed only once — the server remembers every redeemed note even after a restart. If the deposit is refused (invalid, already used, or unknown currency), the banknote stays in your hand; keep it and ask a server administrator for help rather than trying to duplicate the transaction. If the credit succeeds but the note cannot be removed, the credit stays: a multi-note stack is left whole in your hand, while a single note may not survive a failed clear. Either way, keep whatever is left, do not click again, and contact an administrator; the server log records the note id, player, and credited value so the administrator can verify and compensate you manually.
+Open the bank dashboard with `/bank open`, hold the banknote in your main hand, and click the deposit button (the top-middle slot). The amount is credited to your account and the banknote disappears from your hand. Right-clicking while holding a banknote redeems it too; both paths share the same atomic credit.
+
+A banknote can be redeemed only once — the server remembers every redeemed note even after a restart. If the deposit is refused (invalid, already used, or unknown currency), the banknote stays in your hand. Keep it and ask a server administrator for help rather than trying to duplicate the transaction.
+
+If the credit succeeds but the note cannot be removed, the credit stays: a multi-note stack is left whole in your hand, while a single note may not survive a failed clear. Either way, keep whatever is left, do not click again, and contact an administrator. The server log records the note id, player, and credited value, so the administrator can verify and compensate you manually.
 
 ## I want to see the richest players
 

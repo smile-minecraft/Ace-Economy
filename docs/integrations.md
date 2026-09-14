@@ -22,9 +22,7 @@ Vault, PlaceholderAPI, and Floodgate are optional soft dependencies. AceEconomy 
 
 ## AceLib
 
-Install the matching AceLib release, then start the server with AceEconomy. AceLib must be ready before AceEconomy can register commands, messages, and integrations.
-
-When it works, AceEconomy enables normally and its commands are available. If AceLib is missing or not ready, the plugin is disabled instead of starting with partial services.
+Install the matching AceLib release, then start the server with AceEconomy. AceLib must be ready before AceEconomy can register commands, messages, and integrations. If AceLib is missing or not ready, AceEconomy disables itself rather than starting with partial services.
 
 If it does not start:
 

@@ -2,7 +2,7 @@
 
 English · [简体中文](commands.zh-CN.md) · [繁體中文](commands.zh-TW.md)
 
-You are checking your balance, sending money, or opening the bank menu. The command surface is split into player tools and administrator tools so the command you need is easy to find. This reference uses the current v2 syntax: every command is followed by its named subcommand.
+AceEconomy v2 commands always name their subcommand — `/money balance`, not `/money`. This reference covers the player and administrator command surfaces with their syntax, sender rules, permissions, and aliases.
 
 ## Contents
 
