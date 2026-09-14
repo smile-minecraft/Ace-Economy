@@ -14,10 +14,9 @@ This page is for someone installing or replacing the server plugin. It lists wha
 - [Files and dependencies](#files-and-dependencies)
 - [Configuration and data](#configuration-and-data)
 - [Commands](#commands)
-- [Upgrade and rollback](#upgrade-and-rollback)
 - [Verify the release file](#verify-the-release-file)
 
-For a first installation, start with [`admin-install-runbook.md`](admin-install-runbook.md). For a v1 replacement, use [`upgrade-from-v1.md`](upgrade-from-v1.md). Daily maintenance is covered in [`operations.md`](operations.md).
+For a first installation, start with [`admin-install-runbook.md`](admin-install-runbook.md). Daily maintenance is covered in [`operations.md`](operations.md).
 
 ## What is included
 
@@ -44,8 +43,6 @@ Do not keep `AceLib-0.5.0-SNAPSHOT.jar` or another AceLib version beside v2.
 
 The active configuration is `plugins/AceEconomy/config.yml` with `version: "2.0"`. JSON is the default backend and uses `plugins/AceEconomy/data-v2.json`. SQLite uses the file named by `storage.sqlite.path` under the plugin data folder. MySQL/MariaDB uses the `storage.mysql.*` block.
 
-v1 configuration and data are not migrated automatically. A v1 file must not be renamed to a v2 file. Keep the complete pre-upgrade backup if a rollback may be needed.
-
 The installation and operations guides above contain the settings and backup steps needed by a server administrator. Keep passwords and webhook URLs as local values; public examples must use placeholders.
 
 ## Commands
@@ -65,12 +62,6 @@ The v2 commands use these explicit forms:
 | `/aceeco reload` | Reload config and language files from the console |
 
 `/aceeco reload` is not a replacement for a restart after changing a plugin JAR, AceLib, storage backend, database connection, or optional plugin set.
-
-## Upgrade and rollback
-
-Stop the server, back up the complete v1 installation, install the v2 JAR pair, and create a v2 configuration. Do not point v2 at v1 storage. If rollback is required, stop v2, preserve a copy of the v2 data, and restore the pre-upgrade v1 JARs, configuration, and data from the dated backup.
-
-The full procedure is [`upgrade-from-v1.md`](upgrade-from-v1.md). Do not copy `data-v2.json`, `data-v2.sqlite`, or a v2 snapshot into a v1 data location.
 
 ## Verify the release file
 

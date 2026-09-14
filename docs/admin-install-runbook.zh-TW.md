@@ -2,7 +2,7 @@
 
 [English](admin-install-runbook.md) · [简体中文](admin-install-runbook.zh-CN.md) · 繁體中文
 
-這本手冊寫給第一次裝插件的管理員，目標是把 AceEconomy v2 放上 Paper 或 Folia，而且不用猜檔案在哪裡。照著做，裝完會知道怎麼確認有裝好、壞掉先看哪裡。全新安裝看這裡，從 v1 換過來請改看 [`upgrade-from-v1.md`](upgrade-from-v1.zh-TW.md)。
+這本手冊寫給第一次裝插件的管理員，目標是把 AceEconomy v2 放上 Paper 或 Folia，而且不用猜檔案在哪裡。照著做，裝完會知道怎麼確認有裝好、壞掉先看哪裡。
 
 ## 目錄
 
@@ -83,7 +83,7 @@ plugins/AceEconomy/data-v2.json
 
 ### 4. 設定儲存方式與伺服器行為
 
-停服狀態下打開 `plugins/AceEconomy/config.yml`。這份必須是含 `version: "2.0"` 的 v2 設定，不要把 v1 的 `config-version` 整段貼進來。v2 認得的儲存寫法只有下面幾種。
+停服狀態下打開 `plugins/AceEconomy/config.yml`。這份必須是含 `version: "2.0"` 的 v2 設定。v2 認得的儲存寫法只有下面幾種。
 
 JSON 是預設值，不用填連線資訊：
 
@@ -173,6 +173,5 @@ storage:
 
 ## 接下來閱讀
 
-- [`upgrade-from-v1.md`](upgrade-from-v1.zh-TW.md)：更換 v1 安裝並保留安全的回退路徑。
 - [`operations.md`](operations.zh-TW.md)：日常備份、重新載入、重啟與整合管理。
 - [`release-v2.1.0.md`](release-v2.1.0.zh-TW.md)：版本需求與 v2 功能總覽。

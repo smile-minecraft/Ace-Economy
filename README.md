@@ -26,7 +26,6 @@ AceEconomy adds an in-game economy to Paper and Folia servers. Players can check
 | --- | --- |
 | [Server operations](docs/operations.md) | Run daily checks, change settings safely, back up data, or recover a server |
 | [Persistence, backup, and restore](docs/persistence.md) | Choose a backend or work through backup and restore behaviour |
-| [Upgrade from AceEconomy v1](docs/upgrade-from-v1.md) | Replace a v1 installation with v2 or plan a rollback |
 | [Troubleshooting](docs/troubleshooting.md) | Investigate startup, storage, integration, or command problems |
 
 ### Integrations and development
@@ -44,8 +43,6 @@ AceEconomy adds an in-game economy to Paper and Folia servers. Players can check
 | [AceEconomy v2.1.0 release](docs/release-v2.1.0.md) | Review the v2.1.0 release contents and validation boundaries |
 | [AceEconomy v2.0.0 release](docs/release-v2.0.0.md) | Review the v2.0.0 release contents and upgrade notes |
 | [Database concepts and upgrades](docs/database.md) | Understand the v2 data model and upgrade path |
-| [v2 capability matrix](docs/v2-capability-matrix.md) | Check the v1 feature baseline retained by v2 |
-| [v2.0.0 cutover notes](docs/cutover.md) | Read the v2 runtime, dependency, installation, and rollback reference |
 
 ## Contents
 
@@ -74,8 +71,6 @@ Paper/Folia 26.1.2 is the officially supported server line. Folia 26.2 has been 
 4. Start the server. AceEconomy creates its default configuration and storage on first start.
 5. Adjust `config.yml` for your storage, locale, currencies, and integrations. The [configuration guide](docs/config.md) explains each setting.
 6. Give the server a quick tour with `/money balance` and `/bank open`.
-
-Upgrading an existing installation? Start with the [upgrade guide](docs/upgrade-from-v1.md), then follow the [admin installation runbook](docs/admin-install-runbook.md).
 
 ## Core features
 

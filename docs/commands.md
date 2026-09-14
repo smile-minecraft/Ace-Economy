@@ -249,7 +249,7 @@ Examples:
 /aceeco import cmi balances.csv coin apply confirm
 ```
 
-Copy the Essentials `plugins/Essentials/userdata/` files (or the prepared CMI sheet) into `plugins/AceEconomy/import/` first; the command never reads outside that directory. See the migration path in [Upgrade from AceEconomy v1](upgrade-from-v1.md).
+Copy the Essentials `plugins/Essentials/userdata/` files (or the prepared CMI sheet) into `plugins/AceEconomy/import/` first; the command never reads outside that directory. See the `import` row in the administrator table above.
 
 ## Common command errors
 

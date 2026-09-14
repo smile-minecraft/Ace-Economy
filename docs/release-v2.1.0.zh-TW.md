@@ -15,16 +15,14 @@ v2.1.0 在 v2 伺服器功能的基礎上，多了交易歷史查詢與回溯、
   - [貨幣與設定](#貨幣與設定)
   - [銀行票據、銀行介面與指令轉送](#銀行票據銀行介面與指令轉送)
   - [資料存在哪裡](#資料存在哪裡)
-- [安裝、升級與回退](#安裝升級與回退)
+- [安裝](#安裝)
   - [全新安裝](#全新安裝)
-  - [從 v1 更換](#從-v1-更換)
-  - [發布回退](#發布回退)
 - [上線前先驗證檔案](#上線前先驗證檔案)
 - [已經驗證到哪裡](#已經驗證到哪裡)
 - [還沒驗證什麼](#還沒驗證什麼)
 - [明確不做的事](#明確不做的事)
 
-安裝與日常維運請用 [`admin-install-runbook.zh-TW.md`](admin-install-runbook.zh-TW.md)、[`operations.zh-TW.md`](operations.zh-TW.md) 與 [`troubleshooting.zh-TW.md`](troubleshooting.zh-TW.md)。從 v1 更換請用 [`upgrade-from-v1.zh-TW.md`](upgrade-from-v1.zh-TW.md)，完整指令與持久化參考見 [`commands.zh-TW.md`](commands.zh-TW.md) 與 [`persistence.zh-TW.md`](persistence.zh-TW.md)。
+安裝與日常維運請用 [`admin-install-runbook.zh-TW.md`](admin-install-runbook.zh-TW.md)、[`operations.zh-TW.md`](operations.zh-TW.md) 與 [`troubleshooting.zh-TW.md`](troubleshooting.zh-TW.md)。完整指令與持久化參考見 [`commands.zh-TW.md`](commands.zh-TW.md) 與 [`persistence.zh-TW.md`](persistence.zh-TW.md)。
 
 ## 這版跑在什麼環境
 
@@ -93,7 +91,7 @@ v2.1.0 在 v2 伺服器功能的基礎上，多了交易歷史查詢與回溯、
 
 文件裡的 v2 後端包含 JSON、SQLite，以及給 MySQL/MariaDB 用的 MySQL 相容設定。JSON 用 `data-v2.json`；SQLite 用插件資料夾內設定好的路徑；MySQL/MariaDB 用 `storage.type: mysql` 與 `storage.mysql.*`。JSON 與 SQLite 的持久化路徑已有自動化測試覆蓋 schema、重啟、快照與交易邊界；目前的發布證據不等於正式 MySQL/MariaDB 或 JSON 跨程序已經核准。
 
-## 安裝、升級與回退
+## 安裝
 
 ### 全新安裝
 
@@ -102,14 +100,6 @@ v2.1.0 在 v2 伺服器功能的基礎上，多了交易歷史查詢與回溯、
 3. 先啟動一次建立 v2 檔案，再確認啟用中的 `plugins/AceEconomy/config.yml` 包含 `version: "2.0"`。
 4. 選 JSON、SQLite 或設定好的 MySQL 相容後端。資料庫密碼與 webhook URL 只留在本機。
 5. 再次啟動，檢查啟用訊息並執行適用的管理員檢查。完整流程見 [`admin-install-runbook.zh-TW.md`](admin-install-runbook.zh-TW.md)。
-
-### 從 v1 更換
-
-v2 是全新乾淨安裝（不沿用舊資料），不會自動遷移 v1 設定或資料。不得把 v1 檔案改名成 `data-v2.json`，也不能把它載入 v2 後端。請保留完整的切換前 v1 安裝作為回退來源；照著 [`upgrade-from-v1.zh-TW.md`](upgrade-from-v1.zh-TW.md) 做，不要把 v1 檔案複製到 v2。
-
-### 發布回退
-
-要從 v2.1.0 回到 v1 時，先停掉 v2，另外留一份目前 v2 資料的副本，把 v2 JAR 移出 `plugins/`，再從有日期的備份還原 v1 JAR、設定與資料。啟動 v1 並確認資料可讀之後，才能讓玩家回來。絕對不要讓 v1 去讀 `data-v2.json`、`data-v2.sqlite` 或 v2 快照。
 
 ## 上線前先驗證檔案
 
@@ -147,10 +137,10 @@ shasum -a 256 AceEconomy-2.1.0.jar
 
 ## 明確不做的事
 
-- 不包含自動 v1 遷移。
+- 不包含自動遷移。
 - 不包含 Essentials/CMI import。
 - 不包含原生資料庫傾印替代方案。
 - 不包含右鍵兌回銀行票據。
 - 不包含獨立的 `/backup` 與 `/restore` 根指令；請用 `/aceeco` 子指令。
 
-發布範圍與維運邊界也記在 [`operations.zh-TW.md`](operations.zh-TW.md)、[`persistence.zh-TW.md`](persistence.zh-TW.md) 與 [`cutover.zh-TW.md`](cutover.zh-TW.md)。蒐集證據或回報問題時，密碼、token、webhook URL、資料檔與備份都要保密。
+發布範圍與維運邊界也記在 [`operations.zh-TW.md`](operations.zh-TW.md) 與 [`persistence.zh-TW.md`](persistence.zh-TW.md)。蒐集證據或回報問題時，密碼、token、webhook URL、資料檔與備份都要保密。

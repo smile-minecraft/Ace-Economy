@@ -17,7 +17,7 @@ AceEconomy v2.0.0 是给 Java 25 和 Paper/Folia 26.1.2 用的 v2 服务器版�
 - [升级与回退怎么做](#升级与回退怎么做)
 - [上线前先验证文件](#上线前先验证文件)
 
-首次安装请先读 [`admin-install-runbook.zh-CN.md`](admin-install-runbook.zh-CN.md)。从 v1 更换请用 [`upgrade-from-v1.zh-CN.md`](upgrade-from-v1.zh-CN.md)，日常维护见 [`operations.zh-CN.md`](operations.zh-CN.md)。
+首次安装请先读 [`admin-install-runbook.zh-CN.md`](admin-install-runbook.zh-CN.md)，日常维护见 [`operations.zh-CN.md`](operations.zh-CN.md)。
 
 ## 这版包含什么
 
@@ -44,7 +44,7 @@ AceLib 是必要的依赖插件。Vault 和 PlaceholderAPI 是可选插件，启
 
 启用中的配置是 `plugins/AceEconomy/config.yml`，里面包含 `version: "2.0"`。JSON 是默认后端，数据放在 `plugins/AceEconomy/data-v2.json`。SQLite 用插件数据目录下 `storage.sqlite.path` 指定的文件。MySQL/MariaDB 用 `storage.mysql.*` 区块。
 
-v1 的配置与数据不会自动迁移。不得只把 v1 文件改名成 v2 文件。如果之后可能回退，请先留一份完整的升级前备份。
+如果要保留回退路径，请先留一份完整的安装前备份。
 
 上面的安装与运维指南有服务器管理员需要的配置与备份步骤。密码与 webhook URL 只留在本地；公开示例一律用占位符。
 
@@ -68,9 +68,7 @@ v2 用以下明确格式：
 
 ## 升级与回退怎么做
 
-先停服，把完整的 v1 安装备份下来，再放进 v2 的 JAR 组合并创建 v2 配置。不要让 v2 指向 v1 的存储。真要回退时，先停掉 v2，另外留一份 v2 数据副本，再从带日期的备份还原升级前的 v1 JAR、配置和数据。
-
-完整流程见 [`upgrade-from-v1.zh-CN.md`](upgrade-from-v1.zh-CN.md)。不要把 `data-v2.json`、`data-v2.sqlite` 或 v2 快照复制到 v1 的数据位置。
+先停服，把完整的现有安装备份下来，再放进 v2 的 JAR 组合并创建 v2 配置。真要回退时，先停掉 v2，另外留一份 v2 数据副本，再从带日期的备份还原上一个版本的 JAR、配置和数据。
 
 ## 上线前先验证文件
 

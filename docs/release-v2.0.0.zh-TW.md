@@ -14,10 +14,9 @@ AceEconomy v2.0.0 是給 Java 25 與 Paper/Folia 26.1.2 用的 v2 伺服器版�
 - [要放哪些檔案](#要放哪些檔案)
 - [設定與資料在哪裡](#設定與資料在哪裡)
 - [指令長什麼樣](#指令長什麼樣)
-- [升級與回退怎麼做](#升級與回退怎麼做)
 - [上線前先驗證檔案](#上線前先驗證檔案)
 
-首次安裝請先讀 [`admin-install-runbook.zh-TW.md`](admin-install-runbook.zh-TW.md)。從 v1 更換請用 [`upgrade-from-v1.zh-TW.md`](upgrade-from-v1.zh-TW.md)，日常維護見 [`operations.zh-TW.md`](operations.zh-TW.md)。
+首次安裝請先讀 [`admin-install-runbook.zh-TW.md`](admin-install-runbook.zh-TW.md)。日常維護見 [`operations.zh-TW.md`](operations.zh-TW.md)。
 
 ## 這版包含什麼
 
@@ -44,8 +43,6 @@ AceLib 是必要的相依插件。Vault 與 PlaceholderAPI 是選用插件，啟
 
 啟用中的設定是 `plugins/AceEconomy/config.yml`，裡面包含 `version: "2.0"`。JSON 是預設後端，資料放在 `plugins/AceEconomy/data-v2.json`。SQLite 用插件資料夾下 `storage.sqlite.path` 指定的檔案。MySQL/MariaDB 用 `storage.mysql.*` 區塊。
 
-v1 的設定與資料不會自動遷移。不得只把 v1 檔案改名成 v2 檔案。如果之後可能回退，請先留一份完整的升級前備份。
-
 上面的安裝與維運指南有伺服器管理員需要的設定與備份步驟。密碼與 webhook URL 只留在本機；公開範例一律用佔位符。
 
 ## 指令長什麼樣
@@ -65,12 +62,6 @@ v2 用以下明確格式：
 | `/aceeco reload` | 從主控台重新載入設定與語言檔 |
 
 換過插件 JAR、AceLib、儲存後端、資料庫連線或選用插件組合之後，`/aceeco reload` 不能代替重啟。
-
-## 升級與回退怎麼做
-
-先停服，把完整的 v1 安裝備份下來，再放進 v2 的 JAR 組合併建立 v2 設定。不要讓 v2 指到 v1 的儲存。真的要回退時，先停掉 v2，另外留一份 v2 資料副本，再從有日期的備份還原升級前的 v1 JAR、設定與資料。
-
-完整流程見 [`upgrade-from-v1.zh-TW.md`](upgrade-from-v1.zh-TW.md)。不要把 `data-v2.json`、`data-v2.sqlite` 或 v2 快照複製到 v1 的資料位置。
 
 ## 上線前先驗證檔案
 

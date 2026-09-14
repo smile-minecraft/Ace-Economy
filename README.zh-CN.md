@@ -26,7 +26,6 @@ AceEconomy 为 Paper 和 Folia 服务器提供游戏内经济系统。玩家可�
 | --- | --- |
 | [服务器维运](docs/operations.zh-CN.md) | 执行日常检查、安全修改设置、备份数据或恢复服务器 |
 | [持久化、备份与恢复](docs/persistence.zh-CN.md) | 选择存储方式，或了解备份与恢复行为 |
-| [从 AceEconomy v1 升级](docs/upgrade-from-v1.zh-CN.md) | 将 v1 安装替换为 v2，或规划回退 |
 | [故障排除](docs/troubleshooting.zh-CN.md) | 排查启动、存储、整合或指令问题 |
 
 ### 整合与开发
@@ -44,8 +43,6 @@ AceEconomy 为 Paper 和 Folia 服务器提供游戏内经济系统。玩家可�
 | [AceEconomy v2.1.0 发布说明](docs/release-v2.1.0.zh-CN.md) | 查看 v2.1.0 的内容和验证边界 |
 | [AceEconomy v2.0.0 发布说明](docs/release-v2.0.0.zh-CN.md) | 查看 v2.0.0 的内容和升级说明 |
 | [数据库概念与升级](docs/database.zh-CN.md) | 了解 v2 数据模型和升级路径 |
-| [v2 功能基线矩阵](docs/v2-capability-matrix.zh-CN.md) | 查看 v2 保留的 v1 功能基线 |
-| [v2.0.0 切换说明](docs/cutover.zh-CN.md) | 了解 v2 runtime、依赖、安装和回退 |
 
 ## 目录
 
@@ -74,8 +71,6 @@ Paper/Folia 26.1.2 是正式支持的服务器线。Folia 26.2 仅在特定 buil
 4. 启动服务器。AceEconomy 首次启动时会创建默认配置和存储。
 5. 根据需要调整 `config.yml` 中的存储、语言、货币和整合设置。[配置指南](docs/config.zh-CN.md) 解释了各项设置。
 6. 使用 `/money balance` 查询余额，再使用 `/bank open` 打开银行面板。
-
-要升级已有安装，请先阅读[升级指南](docs/upgrade-from-v1.zh-CN.md)，再按照[管理员安装手册](docs/admin-install-runbook.zh-CN.md)完成部署。
 
 ## 主要功能
 

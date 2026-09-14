@@ -249,7 +249,7 @@ Java 玩家開啟的是箱子選單，按鈕與格子對應如下：
 /aceeco import cmi balances.csv coin apply confirm
 ```
 
-先把 Essentials 的 `plugins/Essentials/userdata/` 檔案（或整理好的 CMI 對帳檔）複製到 `plugins/AceEconomy/import/`；指令不會讀取該目錄以外的任何位置。遷移流程見[從 AceEconomy v1 升級](upgrade-from-v1.zh-TW.md)。
+先把 Essentials 的 `plugins/Essentials/userdata/` 檔案（或整理好的 CMI 對帳檔）複製到 `plugins/AceEconomy/import/`；指令不會讀取該目錄以外的任何位置。詳細用法見本頁 `import` 章節。
 
 ## 常見指令錯誤
 

@@ -17,14 +17,13 @@ v2.1.0 在 v2 服务器功能的基础上，增加了交易历史查询与回滚
   - [数据存在哪里](#数据存在哪里)
 - [安装、升级与回退](#安装升级与回退)
   - [全新安装](#全新安装)
-  - [从 v1 更换](#从-v1-更换)
   - [发布回退](#发布回退)
 - [上线前先验证文件](#上线前先验证文件)
 - [已经验证到哪里](#已经验证到哪里)
 - [还没验证什么](#还没验证什么)
 - [明确不做的事](#明确不做的事)
 
-安装和日常运维请用 [`admin-install-runbook.zh-CN.md`](admin-install-runbook.zh-CN.md)、[`operations.zh-CN.md`](operations.zh-CN.md) 和 [`troubleshooting.zh-CN.md`](troubleshooting.zh-CN.md)。从 v1 更换请用 [`upgrade-from-v1.zh-CN.md`](upgrade-from-v1.zh-CN.md)，详细指令与持久化参考见 [`commands.zh-CN.md`](commands.zh-CN.md) 和 [`persistence.zh-CN.md`](persistence.zh-CN.md)。
+安装和日常运维请用 [`admin-install-runbook.zh-CN.md`](admin-install-runbook.zh-CN.md)、[`operations.zh-CN.md`](operations.zh-CN.md) 和 [`troubleshooting.zh-CN.md`](troubleshooting.zh-CN.md)，详细指令与持久化参考见 [`commands.zh-CN.md`](commands.zh-CN.md) 和 [`persistence.zh-CN.md`](persistence.zh-CN.md)。
 
 ## 这版跑在什么环境
 
@@ -103,13 +102,9 @@ v2.1.0 在 v2 服务器功能的基础上，增加了交易历史查询与回滚
 4. 选 JSON、SQLite 或配置好的 MySQL 兼容后端。数据库密码和 webhook URL 只留在本地。
 5. 再次启动，检查启用消息并执行适用的管理员检查。完整流程见 [`admin-install-runbook.zh-CN.md`](admin-install-runbook.zh-CN.md)。
 
-### 从 v1 更换
-
-v2 是全新干净安装（不沿用旧数据），不会自动迁移 v1 配置或数据。不得把 v1 文件改名成 `data-v2.json`，也不能把它载入 v2 后端。请保留完整的切换前 v1 安装作为回退来源；照着 [`upgrade-from-v1.zh-CN.md`](upgrade-from-v1.zh-CN.md) 做，不要把 v1 文件复制到 v2。
-
 ### 发布回退
 
-要从 v2.1.0 回到 v1 时，先停掉 v2，另外留一份当前 v2 数据的副本，把 v2 JAR 移出 `plugins/`，再从带日期的备份还原 v1 JAR、配置和数据。启动 v1 并确认数据可读之后，才能让玩家回来。绝对不要让 v1 去读 `data-v2.json`、`data-v2.sqlite` 或 v2 快照。
+要回退本次发布时，先停服，另外留一份当前数据的副本，把当前版本 JAR 移出 `plugins/`，再从带日期的备份还原上一个版本的 JAR、配置和数据。启动并确认数据可读之后，才能让玩家回来。
 
 ## 上线前先验证文件
 
@@ -147,10 +142,9 @@ shasum -a 256 AceEconomy-2.1.0.jar
 
 ## 明确不做的事
 
-- 不包含自动 v1 迁移。
 - 不包含 Essentials/CMI import。
 - 不包含原生数据库转储替代方案。
 - 不包含右键兑换银行票据。
 - 不包含独立的 `/backup` 与 `/restore` 根指令；请用 `/aceeco` 子指令。
 
-发布范围与运维边界也记在 [`operations.zh-CN.md`](operations.zh-CN.md)、[`persistence.zh-CN.md`](persistence.zh-CN.md) 和 [`cutover.zh-CN.md`](cutover.zh-CN.md)。收集证据或回报问题时，密码、token、webhook URL、数据文件和备份都要保密。
+发布范围与运维边界也记在 [`operations.zh-CN.md`](operations.zh-CN.md) 和 [`persistence.zh-CN.md`](persistence.zh-CN.md)。收集证据或回报问题时，密码、token、webhook URL、数据文件和备份都要保密。

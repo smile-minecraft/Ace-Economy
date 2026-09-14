@@ -52,7 +52,7 @@ storage:
 
 JSON uses `plugins/AceEconomy/data-v2.json`. SQLite uses the file named by `storage.sqlite.path`, which must remain under `plugins/AceEconomy/`. MySQL does not create a local database file.
 
-**Fix:** correct the nested YAML shape, start the server again, and inspect the first storage message. Do not rename a v1 file to `data-v2.json`.
+**Fix:** correct the nested YAML shape, start the server again, and inspect the first storage message.
 
 ## SQLite path rejected
 
@@ -144,7 +144,7 @@ Distinguish the three operations:
 
 **Check first:** record the exact command without passwords, the currency ID, player UUID or name, active `storage.type`, and operation time. Query again with `/money balance <player> <currency>` and inspect the server log around the transaction.
 
-**Fix:** stop further balance changes until the backend and currency are confirmed. Restore only from a known-good v2 backup and only while the server is stopped. Do not load a v1 file into v2 or retry an unknown repair on the live store.
+**Fix:** stop further balance changes until the backend and currency are confirmed. Restore only from a known-good v2 backup and only while the server is stopped. Do not retry an unknown repair on the live store.
 
 ## What to send when it still fails
 

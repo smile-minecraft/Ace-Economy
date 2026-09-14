@@ -98,7 +98,7 @@ storage:
     max-lifetime: 1800000
 ```
 
-The database and user must already be available to the server. The plugin creates the v2 tables when it initializes the SQL backend; it does not use the old v1 table names as a v2 setup script. See [Database concepts and upgrades](database.md) for the data model.
+The database and user must already be available to the server. The plugin creates the v2 tables when it initializes the SQL backend. See [Database concepts and upgrades](database.md) for the data model.
 
 ## Economy rules
 

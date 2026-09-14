@@ -2,7 +2,7 @@
 
 English · [简体中文](admin-install-runbook.zh-CN.md) · [繁體中文](admin-install-runbook.zh-TW.md)
 
-This runbook is for the person who looks after a Paper or Folia server and wants to put AceEconomy v2 into service without guessing which file belongs where. Follow it for a fresh installation, or use [`upgrade-from-v1.md`](upgrade-from-v1.md) when replacing a v1 server.
+This runbook is for the person who looks after a Paper or Folia server and wants to put AceEconomy v2 into service without guessing which file belongs where. Follow it for a fresh installation.
 
 ## Contents
 
@@ -81,7 +81,7 @@ For SQLite, set `storage.type: sqlite` before the start that should create the d
 
 ### 4. Configure storage and server behaviour
 
-Open `plugins/AceEconomy/config.yml` while the server is stopped. The file must be a v2 file with `version: "2.0"`; do not paste a v1 `config-version` block into it. The following are the storage shapes supported by v2.
+Open `plugins/AceEconomy/config.yml` while the server is stopped. The file must be a v2 file with `version: "2.0"`. The following are the storage shapes supported by v2.
 
 JSON is the default and needs no connection details:
 
@@ -171,6 +171,5 @@ Do not delete `data-v2.json`, a SQLite file, or a database simply because the fi
 
 ## Next reading
 
-- [`upgrade-from-v1.md`](upgrade-from-v1.md): replace a v1 installation and keep a safe rollback path.
 - [`operations.md`](operations.md): routine backups, reloads, restarts, and integrations.
 - [`release-v2.1.0.md`](release-v2.1.0.md): version requirements and the v2 feature overview.

@@ -17,14 +17,13 @@ This document is for release operators and maintainers. It describes the impleme
   - [Persistence](#persistence)
 - [Install, upgrade, and rollback](#install-upgrade-and-rollback)
   - [Fresh installation](#fresh-installation)
-  - [Replacing v1](#replacing-v1)
   - [Release rollback](#release-rollback)
 - [Verify the release file](#verify-the-release-file)
 - [Bounded Folia runtime evidence](#bounded-folia-runtime-evidence)
 - [Remaining validation gates](#remaining-validation-gates)
 - [Explicit non-goals](#explicit-non-goals)
 
-For installation and daily operation, use [`admin-install-runbook.md`](admin-install-runbook.md), [`operations.md`](operations.md), and [`troubleshooting.md`](troubleshooting.md). For a v1 replacement, use [`upgrade-from-v1.md`](upgrade-from-v1.md). Detailed command and persistence references are [`commands.md`](commands.md) and [`persistence.md`](persistence.md).
+For installation and daily operation, use [`admin-install-runbook.md`](admin-install-runbook.md), [`operations.md`](operations.md), and [`troubleshooting.md`](troubleshooting.md). Detailed command and persistence references are [`commands.md`](commands.md) and [`persistence.md`](persistence.md).
 
 ## Release baseline
 
@@ -103,13 +102,9 @@ The documented v2 backends are JSON, SQLite, and MySQL-compatible configuration 
 4. Choose JSON, SQLite, or the configured MySQL-compatible backend. Keep database passwords and webhook URLs as local values.
 5. Start again, check the enable messages, and run the appropriate operator checks. Use [`admin-install-runbook.md`](admin-install-runbook.md) for the full procedure.
 
-### Replacing v1
-
-v2 is a clean-slate installation. It does not automatically migrate v1 configuration or data, and a v1 file must not be renamed to `data-v2.json` or loaded into a v2 backend. Keep the complete pre-cutover v1 installation as the rollback source. Follow [`upgrade-from-v1.md`](upgrade-from-v1.md) rather than copying v1 files into v2.
-
 ### Release rollback
 
-To return from v2.1.0 to v1, stop v2, preserve a separate copy of the current v2 data, move the v2 JARs out of `plugins/`, and restore the dated v1 JARs, configuration, and data. Start v1 and confirm that its data is readable before allowing players back in. Never ask v1 to read `data-v2.json`, `data-v2.sqlite`, or a v2 snapshot.
+To roll back a release, stop the server, preserve a separate copy of the current v2 data, and restore the previous release's JARs and configuration from your dated backup. Confirm that the data is readable before allowing players back in.
 
 ## Verify the release file
 
@@ -147,10 +142,9 @@ The following items are explicitly not-run or still open. A future release or op
 
 ## Explicit non-goals
 
-- Automatic v1 migration is not included.
 - Essentials/CMI import is not included.
 - Native database dump replacement is not included.
 - Right-click banknote redemption is not included.
 - Independent `/backup` and `/restore` root commands are not included; use the `/aceeco` subcommands.
 
-The release scope and operational boundaries are also recorded in [`operations.md`](operations.md), [`persistence.md`](persistence.md), and [`cutover.md`](cutover.md). Keep passwords, tokens, webhook URLs, data files, and backups private when collecting evidence or reporting a problem.
+The release scope and operational boundaries are also recorded in [`operations.md`](operations.md) and [`persistence.md`](persistence.md). Keep passwords, tokens, webhook URLs, data files, and backups private when collecting evidence or reporting a problem.

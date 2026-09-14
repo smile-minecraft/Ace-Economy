@@ -34,7 +34,7 @@ The v2 backend is selected by `storage.type`:
 
 Keep the SQLite path inside `plugins/AceEconomy/`. For MySQL, keep `pool-size` and `max-lifetime` under `storage.mysql`, and keep the password outside shared documentation.
 
-The same v2 account and transaction model is used for the supported backends. A v1 data file is not a v2 backup and must not be substituted for one.
+The same v2 account and transaction model is used for the supported backends.
 
 ## Safe configuration changes
 
@@ -148,8 +148,6 @@ stop
 Wait for world and plugin saving to finish. After a restart, repeat the start-of-day checks before letting players back in. If a restart follows a failed reload, restore the last known-good config first so the server does not repeatedly boot with the same bad edit.
 
 ## Emergency rollback
-
-For a v2-to-v1 rollback, follow [Upgrade from v1](upgrade-from-v1.md). Keep the current v2 data copy before restoring the pre-upgrade v1 installation. Never ask v1 to read `data-v2.json`, `data-v2.sqlite`, or a v2 snapshot.
 
 To reverse a single recorded transaction, use `/aceeco rollback <transaction-id>` from the console. It is console-only, requires `aceeconomy.admin` plus `aceeconomy.admin.rollback`, and reports each outcome explicitly: success lists the reversal audit record IDs, an already reverted transaction is a safe no-op, and a marker persist failure means the effect may exist without durable bookkeeping. Inspect storage and reconcile manually before retrying. See [Commands and permissions](commands.md) for the full outcome table.
 
