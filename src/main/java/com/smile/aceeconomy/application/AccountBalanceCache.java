@@ -2,6 +2,7 @@ package com.smile.aceeconomy.application;
 
 import com.smile.aceeconomy.domain.Amount;
 import com.smile.aceeconomy.domain.Currency;
+import com.smile.aceeconomy.domain.LockEpochCapacity;
 
 import java.util.Objects;
 import java.util.Optional;
@@ -49,6 +50,59 @@ public final class AccountBalanceCache {
     private final ConcurrentHashMap<Key, Entry> balances = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, AtomicLong> epochs = new ConcurrentHashMap<>();
     private final AtomicLong globalEpoch = new AtomicLong();
+    /**
+     * Admission bound for {@link #epochs}: epoch holders are never removed, so the map grows
+     * with every distinct owner ever cached. Past this many owners a new owner is served
+     * uncached instead of growing silently. See {@link LockEpochCapacity}.
+     */
+    private final int maxTrackedOwners;
+
+    public AccountBalanceCache() {
+        this(LockEpochCapacity.MAX_TRACKED_IDS);
+    }
+
+    /**
+     * Injectable bound for tests. Production callers use the no-arg constructor with the
+     * shared measured cap.
+     */
+    public AccountBalanceCache(int maxTrackedOwners) {
+        if (maxTrackedOwners <= 0) {
+            throw new IllegalArgumentException(
+                    "maxTrackedOwners must be positive, got " + maxTrackedOwners);
+        }
+        this.maxTrackedOwners = maxTrackedOwners;
+    }
+
+    /** Distinct owners currently holding an epoch entry. Observable for capacity monitoring. */
+    public int trackedOwnerCount() {
+        return epochs.size();
+    }
+
+    /** The admission bound in force. Equals the shared measured cap in production. */
+    public int trackedOwnerCap() {
+        return maxTrackedOwners;
+    }
+
+    /** True once no brand-new owner can be tracked without refusing or degrading. */
+    public boolean isTrackingCapacityReached() {
+        return epochs.size() >= maxTrackedOwners;
+    }
+
+    /**
+     * Admits an owner to epoch tracking. Must run inside {@link #fence}. Returns {@code true}
+     * when the owner is (now) tracked; {@code false} when it is new and the map is full, in
+     * which case the caller must degrade to uncached instead of publishing.
+     */
+    private boolean admitLocked(UUID owner) {
+        if (epochs.containsKey(owner)) {
+            return true;
+        }
+        if (epochs.size() >= maxTrackedOwners) {
+            return false;
+        }
+        epochs.put(owner, new AtomicLong());
+        return true;
+    }
 
     /**
      * In-memory fence serializing a stamp check plus its publish against any invalidation,
@@ -98,7 +152,8 @@ public final class AccountBalanceCache {
      * Publish a cached balance only when no invalidation for this owner (or global reload)
      * landed since {@code expected} was captured. Returns false and drops the value when
      * the stamp is stale; the caller keeps the durable write and simply leaves a miss that
-     * the next persisted read re-primes.
+     * the next persisted read re-primes. Also returns false past the tracking cap for a
+     * brand-new owner: the value stays uncached rather than growing the epoch map silently.
      */
     public boolean putIfStamp(UUID owner, String currencyId, Amount balance, CacheStamp expected) {
         if (owner == null || currencyId == null || balance == null || expected == null) {
@@ -119,31 +174,87 @@ public final class AccountBalanceCache {
             if (!stampOf(owner).equals(expected)) {
                 return false;
             }
+            if (!admitLocked(owner)) {
+                return false;
+            }
             balances.put(key(owner, currencyId),
                     new Entry(balance, expected.ownerEpoch(), expected.globalEpoch()));
             return true;
         }
     }
 
-    /** Replace the cached balance after a successful persistence write. */
+    /**
+     * Publish a cached balance only when no invalidation for this owner (or global reload)
+     * landed since {@code expected} was captured <em>and</em> the entry is still absent.
+     * A present entry was published by a write or load that committed after the caller last
+     * observed a miss, so the caller's value may be older and must not overwrite it; the
+     * present value is kept and {@code false} is returned. Returns {@code true} only when
+     * the value was actually published.
+     */
+    public boolean putIfStampIfAbsent(UUID owner, String currencyId, Amount balance,
+            CacheStamp expected) {
+        if (owner == null || currencyId == null || balance == null || expected == null) {
+            return false;
+        }
+        synchronized (fence) {
+            if (!stampOf(owner).equals(expected)) {
+                return false;
+            }
+            Runnable hook = afterCheckHook;
+            if (hook != null) {
+                hook.run();
+            }
+            // Re-check after the seam: same fenced double-check as {@link #putIfStamp}.
+            if (!stampOf(owner).equals(expected)) {
+                return false;
+            }
+            if (!admitLocked(owner)) {
+                return false;
+            }
+            Key mapKey = key(owner, currencyId);
+            if (balances.containsKey(mapKey)) {
+                return false;
+            }
+            balances.put(mapKey,
+                    new Entry(balance, expected.ownerEpoch(), expected.globalEpoch()));
+            return true;
+        }
+    }
+
+    /**
+     * Replace the cached balance after a successful persistence write. Past the tracking cap
+     * for a brand-new owner the value stays uncached (a safe miss) instead of growing the
+     * epoch map silently.
+     */
     public void put(UUID owner, String currencyId, Amount balance) {
         if (owner == null || currencyId == null || balance == null) {
             return;
         }
         synchronized (fence) {
+            if (!admitLocked(owner)) {
+                return;
+            }
             CacheStamp current = stampOf(owner);
             balances.put(key(owner, currencyId),
                     new Entry(balance, current.ownerEpoch(), current.globalEpoch()));
         }
     }
 
-    /** Drop every cached currency for one owner (offline, write failure, reload). */
+    /**
+     * Drop every cached currency for one owner (offline, write failure, reload). Cached
+     * balances are always removed, even past the tracking cap for an owner that was never
+     * admitted: no residue may linger for an ID the epoch map cannot name.
+     */
     public void invalidate(UUID owner) {
         if (owner == null) {
             return;
         }
         synchronized (fence) {
-            epochs.computeIfAbsent(owner, ignored -> new AtomicLong()).incrementAndGet();
+            if (epochs.containsKey(owner)) {
+                epochs.get(owner).incrementAndGet();
+            } else if (epochs.size() < maxTrackedOwners) {
+                epochs.put(owner, new AtomicLong(1L));
+            }
             balances.keySet().removeIf(k -> k.owner().equals(owner));
         }
     }

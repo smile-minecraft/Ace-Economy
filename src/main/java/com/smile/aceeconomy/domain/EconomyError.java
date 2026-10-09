@@ -4,6 +4,8 @@ package com.smile.aceeconomy.domain;
 public enum EconomyError {
     ACCOUNT_NOT_FOUND,
     CURRENCY_NOT_FOUND,
+    CURRENCY_SCALE_MISMATCH, // stored/requested scale differs from the configured currency scale
+    AMOUNT_EXCEEDS_CAP,    // request/stored/resulting amount above the public AmountCap (10^15)
     INVALID_AMOUNT,        // null / non-finite / over-scale / non-positive where positive required
     INSUFFICIENT_FUNDS,
     DEBT_LIMIT_EXCEEDED,

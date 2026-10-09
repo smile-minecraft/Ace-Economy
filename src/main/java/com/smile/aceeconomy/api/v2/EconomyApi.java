@@ -5,6 +5,7 @@ import com.smile.aceeconomy.domain.AccountSnapshot;
 import com.smile.aceeconomy.domain.Amount;
 import com.smile.aceeconomy.domain.EconomyError;
 import com.smile.aceeconomy.domain.EconomyResult;
+import com.smile.aceeconomy.ports.CommittedTransactionListener;
 
 import java.util.UUID;
 
@@ -34,6 +35,19 @@ public interface EconomyApi {
         return java.util.Optional.empty();
     }
 
+    /**
+     * Background priming read for miss-triggered loaders (such as balance placeholders).
+     * A hit returns the cached value without storage I/O; a miss loads from persistence
+     * and publishes only when the entry is still absent and no invalidation landed during
+     * the read, so a delayed reply can neither resurrect a dropped entry nor overwrite a
+     * newer write. The default implementation delegates to {@link #getBalance} as a
+     * best-effort prime; storage-backed implementations override it with the fenced
+     * conditional publish.
+     */
+    default EconomyResult<Amount> primeBalanceIfAbsent(UUID uuid, String currencyId) {
+        return getBalance(uuid, currencyId);
+    }
+
     EconomyResult<Amount> deposit(UUID uuid, String currencyId, Amount amount);
 
     EconomyResult<Amount> withdraw(UUID uuid, String currencyId, Amount amount);
@@ -58,4 +72,16 @@ public interface EconomyApi {
      * {@link com.smile.aceeconomy.application.EconomyService}.</p>
      */
     void unregisterTransactionListener(TransactionListener listener);
+
+    /**
+     * Registers a non-cancellable post-commit observer. It fires only after a transaction
+     * (balances and audit records) has been durably committed; never for cancelled or
+     * uncommitted operations. Observer failures never change the committed result.
+     */
+    void registerPostCommitListener(CommittedTransactionListener listener);
+
+    /**
+     * Unregisters a previously registered post-commit observer.
+     */
+    void unregisterPostCommitListener(CommittedTransactionListener listener);
 }

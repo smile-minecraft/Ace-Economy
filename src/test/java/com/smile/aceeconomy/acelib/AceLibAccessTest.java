@@ -6,13 +6,16 @@ import com.smile.acelib.event.EventErrorRecord;
 import com.smile.acelib.event.EventRegistration;
 import com.smile.acelib.event.SafeEventRegistry;
 import com.smile.acelib.event.SafeEventListener;
+import com.smile.acelib.lifecycle.LifecycleResult;
 import com.smile.acelib.platform.Platform;
 import com.smile.acelib.platform.PlatformCapability;
 import com.smile.acelib.scheduler.SafeScheduler;
 import com.smile.acelib.scheduler.ScheduledTask;
 import com.smile.acelib.scheduler.TaskErrorRecord;
+import com.smile.aceeconomy.bootstrap.FakeLifecycleHost;
+import com.smile.aceeconomy.bootstrap.HostModuleLifecycle;
 import com.smile.aceeconomy.bootstrap.LifecycleModule;
-import com.smile.aceeconomy.bootstrap.ModuleLifecycle;
+import com.smile.aceeconomy.bootstrap.LifecycleRegistrationException;
 import com.smile.aceeconomy.bootstrap.ResourceOwner;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -27,6 +30,7 @@ import org.mockito.Mockito;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -126,6 +130,16 @@ class AceLibAccessTest {
         @Override
         public void cancelAll() {
             cancelAllCalled = true;
+        }
+
+        @Override
+        public com.smile.acelib.scheduler.TaskScope scopeFor(Player player) {
+            return null;
+        }
+
+        @Override
+        public com.smile.acelib.scheduler.TaskScope scopeFor(Entity entity) {
+            return null;
         }
     }
 
@@ -317,9 +331,8 @@ class AceLibAccessTest {
     // ---- facade-requiring module ---------------------------------------------
 
     @Test
-    void moduleRefusesToStartWhenFacadeNotReadyAndRollsBackPrior() throws Exception {
+    void moduleRefusesToStartWhenFacadeNotReadyBeforeAnyStart() {
         List<String> log = new java.util.ArrayList<>();
-        ModuleLifecycle lifecycle = new ModuleLifecycle();
         LifecycleModule prior = new LifecycleModule() {
             @Override
             public String name() {
@@ -336,23 +349,32 @@ class AceLibAccessTest {
                 log.add("stop:prior");
             }
         };
-        lifecycle.add(prior);
-        lifecycle.add(new FakeAceLibModule(new StubAceLibAccess(mock(JavaPlugin.class), Optional.empty())));
+        JavaPlugin plugin = mock(JavaPlugin.class);
+        HostModuleLifecycle lifecycle = new HostModuleLifecycle(
+                plugin, new StubAceLibAccess(plugin, Optional.empty()));
+        lifecycle.add("test:prior", Set.of(), prior);
+        lifecycle.add("test:facade", Set.of("test:prior"),
+                new FakeAceLibModule(new StubAceLibAccess(plugin, Optional.empty())));
 
-        IllegalStateException thrown = assertThrows(IllegalStateException.class, lifecycle::startAll);
-        assertTrue(thrown.getMessage().contains("not ready"), "module must refuse to start without a ready facade");
-
-        // prior module was started then rolled back; facade module never started
-        assertEquals(List.of("start:prior", "stop:prior"), log);
+        IllegalStateException thrown =
+                assertThrows(IllegalStateException.class, lifecycle::startAll);
+        assertTrue(thrown.getMessage().contains("not ready"),
+                "lifecycle must refuse to start without a ready facade");
+        assertTrue(log.isEmpty(),
+                "ready gate must run no starter, got " + log);
     }
 
     @Test
     void moduleStartsWhenReadyAndRegistersOwnerCleanup() throws Exception {
-        StubAceLibAccess access = new StubAceLibAccess(mock(JavaPlugin.class), Optional.of(readyApi()));
+        JavaPlugin plugin = mock(JavaPlugin.class);
+        AceLibApi api = mock(AceLibApi.class);
+        FakeLifecycleHost host = new FakeLifecycleHost(new FakeProvider(api));
+        when(api.getLifecycleHost()).thenReturn(host);
+        StubAceLibAccess access = new StubAceLibAccess(plugin, Optional.of(api));
         FakeAceLibModule module = new FakeAceLibModule(access);
 
-        ModuleLifecycle lifecycle = new ModuleLifecycle();
-        lifecycle.add(module);
+        HostModuleLifecycle lifecycle = new HostModuleLifecycle(plugin, access);
+        lifecycle.add("test:facade", Set.of(), module);
         lifecycle.startAll();
 
         assertTrue(module.onStarted, "module must have started when facade ready");
@@ -369,8 +391,12 @@ class AceLibAccessTest {
     @Test
     void schedulerCleanupRunsWhenEventRegistryFactoryFails() throws Exception {
         // The event-registry factory throws AFTER the scheduler was created. The scheduler cleanup
-        // must already be owned by the resource owner so rollback still tears it down.
-        StubAceLibAccess access = new StubAceLibAccess(mock(JavaPlugin.class), Optional.of(readyApi())) {
+        // must already be owned by the resource owner so host compensation still tears it down.
+        JavaPlugin plugin = mock(JavaPlugin.class);
+        AceLibApi api = mock(AceLibApi.class);
+        FakeLifecycleHost host = new FakeLifecycleHost(new FakeProvider(api));
+        when(api.getLifecycleHost()).thenReturn(host);
+        StubAceLibAccess access = new StubAceLibAccess(plugin, Optional.of(api)) {
             @Override
             public SafeEventRegistry createEventRegistry(AceLibApi api) {
                 throw new RuntimeException("event-registry-factory-boom");
@@ -378,12 +404,17 @@ class AceLibAccessTest {
         };
         FakeAceLibModule module = new FakeAceLibModule(access);
 
-        ModuleLifecycle lifecycle = new ModuleLifecycle();
-        lifecycle.add(module);
+        HostModuleLifecycle lifecycle = new HostModuleLifecycle(plugin, access);
+        lifecycle.add("test:facade", Set.of(), module);
 
-        RuntimeException thrown = assertThrows(RuntimeException.class, lifecycle::startAll);
-        assertEquals("event-registry-factory-boom", thrown.getMessage(),
-                "original factory exception must be preserved, not wrapped/swallowed");
+        LifecycleRegistrationException thrown =
+                assertThrows(LifecycleRegistrationException.class, lifecycle::startAll);
+        assertTrue(thrown.result().problems().stream()
+                        .anyMatch(problem -> problem.code() == LifecycleResult.Code.ENABLE_FAILED),
+                "factory failure must surface as a structured enable failure");
+        assertTrue(thrown.result().problems().stream()
+                        .anyMatch(problem -> problem.message().contains("event-registry-factory-boom")),
+                "original factory failure must be preserved in the problem, not swallowed");
         assertTrue(access.scheduler.cancelAllCalled,
                 "scheduler cleanup must run even when the event-registry factory fails");
     }

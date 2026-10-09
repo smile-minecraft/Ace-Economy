@@ -25,6 +25,8 @@ public final class TypedErrors {
         String code = switch (err) {
             case ACCOUNT_NOT_FOUND -> "ACELIB-CMD-ACCOUNT-NOT-FOUND";
             case CURRENCY_NOT_FOUND -> "ACELIB-CMD-UNKNOWN-CURRENCY";
+            case CURRENCY_SCALE_MISMATCH -> "ACELIB-CMD-CURRENCY-SCALE-MISMATCH";
+            case AMOUNT_EXCEEDS_CAP -> "ACELIB-CMD-AMOUNT-OVERFLOW";
             case INSUFFICIENT_FUNDS -> "ACELIB-CMD-INSUFFICIENT-FUNDS";
             case DEBT_LIMIT_EXCEEDED -> "ACELIB-CMD-DEBT-LIMIT";
             case DEBT_DISABLED -> "ACELIB-CMD-DEBT-DISABLED";
@@ -41,6 +43,11 @@ public final class TypedErrors {
         String key = switch (err) {
             case ACCOUNT_NOT_FOUND -> "economy.account-not-found";
             case CURRENCY_NOT_FOUND -> "general.unknown-currency";
+            case CURRENCY_SCALE_MISMATCH -> "economy.currency-scale-mismatch";
+            // The overflow template carries no value placeholder, so the cap diagnosis
+            // rides the invalid-amount template (which has {amount}) — the typed code
+            // above still identifies the category for programmatic callers.
+            case AMOUNT_EXCEEDS_CAP -> "general.invalid-amount";
             case INSUFFICIENT_FUNDS -> "economy.insufficient-funds";
             case DEBT_LIMIT_EXCEEDED -> "economy.insufficient-funds";
             case DEBT_DISABLED -> "economy.insufficient-funds";
@@ -55,7 +62,10 @@ public final class TypedErrors {
         if (err == EconomyError.CURRENCY_NOT_FOUND) {
             String currency = result.message() == null ? "" : result.message();
             msg = messages.plainMessage(key, java.util.Map.of("currency", currency));
-        } else if (err == EconomyError.INVALID_AMOUNT) {
+        } else if (err == EconomyError.CURRENCY_SCALE_MISMATCH) {
+            String details = result.message() == null ? "" : result.message();
+            msg = messages.plainMessage(key, java.util.Map.of("details", details));
+        } else if (err == EconomyError.AMOUNT_EXCEEDS_CAP || err == EconomyError.INVALID_AMOUNT) {
             String amt = result.message() == null ? "" : result.message();
             msg = messages.plainMessage(key, java.util.Map.of("amount", amt));
         } else {

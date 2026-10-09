@@ -12,7 +12,7 @@ import org.jetbrains.annotations.NotNull;
 import java.util.Optional;
 
 /**
- * v2 facade accessor and external-resource factory for AceLib v1.2.1.
+ * v2 facade accessor and external-resource factory for AceLib v1.4.0.
  *
  * <p>Every facade lookup re-resolves through the Bukkit {@link org.bukkit.plugin.ServicesManager}
  * and gates on {@link AceLibApi#isReady()}; a stale or unregistered facade is never cached. Scheduler

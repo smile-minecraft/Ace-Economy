@@ -5,6 +5,7 @@ import com.smile.acelib.gui.GuiPage;
 import com.smile.acelib.gui.GuiResult;
 import com.smile.acelib.gui.GuiService;
 import com.smile.acelib.gui.GuiSession;
+import com.smile.aceeconomy.infrastructure.banknote.BanknoteFlow;
 import com.smile.aceeconomy.ports.BankGuiUseCase;
 import com.smile.aceeconomy.ports.DepositResult;
 import com.smile.aceeconomy.ports.FoliaContextExecutor;
@@ -44,6 +45,13 @@ public final class V2BankGuiSession {
     private final GuiService guiService;
     private final FoliaContextExecutor folia;
     private final BankGuiUseCase useCase;
+    /**
+     * Shared banknote pipeline. {@code null} in offline unit tests that drive
+     * the synchronous use-case path; production always wires the flow so money
+     * moves off the region thread with the same handover guarantees as the
+     * command and form entries.
+     */
+    private final BanknoteFlow banknoteFlow;
     private volatile Function<Integer, BankGuiAction> actionResolver;
     // Layout generation: bumped once per resolver swap. An open binds the
     // generation that was current when its layout was read; a mismatch means a
@@ -149,10 +157,19 @@ public final class V2BankGuiSession {
                             @NotNull FoliaContextExecutor folia,
                             @NotNull BankGuiUseCase useCase,
                             @NotNull Function<Integer, BankGuiAction> actionResolver) {
+        this(guiService, folia, useCase, actionResolver, null);
+    }
+
+    public V2BankGuiSession(@NotNull GuiService guiService,
+                            @NotNull FoliaContextExecutor folia,
+                            @NotNull BankGuiUseCase useCase,
+                            @NotNull Function<Integer, BankGuiAction> actionResolver,
+                            BanknoteFlow banknoteFlow) {
         this.guiService = Objects.requireNonNull(guiService, "guiService");
         this.folia = Objects.requireNonNull(folia, "folio");
         this.useCase = Objects.requireNonNull(useCase, "useCase");
         this.actionResolver = Objects.requireNonNull(actionResolver, "actionResolver");
+        this.banknoteFlow = banknoteFlow;
     }
 
     public @NotNull OpenOutcome open(@NotNull Player player, @NotNull String title, int size,
@@ -372,6 +389,39 @@ public final class V2BankGuiSession {
                     : ClickOutcome.rejected(closed.errorCode());
             return CompletableFuture.completedFuture(outcome);
         }
+        if (banknoteFlow != null) {
+            // Shared-flow path: the generation was just validated above and the
+            // flow probes, commits and hands over on the right threads itself,
+            // so this method never blocks the calling thread on storage and
+            // never touches the inventory here. Only snapshot-bound deposits
+            // take this path; the snapshot-free overload keeps the legacy
+            // execution-time read below. The generation travels into the flow
+            // as well: a reload or window change while the pipeline waits
+            // refuses before any money moves and refunds instead of placing
+            // afterwards, so a late callback can neither charge nor deliver
+            // under rules that no longer apply.
+            BanknoteFlow.GenerationCheck stillValid = () -> {
+                try {
+                    return guiService.validateClick(playerUuid, generation, slot).isAllowed();
+                } catch (Throwable t) {
+                    return false;
+                }
+            };
+            if (action.type() == BankGuiAction.Type.WITHDRAW) {
+                return banknoteFlow.withdraw(playerUuid, action.currencyId(), action.amount(),
+                                stillValid)
+                        .thenApply(this::mapWithdrawOutcome);
+            }
+            if (action.type() == BankGuiAction.Type.DEPOSIT && hasSnapshot) {
+                if (clickTimeSnapshot == null) {
+                    return CompletableFuture.completedFuture(ClickOutcome.rejected("deposit.no-item"));
+                }
+                ItemStack snapshot = clickTimeSnapshot;
+                return banknoteFlow.redeem(playerUuid, snapshot, BanknoteFlow.Hand.MAIN_HAND,
+                                useCase::deposit, stillValid)
+                        .thenApply(this::mapRedeemOutcome);
+            }
+        }
         Player player = players.get(playerUuid);
         if (player == null) {
             return CompletableFuture.completedFuture(ClickOutcome.rejected("no-player"));
@@ -431,8 +481,74 @@ public final class V2BankGuiSession {
         }
     }
 
-    private ClickOutcome runWithdraw(Player player, UUID playerUuid, BankGuiAction action) {
-        if (player.getInventory().firstEmpty() == -1) {
+    /**
+     * Map a shared-flow withdraw outcome to a click outcome. The flow already
+     * delivered the note on the region thread for successes; every other
+     * outcome only decides the reply the click listener sends.
+     */
+    private ClickOutcome mapWithdrawOutcome(BanknoteFlow.WithdrawOutcome outcome) {
+        if (outcome == null) {
+            return ClickOutcome.rejected("internal.error");
+        }
+        if (outcome.isDelivered()) {
+            return ClickOutcome.success(outcome.note());
+        }
+        if (outcome.isRefusedFull()) {
+            return ClickOutcome.inventoryFull();
+        }
+        if (outcome.isRefunded()) {
+            if (BanknoteFlow.REASON_INVENTORY_FULL.equals(outcome.reason())) {
+                return ClickOutcome.inventoryFull();
+            }
+            return ClickOutcome.rejected(outcome.reason() == null
+                    ? "transaction.failed" : outcome.reason());
+        }
+        if (outcome.isVoidRefunded()) {
+            return ClickOutcome.rejected("delivery.uncertain");
+        }
+        if (outcome.isPending()) {
+            return ClickOutcome.pending(outcome.reason() == null
+                    ? BanknoteFlow.PENDING_WITHDRAW_INDETERMINATE : outcome.reason());
+        }
+        com.smile.aceeconomy.domain.EconomyError error = outcome.error();
+        if (error == com.smile.aceeconomy.domain.EconomyError.INSUFFICIENT_FUNDS
+                || error == com.smile.aceeconomy.domain.EconomyError.DEBT_LIMIT_EXCEEDED
+                || error == com.smile.aceeconomy.domain.EconomyError.DEBT_DISABLED) {
+            return ClickOutcome.rejected("insufficient.funds");
+        }
+        if (error == com.smile.aceeconomy.domain.EconomyError.CURRENCY_NOT_FOUND) {
+            return ClickOutcome.rejected("currency.unknown");
+        }
+        return ClickOutcome.rejected("transaction.failed");
+    }
+
+    /**
+     * Map a shared-flow redeem outcome to a click outcome. The flow already
+     * removed the note on the region thread for clean credits; retained and
+     * mismatch outcomes keep the item untouched by construction.
+     */
+    private ClickOutcome mapRedeemOutcome(BanknoteFlow.RedeemOutcome outcome) {
+        if (outcome == null) {
+            return ClickOutcome.rejected("internal.error");
+        }
+        if (outcome.isCredited()) {
+            return ClickOutcome.credited();
+        }
+        if (outcome.isCreditRetained()) {
+            return ClickOutcome.creditRetained(outcome.value());
+        }
+        if (outcome.isItemMismatch()) {
+            return ClickOutcome.itemMismatch();
+        }
+        if (outcome.isPending()) {
+            return ClickOutcome.pending(outcome.reason() == null
+                    ? BanknoteFlow.PENDING_CREDIT_INDETERMINATE : outcome.reason());
+        }
+        return ClickOutcome.rejected(outcome.reason() == null
+                ? "transaction.failed" : outcome.reason());
+    }
+
+    private ClickOutcome runWithdraw(Player player, UUID playerUuid, BankGuiAction action) {        if (player.getInventory().firstEmpty() == -1) {
             return ClickOutcome.inventoryFull();
         }
         WithdrawResult r = useCase.withdraw(playerUuid, action.amount(), action.currencyId());
@@ -1593,16 +1709,22 @@ public final class V2BankGuiSession {
     }
 
     public static final class ClickOutcome {
-        private enum Kind { ACCEPTED, ALLOWED, SUCCESS, CREDITED, CREDIT_RETAINED, ITEM_MISMATCH, SNAPSHOT_FAILED, INVENTORY_FULL, REJECTED, DISPATCHED }
+        private enum Kind { ACCEPTED, ALLOWED, SUCCESS, CREDITED, CREDIT_RETAINED, ITEM_MISMATCH, SNAPSHOT_FAILED, INVENTORY_FULL, REJECTED, DISPATCHED, PENDING }
 
         private final Kind kind;
         private final ItemStack banknote;
         private final String reason;
+        private final long retainedValue;
 
         private ClickOutcome(Kind kind, ItemStack banknote, String reason) {
+            this(kind, banknote, reason, -1L);
+        }
+
+        private ClickOutcome(Kind kind, ItemStack banknote, String reason, long retainedValue) {
             this.kind = kind;
             this.banknote = banknote;
             this.reason = reason;
+            this.retainedValue = retainedValue;
         }
 
         public static ClickOutcome accepted() {
@@ -1629,6 +1751,14 @@ public final class V2BankGuiSession {
          */
         public static ClickOutcome creditRetained() {
             return new ClickOutcome(Kind.CREDIT_RETAINED, null, "item.remove-failed");
+        }
+
+        /**
+         * Same as {@link #creditRetained()} but carrying the actually-credited
+         * value so the reply can name the retained amount.
+         */
+        public static ClickOutcome creditRetained(long value) {
+            return new ClickOutcome(Kind.CREDIT_RETAINED, null, "item.remove-failed", value);
         }
 
         /**
@@ -1662,6 +1792,17 @@ public final class V2BankGuiSession {
          */
         public static ClickOutcome dispatched() {
             return new ClickOutcome(Kind.DISPATCHED, null, "dispatched");
+        }
+
+        /**
+         * The operation was accepted but its result is undecided (indeterminate
+         * storage result, uncertain handover kept for manual review, or
+         * shutdown). Nothing was refunded blindly; the reply tells the player
+         * to wait or contact an administrator instead of retrying.
+         */
+        public static ClickOutcome pending(@NotNull String reason) {
+            return new ClickOutcome(Kind.PENDING, null,
+                    Objects.requireNonNull(reason, "reason"));
         }
 
         public boolean isAccepted() {
@@ -1702,6 +1843,15 @@ public final class V2BankGuiSession {
 
         public boolean isDispatched() {
             return kind == Kind.DISPATCHED;
+        }
+
+        public boolean isPending() {
+            return kind == Kind.PENDING;
+        }
+
+        /** Actually-credited value for retained credits; -1 when unknown. */
+        public long retainedValue() {
+            return retainedValue;
         }
 
         public ItemStack banknote() {

@@ -3,6 +3,7 @@ package com.smile.aceeconomy.infrastructure.operations;
 import com.smile.aceeconomy.domain.Account;
 import com.smile.aceeconomy.domain.Amount;
 import com.smile.aceeconomy.domain.Currency;
+import com.smile.aceeconomy.domain.DebtPolicy;
 import com.smile.aceeconomy.domain.Transaction;
 import com.smile.aceeconomy.domain.TransactionType;
 import com.smile.aceeconomy.operations.RollbackCategory;
@@ -39,11 +40,25 @@ public final class InMemoryReversalExecutor implements ReversalExecutor {
     private final AccountRepository accounts;
     private final TransactionRepository transactions;
     private final Clock clock;
+    /**
+     * Debt policy shared with ordinary transactions ({@code economy.allow-negative-balance}).
+     * Evaluated against the live balance inside {@link #execute}, so a rollback can never
+     * produce a balance an ordinary transaction would refuse. {@code null} means no
+     * enforcement (legacy constructor only, preserving the pre-policy behaviour for
+     * existing callers).
+     */
+    private final DebtPolicy debtPolicy;
 
     public InMemoryReversalExecutor(AccountRepository accounts, TransactionRepository transactions, Clock clock) {
+        this(accounts, transactions, clock, null);
+    }
+
+    public InMemoryReversalExecutor(AccountRepository accounts, TransactionRepository transactions,
+                                    Clock clock, DebtPolicy debtPolicy) {
         this.accounts = Objects.requireNonNull(accounts, "accounts");
         this.transactions = Objects.requireNonNull(transactions, "transactions");
         this.clock = Objects.requireNonNull(clock, "clock");
+        this.debtPolicy = debtPolicy;
     }
 
     @Override
@@ -64,6 +79,14 @@ public final class InMemoryReversalExecutor implements ReversalExecutor {
                         "account not found for reversal: " + d.accountId());
             }
             Account base = updated.getOrDefault(d.accountId(), current);
+            Amount before = base.balanceOf(d.currencyId());
+            if (before == null) {
+                before = d.delta().zero(d.delta().scale());
+            }
+            if (debtPolicy != null && !debtPolicy.allows(before.add(d.delta()))) {
+                return ReversalOutcome.failure(RollbackError.EXECUTION_FAILED,
+                        debtRejectionMessage(d, before.add(d.delta())));
+            }
             Account next = base.deposit(d.currencyId(), d.delta());
             if (d.delta().isNegative()) {
                 next = base.withdraw(d.currencyId(), d.delta().abs());
@@ -127,5 +150,22 @@ public final class InMemoryReversalExecutor implements ReversalExecutor {
             ids.add(t.id());
         }
         return ReversalOutcome.success(ids);
+    }
+
+    /**
+     * Clear debt-policy refusal naming the governing setting, worded like the
+     * ordinary-transaction refusal so operators see one consistent rule.
+     */
+    private String debtRejectionMessage(ReversalPlan.AccountDelta delta, Amount after) {
+        String where = "account " + delta.accountId()
+                + " (" + Currency.normalizeId(delta.currencyId()) + ")";
+        if (!debtPolicy.isAllowNegative()) {
+            return "rollback rejected: reversal would make balance " + after + " for " + where
+                    + ", which economy.allow-negative-balance=false forbids"
+                    + " (insufficient funds); nothing was changed";
+        }
+        return "rollback rejected: reversal would make balance " + after + " for " + where
+                + " exceeding debt limit " + debtPolicy.debtLimit()
+                + " (debt limit exceeded); nothing was changed";
     }
 }

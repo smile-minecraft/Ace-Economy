@@ -14,7 +14,7 @@ import com.smile.aceeconomy.acelib.AceLibAccess;
 import com.smile.aceeconomy.acelib.AceLibModule;
 import com.smile.aceeconomy.api.v2.EconomyApiImpl;
 import com.smile.aceeconomy.api.v2.InMemoryTransactionEventPublisher;
-import com.smile.aceeconomy.api.v2.TransactionListener;
+import com.smile.aceeconomy.ports.CommittedTransactionListener;
 import com.smile.aceeconomy.application.EconomyService;
 import com.smile.aceeconomy.commands.v2.CommandServices;
 import com.smile.aceeconomy.commands.v2.MainCommandAliasPolicy;
@@ -37,6 +37,7 @@ import com.smile.aceeconomy.infrastructure.integration.acelib.ExternalIntegratio
 import com.smile.aceeconomy.infrastructure.integration.acelib.IntegrationModule;
 import com.smile.aceeconomy.infrastructure.integration.placeholder.AceEconomyExpansion;
 import com.smile.aceeconomy.infrastructure.integration.placeholder.BukkitPlaceholderRegistration;
+import com.smile.aceeconomy.infrastructure.integration.placeholder.PlaceholderBalanceLoader;
 import com.smile.aceeconomy.infrastructure.integration.placeholder.PlaceholderIntegrationModule;
 import com.smile.aceeconomy.infrastructure.integration.placeholder.PlaceholderLifecycle;
 import com.smile.aceeconomy.infrastructure.integration.placeholder.PlaceholderResolver;
@@ -69,6 +70,7 @@ import com.smile.aceeconomy.ports.AccountRepository;
 import com.smile.aceeconomy.ports.Clock;
 import com.smile.aceeconomy.ports.FoliaContextExecutor;
 import com.smile.aceeconomy.ports.TransactionEventPublisher;
+import com.smile.aceeconomy.ports.persistence.AtomicImportStore;
 import com.smile.aceeconomy.ports.persistence.AtomicRedemptionStore;
 import com.smile.aceeconomy.ports.persistence.AtomicReversalStore;
 import com.smile.aceeconomy.ports.persistence.NonceStore;
@@ -98,14 +100,15 @@ import java.util.function.Consumer;
 import java.util.logging.Logger;
 
 /**
- * The single v2 production composition root. Modules are deliberately registered in dependency order;
- * {@link ModuleLifecycle} supplies reverse stop order, rollback after partial start, and idempotency.
+ * The single v2 production composition root. Modules are declared as a linear AceLib
+ * lifecycle-host chain; the host supplies topological start order, reverse stop order,
+ * rollback after partial start, and idempotency.
  */
 public final class CompositionRoot {
     private static final long SESSION_SHUTDOWN_DEADLINE_MILLIS = 5_000L;
 
     private final JavaPlugin plugin;
-    private final ModuleLifecycle lifecycle = new ModuleLifecycle();
+    private final HostModuleLifecycle lifecycle;
     private final ConfigLangAdapter config;
 
     private ExecutorService ioExecutor;
@@ -115,22 +118,27 @@ public final class CompositionRoot {
     private TransactionRepository transactions;
     private AtomicReversalStore reversals;
     private AtomicRedemptionStore redemptions;
+    private AtomicImportStore importStore;
     private NonceStore nonces;
     private CurrencyRegistry currencies;
     private EconomyService economy;
     private EconomyApiImpl api;
     private InMemoryTransactionEventPublisher publisher;
     private SafeScheduler scheduler;
-    private GuiService runtimeGui;
     private FoliaContextExecutor folia;
     private PlayerSessionManager sessions;
     private V2BankGuiSession bankGui;
     private BankFormSession bankForms;
+    private com.smile.aceeconomy.infrastructure.banknote.BanknoteFlow banknoteFlow;
     private CommandRegistry commandRegistry;
     // Bound to the transaction publisher and dropped on presentation stop. Every committed
     // balance mutation invalidates the shared leaderboard snapshot, so /baltop (and the PAPI
     // rank placeholders reading the same cache) never wait out the TTL to see a change.
-    private TransactionListener leaderboardInvalidationListener;
+    private CommittedTransactionListener leaderboardInvalidationListener;
+    // Bound to the transaction publisher when Discord notifications are active and dropped on
+    // presentation stop. Every committed transaction is announced exactly once through this
+    // post-commit observer; the audit sink stays a plain persistence bridge.
+    private CommittedTransactionListener discordPostCommitListener;
     private ExternalIntegrationCoordinator integrations;
     private V2BanknoteFactory banknotes;
     private RollbackService rollbacks;
@@ -152,6 +160,7 @@ public final class CompositionRoot {
     public CompositionRoot(JavaPlugin plugin) {
         this.plugin = java.util.Objects.requireNonNull(plugin, "plugin");
         this.config = new ConfigLangAdapter(plugin, Locale.TRADITIONAL_CHINESE);
+        this.lifecycle = new HostModuleLifecycle(plugin, new AceLibAccess(plugin));
     }
 
     /** Start the complete v2 graph once. */
@@ -175,13 +184,24 @@ public final class CompositionRoot {
     }
 
     private void registerModules() {
-        lifecycle.add(new NamedModule("configuration", resources -> config.load(), resources -> { }));
-        lifecycle.add(new NamedModule("persistence", this::startPersistence, resources -> stopPersistence()));
-        lifecycle.add(new NamedModule("application", this::startApplication, resources -> { }));
-        lifecycle.add(new RuntimeModule());
-        lifecycle.add(new NamedModule("sessions", this::startSessions, resources -> stopSessions()));
-        lifecycle.add(new NamedModule("presentation", this::startPresentation, resources -> stopPresentation()));
-        lifecycle.add(new NamedModule("integrations", this::startIntegrations, resources -> stopIntegrations()));
+        // Linear dependency chain: the host's topological order is exactly this declaration
+        // order, and its reverse disable order is exactly the previous reverse stop order.
+        // Ids are namespaced per plugin so a second consumer sharing the same AceLib host
+        // can never collide with (or be torn down by) this graph.
+        lifecycle.add("aceeconomy:configuration", Set.of(),
+                new NamedModule("configuration", resources -> config.load(), resources -> { }));
+        lifecycle.add("aceeconomy:persistence", Set.of("aceeconomy:configuration"),
+                new NamedModule("persistence", this::startPersistence, resources -> stopPersistence()));
+        lifecycle.add("aceeconomy:application", Set.of("aceeconomy:persistence"),
+                new NamedModule("application", this::startApplication, resources -> { }));
+        lifecycle.add("aceeconomy:acelib-runtime", Set.of("aceeconomy:application"),
+                new RuntimeModule());
+        lifecycle.add("aceeconomy:sessions", Set.of("aceeconomy:acelib-runtime"),
+                new NamedModule("sessions", this::startSessions, resources -> stopSessions()));
+        lifecycle.add("aceeconomy:presentation", Set.of("aceeconomy:sessions"),
+                new NamedModule("presentation", this::startPresentation, resources -> stopPresentation()));
+        lifecycle.add("aceeconomy:integrations", Set.of("aceeconomy:presentation"),
+                new NamedModule("integrations", this::startIntegrations, resources -> stopIntegrations()));
     }
 
     private void startPersistence(ResourceOwner resources) throws Exception {
@@ -207,7 +227,7 @@ public final class CompositionRoot {
         // Config → typed StorageConfig → factory. The factory owns the JSON / SQLite /
         // MySQL backend selection and the connection / pool lifecycle. On any failure it
         // releases whatever it acquired and propagates the original exception, so the
-        // ModuleLifecycle rollback tears down ioExecutor as usual.
+        // host compensation tears down ioExecutor as usual.
         Object storageRaw = config.getConfig("storage");
         StorageConfig storageConfig = StorageConfigParser.parse(
                 storageRaw, plugin.getDataFolder().toPath());
@@ -224,6 +244,7 @@ public final class CompositionRoot {
         // with ordinary reads and writes.
         reversals = wiring.reversals();
         redemptions = wiring.redemptions();
+        importStore = wiring.imports();
         nonces = wiring.nonces();
     }
 
@@ -243,13 +264,16 @@ public final class CompositionRoot {
                 decimal("economy.default-debt-limit", 0.0)))
                 : DebtPolicy.disabled();
 
-        // Discord notification wiring: best-effort, post-commit via AuditSink decorator.
+        // Discord notification wiring: best-effort, post-commit via a dedicated observer.
         // Active only when discord.enabled=true AND the webhook URL passes strict validation
         // (absolute, scheme http/https, host required, no userinfo, legal port). A failed
         // validation degrades gracefully: a fixed diagnostic is logged (the URL is never
         // echoed) and the audit sink stays the plain PersistentAuditSink.
-        // Notification failures never become AuditException, so transaction results and
-        // audit-failure semantics remain unpolluted.
+        // Notification travels only through the post-commit channel, never through a notifying
+        // audit decorator, so atomically persisted transfers are announced exactly once and
+        // never re-persisted. Notification failures never become AuditException, so transaction
+        // results and audit-failure semantics remain unpolluted. The listener is unregistered
+        // with the presentation slice below.
         //
         // The wiring is delegated to the package-private {@link #wireDiscord} seam so tests
         // can drive the same path with fake dependencies (transactions, executor, transport
@@ -257,11 +281,13 @@ public final class CompositionRoot {
         DiscordWiring.Outcome discord = wireDiscord(
                 transactions,
                 ioExecutor,
+                publisher,
                 resources,
                 bool("discord.enabled", false),
                 string("discord.webhook-url", ""),
                 plugin.getLogger());
         AuditSink auditSink = discord.auditSink();
+        discordPostCommitListener = discord.postCommitListener();
 
         economy = new EconomyService(currencies, debt, startBalance, accounts,
                 auditSink, clock, publisher);
@@ -284,7 +310,11 @@ public final class CompositionRoot {
                             if (live != null) {
                                 live.invalidateBalance(uuid);
                             }
-                        }));
+                        },
+                        // Rollback follows the same debt policy as ordinary transactions:
+                        // economy.allow-negative-balance=false refuses a reversal that
+                        // would drive a balance negative.
+                        debt));
         banknoteValidator = new BanknoteValidator(new PersistentIdempotencyGuard(nonces));
     }
 
@@ -321,12 +351,25 @@ public final class CompositionRoot {
         // player's region thread; IO completion threads never resolve or message a Bukkit
         // Player directly. Installed once here, uninstalled with the presentation slice.
         com.smile.aceeconomy.commands.v2.CommandReply.installRegionDispatch(folia::runForPlayer);
+        // The dispatch timeout bounds how long the shared banknote pipeline may wait for a
+        // region callback that the scheduler accepted but retired without running (player
+        // left). Beyond it the withdraw refuses or refunds instead of leaving the reply
+        // pending forever. A zero or negative operator value is floored at the one-second
+        // fail-safe minimum instead of timing every withdraw out immediately.
+        Duration withdrawDispatchTimeout =
+                effectiveDispatchTimeout(integer("withdraw.dispatch-timeout-seconds", 10));
+        // Single shared banknote pipeline for the command, Java GUI and Bedrock form
+        // entries: region probe first, money movement on the IO executor, item handover
+        // back on the region thread. Storage never runs on a region thread.
+        banknoteFlow = new com.smile.aceeconomy.infrastructure.banknote.BanknoteFlow(
+                api, economy, redemptions, banknotes, displayHolder, folia, ioExecutor,
+                dispatchWatchdogs, withdrawDispatchTimeout);
         // The bank GUI use case binds to the SAME durable validator / redemption store and the
         // application economy service (lock, pre-commit, debt policy) so every redeem goes
         // through the prepared atomic path; no in-memory guard appears in this graph.
         ProductionAdapters.BankUseCase bankUseCase =
                 new ProductionAdapters.BankUseCase(api, economy, currencies, banknotes,
-                        banknoteValidator, redemptions);
+                        banknoteValidator, redemptions, banknoteFlow);
         // The bank GUI layout is operator-owned: the whole section is parsed and
         // validated before any session or listener is built, so a malformed
         // bank-gui block aborts the presentation slice instead of leaving a
@@ -336,13 +379,13 @@ public final class CompositionRoot {
                 value("bank-gui"), Set.copyOf(currencies.all().stream().map(Currency::id).toList()));
         GuiService guiService = requireApi().getGuiService();
         bankGui = new V2BankGuiSession(guiService, folia, bankUseCase,
-                BankGuiActions.resolver(bankGuiLayout));
+                BankGuiActions.resolver(bankGuiLayout), banknoteFlow);
         currentLayout = bankGuiLayout;
         // Right-click redemption reuses the same atomic bank use case as the GUI deposit button
         // (durable nonce consumption + credit commit together); the listener owns its click-time
         // snapshot and region-context removal, so no other slice needs to know about interact events.
         BanknoteRedeemListener redeemListener = new BanknoteRedeemListener(
-                bankUseCase, banknotes, folia, config, plugin.getLogger());
+                bankUseCase, banknotes, folia, config, plugin.getLogger(), banknoteFlow);
         Bukkit.getPluginManager().registerEvents(redeemListener, plugin);
         resources.register(() -> HandlerList.unregisterAll(redeemListener));
         // Consumer-side bank click/drag/close wiring: AceLib validates generations but
@@ -350,22 +393,14 @@ public final class CompositionRoot {
         // events into the session above. It runs with ignoreCancelled=false, so an event
         // AceLib already cancelled still reaches the action dispatch.
         com.smile.aceeconomy.gui.v2.BankGuiClickListener bankClickListener =
-                new com.smile.aceeconomy.gui.v2.BankGuiClickListener(bankGui);
+                new com.smile.aceeconomy.gui.v2.BankGuiClickListener(bankGui, folia, config);
         Bukkit.getPluginManager().registerEvents(bankClickListener, plugin);
         resources.register(() -> HandlerList.unregisterAll(bankClickListener));
 
         ProductionAdapters.Economy economyCommands =
                 new ProductionAdapters.Economy(api, displayHolder, ioExecutor);
-        // The dispatch timeout bounds how long the withdraw probe/delivery may wait for a
-        // region callback that the scheduler accepted but retired without running (player
-        // left). Beyond it the withdraw refuses or refunds instead of leaving the reply
-        // pending forever. A zero or negative operator value is floored at the one-second
-        // fail-safe minimum instead of timing every withdraw out immediately.
-        Duration withdrawDispatchTimeout =
-                effectiveDispatchTimeout(integer("withdraw.dispatch-timeout-seconds", 10));
         ProductionAdapters.Withdrawals withdrawalCommands =
-                new ProductionAdapters.Withdrawals(api, displayHolder, banknotes, ioExecutor, folia,
-                        dispatchWatchdogs, withdrawDispatchTimeout);
+                new ProductionAdapters.Withdrawals(banknoteFlow);
         // Hoisted so the backup/restore service can invalidate the SAME leaderboard cache
         // after a successful restore (single instance, single invalidation boundary).
         // The fields keep the instance and TTL alive for the PAPI resolver wiring below,
@@ -400,7 +435,7 @@ public final class CompositionRoot {
                     + failure.getClass().getSimpleName());
         }
         bankForms = new BankFormSession(bedrockForms, folia, bankUseCase, api,
-                () -> currencies, config);
+                () -> currencies, config, banknoteFlow);
         BankOpenRouter bankCommands = new BankOpenRouter(
                 javaBankCommands, bankForms::open, config.bedrockDetector(), ioExecutor);
         ProductionAdapters.Admin adminCommands = new ProductionAdapters.Admin(api, ioExecutor,
@@ -423,14 +458,15 @@ public final class CompositionRoot {
                 new ProductionAdapters.Rollback(rollbacks, ioExecutor);
         // The backup/restore command surface binds to the SAME PersistenceLifecycle acquired
         // in the persistence slice. Snapshots live under <dataFolder>/backups; restore is
-        // gated on no online players plus a pre-restore safety snapshot, and a success clears
-        // the shared leaderboard cache before the operator restarts the server.
+        // gated on no online players plus a pre-restore safety snapshot, and a success drops
+        // both the shared leaderboard rankings and the cached balances (the world underneath
+        // was replaced) before the operator restarts the server.
         BackupRestoreService backupRestoreService = new BackupRestoreService(
                 persistence,
                 plugin.getDataFolder().toPath(),
                 () -> !Bukkit.getOnlinePlayers().isEmpty(),
                 () -> Set.copyOf(currencies.all().stream().map(Currency::id).toList()),
-                leaderboardService::invalidateAll);
+                restoreCacheReset(leaderboardService, economy));
         ProductionAdapters.BackupRestore backupCommands =
                 new ProductionAdapters.BackupRestore(backupRestoreService, ioExecutor);
         // The import command surface binds to an ImportService over the SAME
@@ -447,7 +483,7 @@ public final class CompositionRoot {
                     if (live != null) {
                         live.invalidateBalance(uuid);
                     }
-                });
+                }, importStore, publisher);
         try {
             java.nio.file.Files.createDirectories(plugin.getDataFolder().toPath().resolve("import"));
         } catch (java.io.IOException e) {
@@ -474,7 +510,7 @@ public final class CompositionRoot {
                 MainCommandAliasPolicy.declaredBukkitLabels(declaredCommands),
                 MainCommandAliasPolicy.declaredAliasesByRoot(declaredCommands));
         // The decorator maps a bare player /money (and its /balance, /bal aliases) to the
-        // balance subcommand; AceLib v1.2.1 answers an empty argument list with help, so the
+        // balance subcommand; AceLib v1.4.0 answers an empty argument list with help, so the
         // intended self-balance UX needs this default-subcommand layer. All other labels and
         // explicit subcommands flow through untouched.
         commandRegistry = new com.smile.aceeconomy.commands.v2.DefaultSubcommandRegistry(
@@ -489,21 +525,60 @@ public final class CompositionRoot {
     }
 
     private void stopPresentation() {
+        // Stop accepting new banknote operations first, then drain the accepted ones
+        // within the shared deadline. Late completions never message a player: the
+        // flow itself stays silent and every caller's region reply is best-effort
+        // through a scheduler that is still alive at this point. Persistence and
+        // its executors stop later in reverse order, so the drain still has IO and
+        // watchdogs available. A forced crash may still strand operations, which is
+        // why crash recovery is explicitly out of scope.
+        if (banknoteFlow != null) {
+            try {
+                banknoteFlow.shutdown(SESSION_SHUTDOWN_DEADLINE_MILLIS);
+            } catch (Throwable failure) {
+                plugin.getLogger().warning("Banknote flow shutdown completed with errors: "
+                        + failure.getClass().getSimpleName());
+            }
+        }
         // Drop the reply seam first: after this point no reply may dispatch through a
         // scheduler that is about to be torn down.
         com.smile.aceeconomy.commands.v2.CommandReply.installRegionDispatch(null);
-        // Unregister the transaction listener before the publisher's owner stops: a late
-        // transaction during shutdown must not touch a leaderboard slice that is going away.
+        // Unregister the transaction listeners before the publisher's owner stops: a late
+        // transaction during shutdown must not touch a leaderboard slice that is going away
+        // or enqueue Discord deliveries into a drained notifier.
         if (publisher != null && leaderboardInvalidationListener != null) {
-            publisher.unregister(leaderboardInvalidationListener);
+            publisher.unregisterPostCommit(leaderboardInvalidationListener);
             leaderboardInvalidationListener = null;
         }
-        if (bankForms != null) {
-            bankForms.invalidateAll();
+        if (publisher != null && discordPostCommitListener != null) {
+            publisher.unregisterPostCommit(discordPostCommitListener);
+            discordPostCommitListener = null;
         }
+        invalidateBankSessions(bankGui, bankForms);
         if (commandRegistry != null) {
             commandRegistry.onPluginDisable();
         }
+    }
+
+    /**
+     * Drop every self-owned bank session so no pre-disable generation can act afterwards.
+     *
+     * <p>Each chest session is closed through the shared service's per-session close and each
+     * form entry is discarded locally; the shared {@code GuiService} itself is never shut down
+     * or released, so other consumers of the same AceLib instance are unaffected. Null-safe
+     * and idempotent: a repeated call finds no tracked sessions and drops nothing.
+     *
+     * @return the number of locally tracked sessions dropped
+     */
+    static int invalidateBankSessions(V2BankGuiSession bankGui, BankFormSession bankForms) {
+        int dropped = 0;
+        if (bankGui != null) {
+            dropped += bankGui.invalidateAll();
+        }
+        if (bankForms != null) {
+            dropped += bankForms.invalidateAll();
+        }
+        return dropped;
     }
 
     private void startIntegrations(ResourceOwner resources) {
@@ -518,18 +593,23 @@ public final class CompositionRoot {
             // The resolver shares the leaderboard cache instance (and TTL) with the
             // /baltop command path, so PAPI rank/top placeholders sort exactly like
             // the command output. Placeholder callbacks must never do storage I/O,
-            // so a missing snapshot simply resolves to null here.
+            // so a missing snapshot simply resolves to null here. Balance misses
+            // enqueue a bounded, de-duplicated background prime on the shared IO
+            // executor and likewise resolve to null immediately.
+            PlaceholderBalanceLoader balanceLoads =
+                    new PlaceholderBalanceLoader(api, ioExecutor);
             PlaceholderResolver resolver;
             if (leaderboardCache != null && leaderboardTtl != null) {
                 Clock leaderboardClock = () -> Instant.now();
                 resolver = new PlaceholderResolver(api, displayHolder, leaderboardCache,
-                        leaderboardTtl, leaderboardClock);
+                        leaderboardTtl, leaderboardClock, balanceLoads);
             } else {
-                resolver = new PlaceholderResolver(api, displayHolder);
+                resolver = new PlaceholderResolver(api, displayHolder, balanceLoads);
             }
             AceEconomyExpansion expansion = new AceEconomyExpansion(resolver, plugin.getDescription().getVersion());
             modules.add(new PlaceholderIntegrationModule("placeholderapi", "placeholderapi",
-                    new PlaceholderLifecycle(new BukkitPlaceholderRegistration(), expansion)));
+                    new PlaceholderLifecycle(new BukkitPlaceholderRegistration(), expansion,
+                            balanceLoads)));
         }
         integrations = new ExternalIntegrationCoordinator(
                 new AceLibExternalServiceReadiness(ready.getExternalIntegrationService()), modules);
@@ -689,16 +769,37 @@ public final class CompositionRoot {
 
     /**
      * Register the leaderboard invalidation listener on the transaction publisher and return it
-     * so the caller can unregister on shutdown. The pre-commit event carries no currency id, so
+     * so the caller can unregister on shutdown. The listener observes post-commit transactions
+     * only: cancelled or uncommitted operations never clear the cache, and a failed observer
+     * can never change the committed result. The committed record carries no currency id, so
      * the listener drops every cached currency ranking; that is intentionally coarser than a
      * per-currency invalidation but keeps the listener free of IO and of any Bukkit access, so
      * it is safe to run inline on whatever thread commits the transaction.
      */
-    static TransactionListener wireLeaderboardInvalidation(
+    static CommittedTransactionListener wireLeaderboardInvalidation(
             InMemoryTransactionEventPublisher publisher, LeaderboardService leaderboard) {
-        TransactionListener listener = event -> leaderboard.invalidateAll();
-        publisher.register(listener);
+        CommittedTransactionListener listener = transaction -> leaderboard.invalidateAll();
+        publisher.registerPostCommit(listener);
         return listener;
+    }
+
+    /**
+     * Post-restore cache reset: a successful restore replaces the world underneath the
+     * caches, so both the shared leaderboard rankings and every cached balance are
+     * dropped. Balance entries that survive would keep serving pre-restore values, and a
+     * pre-restore background prime settling afterwards is discarded by the service's
+     * stamp fence. Null-safe for unit seams where either side is not built yet.
+     */
+    static Runnable restoreCacheReset(LeaderboardService leaderboard, EconomyService economy) {
+        return () -> {
+            if (leaderboard != null) {
+                leaderboard.invalidateAll();
+            }
+            EconomyService live = economy;
+            if (live != null) {
+                live.invalidateAllBalances();
+            }
+        };
     }
 
     private Object value(String path) {
@@ -739,7 +840,13 @@ public final class CompositionRoot {
         protected void onStart(ResourceOwner resources, AceLibApi api, SafeScheduler scheduler,
                                SafeEventRegistry events) {
             CompositionRoot.this.scheduler = scheduler;
-            runtimeGui = api.getGuiService();
+            // The shared GuiService listener is owned by AceLib: AceLibPlugin registers it
+            // on enable and removes it with HandlerList#unregisterAll on disable/reload.
+            // Registering it here again would add a redundant registration, and removing it
+            // on stop would also wipe AceLib's own registration (unregisterAll removes every
+            // registration of that instance), breaking every other plugin that shares the
+            // same AceLib instance. This module therefore never touches the shared listener;
+            // session calls go through a freshly resolved GuiService instead.
             // Bedrock click-fallback wiring: hand the ready facade to the message
             // adapter so player chat degrades click actions for Bedrock clients.
             // Floodgate absent (or any lookup failure) keeps the original
@@ -752,19 +859,12 @@ public final class CompositionRoot {
                         + failure.getClass().getSimpleName());
                 config.attachBedrockService(null);
             }
-            if (runtimeGui.getListener() != null) {
-                Listener listener = runtimeGui.getListener();
-                Bukkit.getPluginManager().registerEvents(listener, plugin);
-                resources.register(() -> HandlerList.unregisterAll(listener));
-            }
         }
 
         @Override
         protected void onStop() {
-            if (runtimeGui != null) {
-                runtimeGui.shutdown();
-                runtimeGui = null;
-            }
+            // The scheduler reference is ours to drop; the shared GuiService and its
+            // listener stay with AceLib, so nothing here may shut them down or remove them.
             scheduler = null;
         }
     }
@@ -781,14 +881,20 @@ public final class CompositionRoot {
 
         @EventHandler
         public void onQuit(PlayerQuitEvent event) {
-            sessions.quit(event.getPlayer().getUniqueId(), SESSION_SHUTDOWN_DEADLINE_MILLIS);
-            // Offline invalidation for the balance read cache: a later synchronous query
-            // for this owner must miss (safe default) instead of serving the departed
-            // player's balance until the next persisted read re-primes it. An EconomyService
-            // write that started before this invalidation carries a stale stamp, so even if
-            // it persists afterwards its cached value is discarded rather than resurrected.
-            if (economy != null) {
-                economy.invalidateBalance(event.getPlayer().getUniqueId());
+            try {
+                sessions.quit(event.getPlayer().getUniqueId(), SESSION_SHUTDOWN_DEADLINE_MILLIS);
+            } finally {
+                // Offline invalidation for the balance read cache: a later synchronous query
+                // for this owner must miss (safe default) instead of serving the departed
+                // player's balance until the next persisted read re-primes it. In a finally
+                // block so even a capacity refusal from the quit path above cannot skip it:
+                // the session itself is already cleaned up when that refusal throws.
+                // An EconomyService write that started before this invalidation carries a
+                // stale stamp, so even if it persists afterwards its cached value is
+                // discarded rather than resurrected.
+                if (economy != null) {
+                    economy.invalidateBalance(event.getPlayer().getUniqueId());
+                }
             }
         }
     }
@@ -836,24 +942,26 @@ public final class CompositionRoot {
     static DiscordWiring.Outcome wireDiscord(
             TransactionRepository transactions,
             ExecutorService ioExecutor,
+            InMemoryTransactionEventPublisher publisher,
             ResourceOwner resources,
             boolean enabled,
             String webhookUrl,
             Logger logger) {
-        return wireDiscord(transactions, ioExecutor, resources, enabled, webhookUrl, logger,
+        return wireDiscord(transactions, ioExecutor, publisher, resources, enabled, webhookUrl, logger,
                 DiscordWiring.defaultTransportFactory(), logger::warning);
     }
 
     static DiscordWiring.Outcome wireDiscord(
             TransactionRepository transactions,
             ExecutorService ioExecutor,
+            InMemoryTransactionEventPublisher publisher,
             ResourceOwner resources,
             boolean enabled,
             String webhookUrl,
             Logger logger,
             DiscordWiring.TransportFactory transportFactory,
             Consumer<String> diagnosticsSink) {
-        return DiscordWiring.wire(transactions, ioExecutor, enabled, webhookUrl, logger,
+        return DiscordWiring.wire(transactions, ioExecutor, publisher, enabled, webhookUrl, logger,
                 resources, transportFactory, diagnosticsSink);
     }
 }

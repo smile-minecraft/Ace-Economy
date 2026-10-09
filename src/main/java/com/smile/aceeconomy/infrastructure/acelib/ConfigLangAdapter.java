@@ -1,7 +1,10 @@
 package com.smile.aceeconomy.infrastructure.acelib;
 
+import com.smile.acelib.config.ConfigBinder;
+import com.smile.acelib.config.ConfigBindingException;
 import com.smile.acelib.config.ConfigManager;
 import com.smile.acelib.config.ConfigSchema;
+import com.smile.acelib.config.ConfigSnapshot;
 import com.smile.acelib.config.LangManager;
 import com.smile.acelib.message.MessageService;
 import com.smile.acelib.bedrock.BedrockService;
@@ -29,7 +32,7 @@ import java.util.logging.Level;
 /**
  * v2 config / language / message compatibility adapter (clean-slate).
  *
- * <p>Built only on the public AceLib v1.2.1 surface: {@link ConfigManager},
+ * <p>Built only on the public AceLib v1.4.0 surface: {@link ConfigManager},
  * {@link LangManager} and {@link MessageService}. It introduces no internal
  * datastore, performs no plugin cast and uses no reflection.</p>
  *
@@ -67,6 +70,15 @@ public final class ConfigLangAdapter {
     private volatile ConfigManager configManager;
     private volatile LangManager langManager;
     private volatile MessageService messageService;
+    /**
+     * Last published fixed settings and the immutable snapshot they were bound
+     * from. Both advance only on the single atomic swap after the whole
+     * candidate (fixed scalars plus dynamic blocks) validates; a failed load
+     * or reload keeps the previous pair untouched. {@code null} until the
+     * first successful load.
+     */
+    private volatile V2FixedSettings fixedSettings;
+    private volatile ConfigSnapshot configSnapshot;
     private volatile BedrockService bedrockService;
     private volatile BedrockDetector bedrockDetector;
     private volatile ReloadResult lastReloadResult;
@@ -361,8 +373,11 @@ public final class ConfigLangAdapter {
                 } catch (Throwable ignored) {}
                 throw new IllegalStateException(summary);
             }
-            String validationError = validateCandidateConfig(candidate);
-            if (validationError != null) {
+            ValidatedCandidate validated;
+            try {
+                validated = validateCandidateConfig(candidate);
+            } catch (IllegalArgumentException e) {
+                String validationError = e.getMessage();
                 String sanitized = sanitizeDiagnostic(validationError);
                 String msg = sanitized != null ? sanitized : validationError;
                 try {
@@ -406,6 +421,8 @@ public final class ConfigLangAdapter {
             }
             MessageService candidateService = newMessageService(candidateLang);
             this.configManager = candidate;
+            this.configSnapshot = validated.snapshot();
+            this.fixedSettings = validated.settings();
             this.langManager = candidateLang;
             this.messageService = candidateService;
         }
@@ -615,14 +632,42 @@ public final class ConfigLangAdapter {
         return null;
     }
 
-    private String validateCandidateConfig(ConfigManager cfg) {
-        // --- strict type handling for every V2 schema field (fail-closed) ---
+    /**
+     * Fully validated candidate: the immutable snapshot plus the fixed
+     * settings bound from it. Only constructed after every check below
+     * passes, so publishing it is always all-or-nothing.
+     */
+    private record ValidatedCandidate(ConfigSnapshot snapshot, V2FixedSettings settings) {
+    }
+
+    /**
+     * Validate a candidate config and bind its fixed scalars.
+     *
+     * <p>Layering, fail-closed throughout:</p>
+     * <ul>
+     *   <li>enum membership ({@code storage.type} case-insensitive,
+     *       {@code settings.locale} strict) stays explicit: the binder matches
+     *       enums case-sensitively and would reject inputs the product accepts
+     *       today;</li>
+     *   <li>per-field type and range of every other fixed scalar is enforced
+     *       by {@link ConfigBinder} via {@link V2FixedSettings} (see
+     *       {@link #bindFixedSettings(ConfigSnapshot)});</li>
+     *   <li>finiteness of the two doubles, MySQL/SQLite cross-field rules and
+     *       the operator-owned {@code bank-gui} block stay explicit — the
+     *       binder cannot express them.</li>
+     * </ul>
+     *
+     * @throws IllegalArgumentException with a sanitized path-bearing
+     *         diagnostic; the message never carries raw config values.
+     */
+    private ValidatedCandidate validateCandidateConfig(ConfigManager cfg) {
         // storage.type: must be string enum when present
         Object typeRaw = cfg.get("storage.type");
         String storageType = "json";
         if (typeRaw != null) {
             if (!(typeRaw instanceof String s)) {
-                return "invalid storage.type: must be one of json, sqlite, mysql";
+                throw new IllegalArgumentException(
+                        "invalid storage.type: must be one of json, sqlite, mysql");
             }
             String trimmed = s.trim();
             if (trimmed.isEmpty()) {
@@ -630,7 +675,8 @@ public final class ConfigLangAdapter {
             } else {
                 String low = trimmed.toLowerCase(java.util.Locale.ROOT);
                 if (!("json".equals(low) || "sqlite".equals(low) || "mysql".equals(low))) {
-                    return "invalid storage.type: must be one of json, sqlite, mysql";
+                    throw new IllegalArgumentException(
+                            "invalid storage.type: must be one of json, sqlite, mysql");
                 }
                 storageType = low;
             }
@@ -639,102 +685,92 @@ public final class ConfigLangAdapter {
         Object localeRaw = cfg.get("settings.locale");
         if (localeRaw != null) {
             if (!(localeRaw instanceof String ls)) {
-                return "invalid settings.locale: must be one of en_US, zh_TW, zh_CN";
+                throw new IllegalArgumentException(
+                        "invalid settings.locale: must be one of en_US, zh_TW, zh_CN");
             }
             String code = ls.trim();
             if (!LOCALE_BY_CODE.containsKey(code)) {
-                return "invalid settings.locale: must be one of en_US, zh_TW, zh_CN";
+                throw new IllegalArgumentException(
+                        "invalid settings.locale: must be one of en_US, zh_TW, zh_CN");
             }
         }
-        String err;
-        err = validateIntField(cfg.get("storage.mysql.port"), "storage.mysql.port", 1, 65535);
-        if (err != null) return err;
-        err = validateIntField(cfg.get("storage.mysql.pool-size"), "storage.mysql.pool-size", 1, 1000);
-        if (err != null) return err;
-        err = validateLongField(cfg.get("storage.mysql.max-lifetime"), "storage.mysql.max-lifetime", 1, Long.MAX_VALUE);
-        if (err != null) return err;
-        err = validateIntField(cfg.get("leaderboard.cache-time-seconds"), "leaderboard.cache-time-seconds", 1, 86400);
-        if (err != null) return err;
-        err = validateIntField(cfg.get("leaderboard.page-size"), "leaderboard.page-size", 1, 100);
-        if (err != null) return err;
-        err = validateDoubleField(cfg.get("economy.default-debt-limit"), "economy.default-debt-limit");
-        if (err != null) return err;
-        err = validateDoubleField(cfg.get("start-balance"), "start-balance");
-        if (err != null) return err;
-        err = validateBooleanField(cfg.get("economy.allow-negative-balance"), "economy.allow-negative-balance");
-        if (err != null) return err;
-        err = validateBooleanField(cfg.get("discord.enabled"), "discord.enabled");
-        if (err != null) return err;
-        err = validateBooleanField(cfg.get("leaderboard.enabled"), "leaderboard.enabled");
-        if (err != null) return err;
-        // --- string fields strict ---
-        err = validateStringField(cfg.get("settings.main-command-alias"), "settings.main-command-alias", false, false);
-        if (err != null) return err;
-        err = validateStringField(cfg.get("storage.mysql.host"), "storage.mysql.host", true, true);
-        if (err != null) return err;
+        // Fixed scalars: type and range through the binder, before anything is published.
+        ConfigSnapshot snapshot;
+        try {
+            snapshot = cfg.snapshot();
+        } catch (RuntimeException e) {
+            throw new IllegalArgumentException("invalid fixed-settings: snapshot unavailable");
+        }
+        V2FixedSettings bound = bindFixedSettings(snapshot);
+        // Finiteness is not a binder check: a non-finite double binds fine but
+        // must still fail the load, exactly as before.
+        if (!Double.isFinite(bound.defaultDebtLimit())) {
+            throw new IllegalArgumentException(
+                    "invalid economy.default-debt-limit: must be finite number");
+        }
+        if (!Double.isFinite(bound.startBalance())) {
+            throw new IllegalArgumentException("invalid start-balance: must be finite number");
+        }
         // For host/database/username/password: when mysql backend, require non-blank for host/database/username;
         // password may be empty string but must be string if present.
+        // (String-typedness of every field here is already enforced by the
+        // binder above; only the backend-conditional presence rules remain.)
         if ("mysql".equals(storageType)) {
             Object host = cfg.get("storage.mysql.host");
             if (host != null && (!(host instanceof String) || ((String) host).isBlank())) {
-                return "invalid storage.mysql.host: must be non-blank string";
+                throw new IllegalArgumentException(
+                        "invalid storage.mysql.host: must be non-blank string");
             }
             Object db = cfg.get("storage.mysql.database");
             if (db != null && (!(db instanceof String) || ((String) db).isBlank())) {
-                return "invalid storage.mysql.database: must be non-blank string";
+                throw new IllegalArgumentException(
+                        "invalid storage.mysql.database: must be non-blank string");
             }
             Object user = cfg.get("storage.mysql.username");
             if (user != null && (!(user instanceof String) || ((String) user).isBlank())) {
-                return "invalid storage.mysql.username: must be non-blank string";
+                throw new IllegalArgumentException(
+                        "invalid storage.mysql.username: must be non-blank string");
             }
             Object pwd = cfg.get("storage.mysql.password");
             if (pwd != null && !(pwd instanceof String)) {
-                return "invalid storage.mysql.password: must be string";
+                throw new IllegalArgumentException("invalid storage.mysql.password: must be string");
             }
             // also ensure non-mysql-specific string type when mysql active: already above for host via validateStringField
+            String err;
             err = validateStringField(cfg.get("storage.mysql.username"), "storage.mysql.username", true, true);
-            if (err != null) return err;
+            if (err != null) throw new IllegalArgumentException(err);
             err = validateStringField(cfg.get("storage.mysql.password"), "storage.mysql.password", false, true);
-            if (err != null) return err;
+            if (err != null) throw new IllegalArgumentException(err);
             err = validateStringField(cfg.get("storage.mysql.database"), "storage.mysql.database", true, true);
-            if (err != null) return err;
-        } else {
-            // Non-mysql backend: mysql fields still must be string if present, but not required
-            for (String path : new String[]{"storage.mysql.host", "storage.mysql.database", "storage.mysql.username", "storage.mysql.password"}) {
-                Object v = cfg.get(path);
-                if (v != null && !(v instanceof String)) {
-                    return "invalid " + path + ": must be string";
-                }
-            }
+            if (err != null) throw new IllegalArgumentException(err);
         }
-        // sqlite path: strict string + traversal check when sqlite active
+        // sqlite path: strict string + traversal check when sqlite active.
+        // (String-typedness is already enforced by the binder above.)
         Object sqlitePath = cfg.get("storage.sqlite.path");
         if ("sqlite".equals(storageType)) {
             if (sqlitePath != null) {
                 if (!(sqlitePath instanceof String) || ((String) sqlitePath).isBlank()) {
-                    return "invalid storage.sqlite.path: must be non-blank string";
+                    throw new IllegalArgumentException(
+                            "invalid storage.sqlite.path: must be non-blank string");
                 }
                 String rawPath = ((String) sqlitePath).trim();
                 try {
                     java.nio.file.Path dataFolder = plugin.getDataFolder().toPath().toAbsolutePath().normalize();
                     java.nio.file.Path candidate = dataFolder.resolve(rawPath).normalize();
                     if (!candidate.startsWith(dataFolder)) {
-                        return "invalid storage.sqlite.path: must be inside plugin data folder";
+                        throw new IllegalArgumentException(
+                                "invalid storage.sqlite.path: must be inside plugin data folder");
                     }
+                } catch (IllegalArgumentException e) {
+                    throw e;
                 } catch (Throwable t) {
-                    return "invalid storage.sqlite.path: " + safeErrorSummary(t);
+                    throw new IllegalArgumentException(
+                            "invalid storage.sqlite.path: " + safeErrorSummary(t));
                 }
             }
-        } else {
-            if (sqlitePath != null && !(sqlitePath instanceof String)) {
-                return "invalid storage.sqlite.path: must be string";
-            }
         }
-        // discord.webhook-url: must be string (allow empty = disabled)
-        Object webhook = cfg.get("discord.webhook-url");
-        if (webhook != null && !(webhook instanceof String)) {
-            return "invalid discord.webhook-url: must be string";
-        }
+        // discord.webhook-url and every other plain string scalar: String
+        // type is enforced by the binder above; an empty value means disabled.
         // bank-gui: operator-owned layout; the whole section is validated before
         // any presentation wiring, so a malformed block fails the load instead
         // of leaving a partially applied GUI behind. Currency membership is
@@ -744,9 +780,33 @@ public final class ConfigLangAdapter {
         try {
             BankGuiConfigParser.parse(cfg.get("bank-gui"), candidateCurrencyIds(cfg));
         } catch (IllegalArgumentException failure) {
-            return failure.getMessage();
+            String detail = failure.getMessage();
+            throw new IllegalArgumentException(
+                    detail != null ? detail : "invalid bank-gui: validation failed");
         }
-        return null;
+        return new ValidatedCandidate(snapshot, bound);
+    }
+
+    /**
+     * Bind the fixed scalars of one candidate snapshot through AceLib's
+     * {@link ConfigBinder}.
+     *
+     * <p>Type and range failures surface as {@link IllegalArgumentException}
+     * naming only the dotted field path: the binder's own message embeds the
+     * raw offending value, so it is never propagated (config values may be
+     * secrets) and never logged.</p>
+     */
+    private static V2FixedSettings bindFixedSettings(ConfigSnapshot snapshot) {
+        try {
+            return ConfigBinder.bind(snapshot, V2FixedSettings.class);
+        } catch (ConfigBindingException e) {
+            String path = e.getPath();
+            String safePath = (path == null || path.isBlank()) ? "fixed-settings" : path;
+            throw new IllegalArgumentException(
+                    "invalid " + safePath + ": fixed-setting type or range check failed");
+        } catch (RuntimeException e) {
+            throw new IllegalArgumentException("invalid fixed-settings: binding failed");
+        }
     }
 
     private static java.util.Set<String> candidateCurrencyIds(ConfigManager cfg) {
@@ -781,156 +841,6 @@ public final class ConfigLangAdapter {
             return "invalid " + path + ": must be non-blank string";
         }
         return null;
-    }
-
-    private static String validateIntField(Object raw, String path, int min, int max) {
-        if (raw == null) return null;
-        if (raw instanceof Boolean) {
-            return "invalid " + path + ": must be integer";
-        }
-        if (raw instanceof String) {
-            return "invalid " + path + ": must be integer";
-        }
-        if (!(raw instanceof Number n)) {
-            return "invalid " + path + ": must be integer";
-        }
-        // Reject non-finite / fractional numbers
-        if (n instanceof Double d) {
-            if (!Double.isFinite(d)) return "invalid " + path + ": must be integer";
-            if (d != Math.rint(d)) return "invalid " + path + ": must be integer";
-            long lv = d.longValue();
-            if (lv < min || lv > max) return "invalid " + path + ": must be between " + min + " and " + max;
-            if (lv < Integer.MIN_VALUE || lv > Integer.MAX_VALUE) return "invalid " + path + ": must be integer";
-            return null;
-        }
-        if (n instanceof Float f) {
-            if (!Float.isFinite(f)) return "invalid " + path + ": must be integer";
-            if (f != Math.rint(f)) return "invalid " + path + ": must be integer";
-            long lv = f.longValue();
-            if (lv < min || lv > max) return "invalid " + path + ": must be between " + min + " and " + max;
-            if (lv < Integer.MIN_VALUE || lv > Integer.MAX_VALUE) return "invalid " + path + ": must be integer";
-            return null;
-        }
-        if (n instanceof java.math.BigDecimal bd) {
-            try {
-                long lv = bd.longValueExact();
-                if (bd.scale() > 0 && bd.stripTrailingZeros().scale() > 0) return "invalid " + path + ": must be integer";
-                if (lv < min || lv > max) return "invalid " + path + ": must be between " + min + " and " + max;
-                if (lv < Integer.MIN_VALUE || lv > Integer.MAX_VALUE) return "invalid " + path + ": must be integer";
-                return null;
-            } catch (ArithmeticException e) {
-                return "invalid " + path + ": must be integer";
-            }
-        }
-        if (n instanceof java.math.BigInteger bi) {
-            try {
-                long lv = bi.longValueExact();
-                if (lv < min || lv > max) return "invalid " + path + ": must be between " + min + " and " + max;
-                if (lv < Integer.MIN_VALUE || lv > Integer.MAX_VALUE) return "invalid " + path + ": must be integer";
-                return null;
-            } catch (ArithmeticException e) {
-                return "invalid " + path + ": must be integer";
-            }
-        }
-        long v = n.longValue();
-        if (v < min || v > max) {
-            return "invalid " + path + ": must be between " + min + " and " + max;
-        }
-        // For Integer/Long/Short/Byte we also ensure no overflow truncation for large values
-        // longValue already exact for these types, but int range check above covers it
-        if (v < Integer.MIN_VALUE || v > Integer.MAX_VALUE) {
-            return "invalid " + path + ": must be integer";
-        }
-        return null;
-    }
-
-    private static String validateLongField(Object raw, String path, long min, long max) {
-        if (raw == null) return null;
-        if (raw instanceof Boolean) return "invalid " + path + ": must be integer";
-        if (raw instanceof String) return "invalid " + path + ": must be integer";
-        if (!(raw instanceof Number n)) return "invalid " + path + ": must be integer";
-        if (n instanceof Double d) {
-            if (!Double.isFinite(d)) return "invalid " + path + ": must be integer";
-            if (d != Math.rint(d)) return "invalid " + path + ": must be integer";
-            long lv = d.longValue();
-            // Extra check for large double losing precision: reconstruct via BigDecimal string
-            try {
-                java.math.BigDecimal bd = new java.math.BigDecimal(d.toString());
-                long exact = bd.longValueExact();
-                if (exact != lv || bd.stripTrailingZeros().scale() > 0) return "invalid " + path + ": must be integer";
-                lv = exact;
-            } catch (Exception e) {
-                return "invalid " + path + ": must be integer";
-            }
-            if (lv < min || lv > max) return "invalid " + path + ": must be between " + min + " and " + max;
-            return null;
-        }
-        if (n instanceof Float f) {
-            if (!Float.isFinite(f)) return "invalid " + path + ": must be integer";
-            if (f != Math.rint(f)) return "invalid " + path + ": must be integer";
-            long lv = f.longValue();
-            try {
-                java.math.BigDecimal bd = new java.math.BigDecimal(Float.toString(f));
-                long exact = bd.longValueExact();
-                if (exact != lv || bd.stripTrailingZeros().scale() > 0) return "invalid " + path + ": must be integer";
-                lv = exact;
-            } catch (Exception e) {
-                return "invalid " + path + ": must be integer";
-            }
-            if (lv < min || lv > max) return "invalid " + path + ": must be between " + min + " and " + max;
-            return null;
-        }
-        if (n instanceof java.math.BigDecimal bd) {
-            try {
-                long lv = bd.longValueExact();
-                if (bd.stripTrailingZeros().scale() > 0) return "invalid " + path + ": must be integer";
-                if (lv < min || lv > max) return "invalid " + path + ": must be between " + min + " and " + max;
-                return null;
-            } catch (ArithmeticException e) {
-                return "invalid " + path + ": must be integer";
-            }
-        }
-        if (n instanceof java.math.BigInteger bi) {
-            try {
-                long lv = bi.longValueExact();
-                if (lv < min || lv > max) return "invalid " + path + ": must be between " + min + " and " + max;
-                return null;
-            } catch (ArithmeticException e) {
-                return "invalid " + path + ": must be integer";
-            }
-        }
-        long v = n.longValue();
-        if (v < min || v > max) {
-            return "invalid " + path + ": must be between " + min + " and " + max;
-        }
-        return null;
-    }
-
-    private static String validateDoubleField(Object raw, String path) {
-        if (raw == null) return null;
-        if (raw instanceof Boolean) return "invalid " + path + ": must be number";
-        if (raw instanceof String) return "invalid " + path + ": must be number";
-        if (!(raw instanceof Number n)) return "invalid " + path + ": must be number";
-        double d;
-        if (n instanceof Double dd) d = dd;
-        else if (n instanceof Float ff) d = ff;
-        else if (n instanceof java.math.BigDecimal bd) {
-            try {
-                d = bd.doubleValue();
-                if (!Double.isFinite(d)) return "invalid " + path + ": must be finite number";
-                return null;
-            } catch (Exception e) {
-                return "invalid " + path + ": must be finite number";
-            }
-        } else d = n.doubleValue();
-        if (!Double.isFinite(d)) return "invalid " + path + ": must be finite number";
-        return null;
-    }
-
-    private static String validateBooleanField(Object raw, String path) {
-        if (raw == null) return null;
-        if (raw instanceof Boolean) return null;
-        return "invalid " + path + ": must be boolean";
     }
 
     public ReloadResult reload() {
@@ -995,8 +905,11 @@ public final class ConfigLangAdapter {
             }
 
             // --- config schema validation (type/range/cross-field) before any swap ---
-            String validationError = validateCandidateConfig(candidateConfig);
-            if (validationError != null) {
+            ValidatedCandidate validated;
+            try {
+                validated = validateCandidateConfig(candidateConfig);
+            } catch (IllegalArgumentException e) {
+                String validationError = e.getMessage();
                 String sanitized = sanitizeDiagnostic(validationError);
                 String configErr = sanitized != null ? sanitized : validationError;
                 logWarning("Config reload failed: {0}", configErr);
@@ -1175,6 +1088,8 @@ public final class ConfigLangAdapter {
             // Both candidates succeeded — single atomic swap (keep candidate side-effect files as persisted)
             MessageService candidateService = newMessageService(candidateLang);
             this.configManager = candidateConfig;
+            this.configSnapshot = validated.snapshot();
+            this.fixedSettings = validated.settings();
             this.langManager = candidateLang;
             this.messageService = candidateService;
             java.util.List<String> appliedNotes = appliedNotesFor(plan);
@@ -1300,13 +1215,36 @@ public final class ConfigLangAdapter {
         }
     }
 
+    /**
+     * Last published fixed settings, bound from the published snapshot.
+     *
+     * <p>The returned record is immutable: callers can safely share it without
+     * copying. {@code null} until the first successful {@link #load()}.</p>
+     */
+    @Nullable
+    public V2FixedSettings fixedSettings() {
+        return fixedSettings;
+    }
+
+    /**
+     * Last published immutable config snapshot.
+     *
+     * <p>The snapshot is deep-frozen at publication: later disk writes or
+     * reloads cannot mutate what this reference sees. {@code null} until the
+     * first successful {@link #load()}.</p>
+     */
+    @Nullable
+    public ConfigSnapshot configSnapshot() {
+        return configSnapshot;
+    }
+
     public Optional<String> rawMessage(String key, Map<String, Object> vars) {
         synchronized (lock) {
             return langManager.get(key, vars);
         }
     }
 
-    /** Render a message to an Adventure {@link Component} using AceLib v1.2.1
+    /** Render a message to an Adventure {@link Component} using AceLib v1.4.0
      *  {@link MessageService#formatComponent(String, java.util.Map)} so user-provided
      *  values are escaped before MiniMessage parsing (prevents tag injection).
      *

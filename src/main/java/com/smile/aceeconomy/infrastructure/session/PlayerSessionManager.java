@@ -1,6 +1,7 @@
 package com.smile.aceeconomy.infrastructure.session;
 
 import com.smile.aceeconomy.domain.Account;
+import com.smile.aceeconomy.domain.LockEpochCapacity;
 import com.smile.aceeconomy.ports.FoliaContextExecutor;
 import com.smile.aceeconomy.ports.PlayerSessionHandle;
 import com.smile.aceeconomy.ports.SessionError;
@@ -49,21 +50,44 @@ public final class PlayerSessionManager {
     private final AtomicBoolean disabled = new AtomicBoolean(false);
     private final ReentrantLock structuralLock = new ReentrantLock();
     private final ConcurrentHashMap<UUID, SessionError> flushFailures = new ConcurrentHashMap<>();
+    /**
+     * Admission bound for {@link #flushFailures}: without one the map keeps one entry per
+     * distinct UUID with an unacknowledged flush failure, forever. See
+     * {@link LockEpochCapacity}.
+     */
+    private final int maxTrackedIds;
 
     public PlayerSessionManager(@NotNull SessionStore store,
                                 @NotNull FoliaContextExecutor folia,
                                 long defaultDeadlineMillis) {
-        this(store, folia, new BoundedShutdownCoordinator(), defaultDeadlineMillis);
+        this(store, folia, new BoundedShutdownCoordinator(), defaultDeadlineMillis,
+                LockEpochCapacity.MAX_TRACKED_IDS);
     }
 
     PlayerSessionManager(@NotNull SessionStore store,
                          @NotNull FoliaContextExecutor folia,
                          @NotNull BoundedShutdownCoordinator coordinator,
                          long defaultDeadlineMillis) {
+        this(store, folia, coordinator, defaultDeadlineMillis, LockEpochCapacity.MAX_TRACKED_IDS);
+    }
+
+    /**
+     * Injectable bound for tests. Production callers use the shared measured cap via the
+     * shorter constructors.
+     */
+    PlayerSessionManager(@NotNull SessionStore store,
+                         @NotNull FoliaContextExecutor folia,
+                         @NotNull BoundedShutdownCoordinator coordinator,
+                         long defaultDeadlineMillis,
+                         int maxTrackedIds) {
+        if (maxTrackedIds <= 0) {
+            throw new IllegalArgumentException("maxTrackedIds must be positive, got " + maxTrackedIds);
+        }
         this.store = store;
         this.folia = folia;
         this.coordinator = coordinator;
         this.defaultDeadlineMillis = defaultDeadlineMillis;
+        this.maxTrackedIds = maxTrackedIds;
     }
 
     // ---- login / prelogin / reconnect ----
@@ -75,6 +99,9 @@ public final class PlayerSessionManager {
             if (disabled.get()) {
                 throw new IllegalStateException("session manager is disabled; cannot login " + uuid);
             }
+            // A new session supersedes the previous quit outcome: the stale diagnostic entry
+            // is dropped so the map only names UUIDs with no session since their failure.
+            flushFailures.remove(uuid);
             PlayerSession existing = sessions.get(uuid);
             if (existing != null) {
                 return existing; // reconnect / duplicate: join the existing session (single-flight load)
@@ -153,16 +180,24 @@ public final class PlayerSessionManager {
             if (session.account == null) {
                 store.cancelLoad(uuid); // best-effort; generation guard discards any late completion
             }
+            Map<UUID, SessionError> failures = Map.of();
             if (session.account != null && session.dirty) {
                 Map<UUID, java.util.concurrent.CompletableFuture<Void>> pending = new HashMap<>();
                 pending.put(uuid, store.flush(session.account));
-                Map<UUID, SessionError> failures = coordinator.awaitFlush(pending, deadlineMillis);
-                flushFailures.putAll(failures); // typed failure surfaced, not swallowed
+                failures = coordinator.awaitFlush(pending, deadlineMillis);
             }
             sessions.remove(uuid, session);
             // Offline invalidation: the loaded snapshot must not survive the session, otherwise
             // a later read could observe a departed player's balance.
             store.invalidate(uuid);
+            if (failures.isEmpty()) {
+                // A clean quit leaves no diagnostic residue behind.
+                flushFailures.remove(uuid);
+            } else {
+                // Typed failure surfaced, not swallowed. Bounded: past the cap the session is
+                // already gone and the outcome is reported loudly instead of dropped silently.
+                recordFlushFailures(failures);
+            }
         } finally {
             structuralLock.unlock();
         }
@@ -190,7 +225,7 @@ public final class PlayerSessionManager {
                 }
             }
             if (!pending.isEmpty()) {
-                flushFailures.putAll(coordinator.awaitFlush(pending, deadlineMillis));
+                recordFlushFailures(coordinator.awaitFlush(pending, deadlineMillis));
             }
             for (PlayerSession s : sessions.values()) {
                 store.invalidate(s.uuid); // shutdown drops every snapshot with its session
@@ -208,6 +243,33 @@ public final class PlayerSessionManager {
     /** Typed flush failure recorded during the most recent quit/disable, if any. */
     public Optional<SessionError> flushFailure(@NotNull UUID uuid) {
         return Optional.ofNullable(flushFailures.get(uuid));
+    }
+
+    /** Diagnostic entries currently held. Observable for capacity monitoring. */
+    public int flushFailureCount() {
+        return flushFailures.size();
+    }
+
+    /**
+     * Records flush outcomes under the tracking cap. Runs under {@link #structuralLock}, so the
+     * check-and-put is atomic. Past the cap for a UUID with no entry yet, the outcome cannot
+     * be kept — throwing reports the lost diagnostic explicitly instead of swallowing it.
+     * Callers throw only after the sessions and snapshots are already cleaned up.
+     */
+    private void recordFlushFailures(Map<UUID, SessionError> failures) {
+        int dropped = 0;
+        for (Map.Entry<UUID, SessionError> entry : failures.entrySet()) {
+            if (!flushFailures.containsKey(entry.getKey())
+                    && flushFailures.size() >= maxTrackedIds) {
+                dropped++;
+                continue;
+            }
+            flushFailures.put(entry.getKey(), entry.getValue());
+        }
+        if (dropped > 0) {
+            throw new SessionException(SessionError.CAPACITY_EXCEEDED,
+                    LockEpochCapacity.describeFlushFailureOverflow(dropped));
+        }
     }
 
     // ---- Folia context dispatch seam ----

@@ -72,11 +72,13 @@ public final class HistoryService {
         filtered.sort(q.ascending() ? order : order.reversed());
 
         long total = filtered.size();
-        int start = q.page() * q.limit();
-        if (start < 0 || start > filtered.size()) {
+        // The offset is computed in long: page * limit can exceed int range, and an int product
+        // would wrap back onto an earlier page instead of landing past the end.
+        long start = (long) q.page() * q.limit();
+        if (start >= filtered.size()) {
             return new AuditPage(List.of(), total, q.page(), q.limit());
         }
-        int end = Math.min(start + q.limit(), filtered.size());
-        return new AuditPage(filtered.subList(start, end), total, q.page(), q.limit());
+        int end = (int) Math.min(start + q.limit(), filtered.size());
+        return new AuditPage(filtered.subList((int) start, end), total, q.page(), q.limit());
     }
 }

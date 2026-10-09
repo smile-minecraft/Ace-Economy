@@ -101,4 +101,63 @@ class HistoryServiceTest {
         assertThrows(IllegalArgumentException.class,
                 () -> svc.query(AuditQuery.builder().page(0).limit(0).build()));
     }
+
+    @Test
+    void pageTimesLimitOverflowDoesNotWrapToEarlierRows() {
+        // 429496730 * 10 overflows int to 4; the page must be empty instead of returning rows 4..9.
+        HistoryService svc = new HistoryService(tenRows());
+        AuditPage p = svc.query(AuditQuery.builder().page(429_496_730).limit(10).build());
+        assertEquals(10, p.total());
+        assertEquals(0, p.entries().size());
+    }
+
+    @Test
+    void integerMaxPageWithLargeLimitDoesNotWrapToEarlierRows() {
+        // (2^31 - 1) * (2^31 - 5) is 5 modulo 2^32, so an int product would point at row 5.
+        HistoryService svc = new HistoryService(tenRows());
+        AuditPage p = svc.query(AuditQuery.builder().page(Integer.MAX_VALUE).limit(2_147_483_643).build());
+        assertEquals(10, p.total());
+        assertEquals(0, p.entries().size());
+    }
+
+    @Test
+    void integerMaxPageReturnsEmpty() {
+        HistoryService svc = new HistoryService(tenRows());
+        AuditPage p = svc.query(AuditQuery.builder().page(Integer.MAX_VALUE).limit(10).build());
+        assertEquals(10, p.total());
+        assertEquals(0, p.entries().size());
+    }
+
+    @Test
+    void emptyRepositoryReturnsEmptyPageForHugePage() {
+        HistoryService svc = new HistoryService(new InMemoryTransactionRepository());
+        AuditPage p = svc.query(AuditQuery.builder().page(429_496_730).limit(10).build());
+        assertEquals(0, p.total());
+        assertEquals(0, p.entries().size());
+    }
+
+    @Test
+    void lastPartialPageKeepsTotal() {
+        HistoryService svc = new HistoryService(tenRows());
+        AuditPage last = svc.query(AuditQuery.builder().page(2).limit(4).build());
+        assertEquals(10, last.total());
+        assertEquals(2, last.entries().size());
+    }
+
+    @Test
+    void hugeLimitOnFirstPageReturnsAllRows() {
+        HistoryService svc = new HistoryService(tenRows());
+        AuditPage p = svc.query(AuditQuery.builder().page(0).limit(Integer.MAX_VALUE).build());
+        assertEquals(10, p.total());
+        assertEquals(10, p.entries().size());
+    }
+
+    private InMemoryTransactionRepository tenRows() {
+        UUID account = new UUID(0, 1);
+        InMemoryTransactionRepository repo = new InMemoryTransactionRepository();
+        for (int i = 0; i < 10; i++) {
+            repo.append(tx(new UUID(0, i + 1), account, "coin", TransactionType.DEPOSIT, T, "r" + i));
+        }
+        return repo;
+    }
 }

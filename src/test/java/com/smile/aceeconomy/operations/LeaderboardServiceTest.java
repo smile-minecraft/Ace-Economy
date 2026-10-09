@@ -113,4 +113,62 @@ class LeaderboardServiceTest {
         assertThrows(IllegalArgumentException.class, () -> svc.query(CUR, -1, 10));
         assertThrows(IllegalArgumentException.class, () -> svc.query(CUR, 0, 0));
     }
+
+    @Test
+    void pageTimesLimitOverflowDoesNotWrapToEarlierRanks() {
+        // 429496730 * 10 overflows int to 4; the page must be empty instead of returning ranks 5..6.
+        LeaderboardPage p = sixRankedService().query(CUR, 429_496_730, 10);
+        assertEquals(6, p.totalEntries());
+        assertEquals(1, p.totalPages());
+        assertEquals(0, p.entries().size());
+    }
+
+    @Test
+    void integerMaxPageWithLargeLimitDoesNotWrapToEarlierRanks() {
+        // (2^31 - 1) * (2^31 - 5) is 5 modulo 2^32, so an int product would point at rank 6.
+        LeaderboardPage p = sixRankedService().query(CUR, Integer.MAX_VALUE, 2_147_483_643);
+        assertEquals(6, p.totalEntries());
+        assertEquals(0, p.entries().size());
+    }
+
+    @Test
+    void integerMaxPageReturnsEmpty() {
+        LeaderboardPage p = sixRankedService().query(CUR, Integer.MAX_VALUE, 10);
+        assertEquals(6, p.totalEntries());
+        assertEquals(0, p.entries().size());
+    }
+
+    @Test
+    void emptyRankingReturnsEmptyPageForHugePage() {
+        LeaderboardService svc = new LeaderboardService(new FakeLeaderboardSource(),
+                new MutableClock(Instant.EPOCH), new LeaderboardCache(), Duration.ofHours(1));
+        LeaderboardPage p = svc.query(CUR, 429_496_730, 10);
+        assertEquals(0, p.totalEntries());
+        assertEquals(0, p.totalPages());
+        assertEquals(0, p.entries().size());
+    }
+
+    @Test
+    void lastPartialPageKeepsRanksAndTotals() {
+        LeaderboardPage last = sixRankedService().query(CUR, 1, 4);
+        assertEquals(6, last.totalEntries());
+        assertEquals(2, last.totalPages());
+        assertEquals(2, last.entries().size());
+        assertEquals(5, last.entries().get(0).rank());
+        assertEquals(6, last.entries().get(1).rank());
+    }
+
+    @Test
+    void hugeLimitOnFirstPageReturnsAllRanks() {
+        LeaderboardPage p = sixRankedService().query(CUR, 0, Integer.MAX_VALUE);
+        assertEquals(6, p.entries().size());
+        assertEquals(1, p.totalPages());
+    }
+
+    private LeaderboardService sixRankedService() {
+        FakeLeaderboardSource src = new FakeLeaderboardSource();
+        src.put(CUR, List.of(row("1", "A", 100), row("2", "B", 200), row("3", "C", 200),
+                row("4", "D", 50), row("5", "E", 30), row("6", "F", 10)));
+        return new LeaderboardService(src, new MutableClock(Instant.EPOCH), new LeaderboardCache(), Duration.ofHours(1));
+    }
 }

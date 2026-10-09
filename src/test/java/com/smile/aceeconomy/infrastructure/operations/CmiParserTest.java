@@ -104,6 +104,23 @@ class CmiParserTest {
     }
 
     @Test
+    void directBannedFileIsRefusedBeforeAnyContentRead(@TempDir Path dir) throws Exception {
+        Path banned = write(dir, "config.yml", "fixture: true\n");
+
+        ImportPathGate.contentReadsForTests.set(0);
+
+        // Direct parser entry, bypassing resolve/checkFile: only the snapshot
+        // single-file gate stands between the banned name and a content read.
+        ImportParseResult result = CmiParser.parse(banned, "coin", 2);
+
+        assertTrue(result.records().isEmpty());
+        assertTrue(result.failures().stream().anyMatch(f -> f.contains("refusing sensitive")),
+                "expected a sensitive-name refusal, got: " + result.failures());
+        assertEquals(0, ImportPathGate.contentReadsForTests.get(),
+                "a banned file must be refused before its content is read");
+    }
+
+    @Test
     void negativeBalancePassesThroughForPerRecordHandling(@TempDir Path dir) throws Exception {
         Path file = write(dir, "balances.csv", ALEX + ",Alex,-5\n");
 

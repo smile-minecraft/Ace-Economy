@@ -5,6 +5,7 @@ import com.smile.aceeconomy.application.TransferResult;
 import com.smile.aceeconomy.domain.AccountSnapshot;
 import com.smile.aceeconomy.domain.Amount;
 import com.smile.aceeconomy.domain.EconomyResult;
+import com.smile.aceeconomy.ports.CommittedTransactionListener;
 
 import java.util.UUID;
 
@@ -46,6 +47,11 @@ public final class EconomyApiImpl implements EconomyApi {
     }
 
     @Override
+    public EconomyResult<Amount> primeBalanceIfAbsent(UUID uuid, String currencyId) {
+        return service.primeBalanceIfAbsent(uuid, currencyId);
+    }
+
+    @Override
     public EconomyResult<Amount> deposit(UUID uuid, String currencyId, Amount amount) {
         return service.deposit(uuid, currencyId, amount);
     }
@@ -73,5 +79,15 @@ public final class EconomyApiImpl implements EconomyApi {
     @Override
     public void unregisterTransactionListener(TransactionListener listener) {
         publisher.unregister(listener);
+    }
+
+    @Override
+    public void registerPostCommitListener(CommittedTransactionListener listener) {
+        publisher.registerPostCommit(listener);
+    }
+
+    @Override
+    public void unregisterPostCommitListener(CommittedTransactionListener listener) {
+        publisher.unregisterPostCommit(listener);
     }
 }

@@ -1,6 +1,7 @@
 package com.smile.aceeconomy.infrastructure.persistence.json;
 
 import com.smile.aceeconomy.domain.Amount;
+import com.smile.aceeconomy.domain.AmountCap;
 import com.smile.aceeconomy.domain.Transaction;
 import com.smile.aceeconomy.domain.TransactionType;
 import com.smile.aceeconomy.ports.persistence.PersistenceException;
@@ -16,7 +17,12 @@ import java.util.UUID;
 /**
  * In-memory v2 persistence model plus its JSON (de)serialization.
  *
- * <p>Amounts are stored as exact decimal strings (no float drift). The schema version lets
+ * <p>Amounts are stored as exact decimal strings (no float drift). The balance
+ * write entry ({@link #amountToString}) refuses any string above the public
+ * {@code AmountCap} or wider than the 64-char column with a diagnosis; audit
+ * rows ({@link #evidenceToString}) stay writable as append-only evidence while
+ * reads stay lenient, so a legacy over-cap row still loads and the service cap
+ * gate diagnoses it. The schema version lets
  * {@link JsonPersistenceBackend} detect an incompatible file and offer recreation instead of
  * silently loading garbage.</p>
  */
@@ -179,7 +185,29 @@ public final class JsonModel {
         throw new PersistenceException("Invalid boolean value: expected JSON boolean, got " + o);
     }
 
+    /**
+     * Balance write entry. Refuses an over-cap or over-wide plain string with a
+     * cap diagnosis instead of persisting a balance no reader can explain. Only
+     * owed balances go through here; audit rows use {@link #evidenceToString}.
+     */
     static String amountToString(Amount a) {
+        String plain = a.value().toPlainString();
+        var refusal = AmountCap.storableRefusal(plain);
+        if (refusal.isPresent()) {
+            throw new PersistenceException(refusal.get());
+        }
+        return plain;
+    }
+
+    /**
+     * Audit write entry. Audit rows are append-only evidence — including evidence
+     * of pre-cap history and of balances the cap gate refused — so they are never
+     * cap-refused: refusing them would make legacy history unrestorable and
+     * reversals of legacy rows unrecordable. The economic invariant (no balance
+     * above the cap) is enforced at the balance entry above and the service
+     * gates, which every production money path passes through.
+     */
+    static String evidenceToString(Amount a) {
         return a.value().toPlainString();
     }
 
@@ -249,10 +277,10 @@ public final class JsonModel {
             j.accountId = t.accountId().toString();
             j.counterparty = t.counterparty() == null ? null : t.counterparty().toString();
             j.currencyId = t.currencyId();
-            j.amount = amountToString(t.amount());
+            j.amount = evidenceToString(t.amount());
             j.type = t.type().name();
-            j.balanceBefore = t.balanceBefore() == null ? null : amountToString(t.balanceBefore());
-            j.balanceAfter = t.balanceAfter() == null ? null : amountToString(t.balanceAfter());
+            j.balanceBefore = t.balanceBefore() == null ? null : evidenceToString(t.balanceBefore());
+            j.balanceAfter = t.balanceAfter() == null ? null : evidenceToString(t.balanceAfter());
             j.timestamp = t.timestamp().toString();
             j.reason = t.reason();
             j.reverted = false;

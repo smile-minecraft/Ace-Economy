@@ -28,7 +28,7 @@ public final class CurrencyArgResolver {
                 return CommandException.custom("ACELIB-CMD-UNKNOWN-CURRENCY", msg);
             });
         }
-        String id = rawCurrency.trim().toLowerCase();
+        String id = rawCurrency.trim().toLowerCase(java.util.Locale.ROOT);
         return economy.resolveCurrency(id).orElseThrow(() -> {
             String msg = messages != null
                     ? messages.plainMessage("general.unknown-currency", java.util.Map.of("currency", id))

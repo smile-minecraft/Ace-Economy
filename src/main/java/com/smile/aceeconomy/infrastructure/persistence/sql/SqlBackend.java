@@ -3,6 +3,7 @@ package com.smile.aceeconomy.infrastructure.persistence.sql;
 import com.smile.aceeconomy.application.TransferResult;
 import com.smile.aceeconomy.domain.Account;
 import com.smile.aceeconomy.domain.Amount;
+import com.smile.aceeconomy.domain.AmountCap;
 import com.smile.aceeconomy.domain.Currency;
 import com.smile.aceeconomy.domain.DebtPolicy;
 import com.smile.aceeconomy.domain.Transaction;
@@ -12,12 +13,17 @@ import com.smile.aceeconomy.infrastructure.persistence.json.SnapshotPreflight;
 import com.smile.aceeconomy.ports.AccountRepository;
 import com.smile.aceeconomy.ports.operations.LeaderboardRepository;
 import com.smile.aceeconomy.ports.operations.LeaderboardRow;
+import com.smile.aceeconomy.ports.persistence.AtomicImportStore;
 import com.smile.aceeconomy.ports.persistence.AtomicRedemptionStore;
 import com.smile.aceeconomy.ports.persistence.AtomicReversalStore;
 import com.smile.aceeconomy.ports.persistence.AtomicTransferStore;
+import com.smile.aceeconomy.ports.persistence.CommittedImportException;
+import com.smile.aceeconomy.ports.persistence.CommittedTransferException;
+import com.smile.aceeconomy.ports.persistence.IndeterminatePersistenceException;
 import com.smile.aceeconomy.ports.persistence.NonceStore;
 import com.smile.aceeconomy.ports.persistence.PersistenceException;
 import com.smile.aceeconomy.ports.persistence.PersistenceLifecycle;
+import com.smile.aceeconomy.ports.persistence.ImportCommitResult;
 import com.smile.aceeconomy.ports.persistence.RedemptionResult;
 import com.smile.aceeconomy.ports.persistence.TransactionRepository;
 
@@ -119,8 +125,8 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  */
 public final class SqlBackend
         implements AccountRepository, TransactionRepository, PersistenceLifecycle,
-        AtomicReversalStore, AtomicRedemptionStore, AtomicTransferStore, NonceStore,
-        LeaderboardRepository {
+        AtomicReversalStore, AtomicRedemptionStore, AtomicTransferStore, AtomicImportStore,
+        NonceStore, LeaderboardRepository {
 
     private final SqlConnectionProvider provider;
     private final SqlDialect dialect;
@@ -316,17 +322,70 @@ public final class SqlBackend
      * guidance is identical regardless of which API failed: a "committed successfully"
      * message means the storage state has moved, even though the borrowed connection had
      * to be discarded to keep the next caller safe.
+     *
+     * <p>Only {@link SQLException} and {@link RuntimeException} are translated. An
+     * {@link Error} propagates untouched: the borrow was already marked unsafe by the
+     * restore helper before rethrowing, so the connection is still discarded.</p>
      */
     private void restoreAutoCommitAfterCommit(BorrowedConnection borrowed, Connection conn,
                                               String operation) throws PersistenceException {
         try {
             restoreAutoCommitOrClose(borrowed, conn);
-        } catch (SQLException | RuntimeException | Error autoCommitFailure) {
+        } catch (SQLException | RuntimeException autoCommitFailure) {
             throw new PersistenceException(
                     operation + " committed successfully, but restoring auto-commit on the SQL "
                             + "connection failed; the connection has been closed. The data is "
                             + "committed — do not treat this as a rollback.",
                     autoCommitFailure, true);
+        }
+    }
+
+    /**
+     * Commits the open transaction, translating a lost commit response into an
+     * indeterminate failure. When {@code commit()} itself throws, the server may already
+     * have committed: a later rollback cannot prove otherwise, so the outcome is
+     * reported as neither committed nor rolled back. Callers must treat this as
+     * uncertain — never retry blindly, never fabricate a receipt. The commit failure
+     * stays the cause; the surrounding handler attaches any rollback outcome as
+     * suppressed, so both halves stay diagnosable.
+     *
+     * <p>Only {@link SQLException} and {@link RuntimeException} are translated. An
+     * {@link Error} is never wrapped: it propagates to the surrounding handler, which
+     * still runs its rollback/cleanup (attaching outcomes as suppressed and abandoning
+     * the borrow) before rethrowing the original {@code Error} untouched.</p>
+     *
+     * <p>Used by every domain-mutation transaction (save, create, audit batch, reversal,
+     * redemption, transfer, restore). Schema lifecycle DDL ({@code initialize},
+     * {@code truncateAndRecreate}) is intentionally excluded: those paths are
+     * idempotent by construction ({@code CREATE TABLE IF NOT EXISTS} plus resumable
+     * init), so a retry there cannot duplicate domain effects.</p>
+     */
+    private static void commitOrIndeterminate(Connection conn, String operation) {
+        try {
+            conn.commit();
+        } catch (SQLException | RuntimeException commitFailure) {
+            throw new IndeterminatePersistenceException(
+                    operation + " may have committed although its confirmation was lost;"
+                            + " the result is uncertain — do not retry,"
+                            + " verify the account or transaction history first",
+                    commitFailure);
+        }
+    }
+
+    /**
+     * Transfer variant of the post-commit restore: on failure the already-committed balances
+     * and transaction ids travel with the exception so the application can report success
+     * with the real receipt instead of fabricating ids.
+     */
+    private void restoreAutoCommitAfterCommitOrCommitted(BorrowedConnection borrowed, Connection conn,
+                                                         String operation, java.util.UUID from,
+                                                         java.util.UUID to, Amount fromAfter, Amount toAfter,
+                                                         java.util.UUID outId, java.util.UUID inId) {
+        try {
+            restoreAutoCommitAfterCommit(borrowed, conn, operation);
+        } catch (PersistenceException e) {
+            throw new CommittedTransferException(e.getMessage(), e.getCause() != null ? e.getCause() : e,
+                    new TransferResult(from, to, fromAfter, toAfter, outId, inId));
         }
     }
 
@@ -511,6 +570,11 @@ public final class SqlBackend
             // time, before any live row is deleted. This prevents a corrupt snapshot from destroying
             // existing data and then failing mid-insert.
             SnapshotPreflight.validateRecords(candidate);
+            // Restore-only cap gate on balance strings (audit evidence stays
+            // restorable, plain loads stay lenient): a snapshot that would store
+            // an over-cap or over-wide balance is refused before any live row
+            // is deleted.
+            SnapshotPreflight.checkRestoreCaps(candidate);
             try {
                 withBorrowed((borrowed, conn) -> {
                     boolean entered = false;
@@ -530,7 +594,7 @@ public final class SqlBackend
                             insertTransaction(t, conn);
                         }
                         insertNonces(candidate, conn);
-                        conn.commit();
+                        commitOrIndeterminate(conn, "Restore");
                     } catch (Throwable e) {
                         // A failed restore may leave part of the transaction applied. The cleanup
                         // helper tries to roll back AND restore auto-commit; if either fails the
@@ -758,7 +822,7 @@ public final class SqlBackend
                             }
                             saveAccountRows(account, conn);
                         }
-                        conn.commit();
+                        commitOrIndeterminate(conn, "Save");
                     } catch (Throwable e) {
                         rollbackForFailure(borrowed, conn, e, entered);
                         if (e instanceof SQLException sql) {
@@ -870,7 +934,7 @@ public final class SqlBackend
                         conn.setAutoCommit(false);
                         entered = true;
                         saveAccountRows(account, conn);
-                        conn.commit();
+                        commitOrIndeterminate(conn, "Create account");
                     } catch (Throwable e) {
                         rollbackForFailure(borrowed, conn, e, entered);
                         if (e instanceof SQLException sql) {
@@ -938,7 +1002,7 @@ public final class SqlBackend
                             }
                             ps.executeBatch();
                         }
-                        conn.commit();
+                        commitOrIndeterminate(conn, "Append transaction batch");
                     } catch (Throwable e) {
                         rollbackForFailure(borrowed, conn, e, entered);
                         if (e instanceof SQLException sql) {
@@ -1136,11 +1200,20 @@ public final class SqlBackend
         // Keep the original port shape source-compatible, but never use its caller snapshots as
         // the write source. The audit records carry the signed reversal intent and the transaction
         // below recalculates every balance from live, locked rows.
-        applyReversalDeltas(reversalRecords, revertMarkerIds);
+        applyReversalDeltas(reversalRecords, revertMarkerIds, null);
+    }
+
+    @Override
+    public void applyReversal(List<Account> updatedAccounts,
+                              List<Transaction> reversalRecords,
+                              List<UUID> revertMarkerIds,
+                              DebtPolicy debtPolicy) throws PersistenceException {
+        applyReversalDeltas(reversalRecords, revertMarkerIds, debtPolicy);
     }
 
     private void applyReversalDeltas(List<Transaction> reversalRecords,
-                                     List<UUID> revertMarkerIds) throws PersistenceException {
+                                     List<UUID> revertMarkerIds,
+                                     DebtPolicy debtPolicy) throws PersistenceException {
         // One JDBC transaction carries balances + reversal records + markers: any failure
         // rolls back every statement, so no half-applied reversal is ever committed.
         Lock access = accessLock();
@@ -1210,7 +1283,7 @@ public final class SqlBackend
                             alreadyApplied = anyReverted && !anyNotReverted;
                         }
                         if (alreadyApplied) {
-                            conn.commit();
+                            commitOrIndeterminate(conn, "Apply reversal");
                             committedFlag.set(true);
                         } else {
 
@@ -1227,6 +1300,16 @@ public final class SqlBackend
                                         ? base.withdraw(currencyId, delta.abs())
                                         : base.deposit(currencyId, delta);
                                 Amount after = next.balanceOf(currencyId);
+                                if (debtPolicy != null && !debtPolicy.allows(after)) {
+                                    // Inside the same JDBC transaction that holds the row locks,
+                                    // after the markers-first idempotency check and before any
+                                    // write: a spend that landed after the caller's pre-check is
+                                    // visible in this locked re-read, so the violation rolls
+                                    // everything back with no balance effect, no record, no marker.
+                                    throw new AtomicReversalStore.DebtLimitExceededException(
+                                            debtRejectionMessage(record.accountId(), currencyId,
+                                                    after, debtPolicy));
+                                }
                                 live.put(record.accountId(), next);
                                 authoritativeRecords.add(authoritativeReversal(record, before, after));
                             }
@@ -1243,7 +1326,7 @@ public final class SqlBackend
                                             "unknown transaction for revert marker: " + markerId);
                                 }
                             }
-                            conn.commit();
+                            commitOrIndeterminate(conn, "Apply reversal");
                             committedFlag.set(true);
                         }
                     } catch (Throwable e) {
@@ -1315,6 +1398,23 @@ public final class SqlBackend
         return new Transaction(record.id(), record.accountId(), record.counterparty(),
                 Currency.normalizeId(record.currencyId()), auditAmount, record.type(), before, after,
                 record.timestamp(), record.reason());
+    }
+
+    /**
+     * Clear debt-policy refusal naming the governing setting, worded like the
+     * ordinary-transaction refusal so operators see one consistent rule.
+     */
+    private static String debtRejectionMessage(UUID accountId, String currencyId, Amount after,
+                                               DebtPolicy debtPolicy) {
+        String where = "account " + accountId + " (" + Currency.normalizeId(currencyId) + ")";
+        if (!debtPolicy.isAllowNegative()) {
+            return "rollback rejected: reversal would make balance " + after + " for " + where
+                    + ", which economy.allow-negative-balance=false forbids"
+                    + " (insufficient funds); nothing was changed";
+        }
+        return "rollback rejected: reversal would make balance " + after + " for " + where
+                + " exceeding debt limit " + debtPolicy.debtLimit()
+                + " (debt limit exceeded); nothing was changed";
     }
 
     // ---------------- nonce store ----------------
@@ -1418,7 +1518,7 @@ public final class SqlBackend
                                 return RedemptionResult.replay();
                             }
                         }
-                        conn.commit();
+                        commitOrIndeterminate(conn, "Redeem banknote");
                         committed = true;
                         committedFlag.set(true);
                     } catch (Throwable e) {
@@ -1522,7 +1622,7 @@ public final class SqlBackend
                                 return RedemptionResult.replay();
                             }
                         }
-                        conn.commit();
+                        commitOrIndeterminate(conn, "Redeem banknote");
                         committed = true;
                         committedFlag.set(true);
                     } catch (Throwable e) {
@@ -1636,7 +1736,7 @@ public final class SqlBackend
                                 TransactionType.TRANSFER_IN, toBefore, toAfter, now, "transfer-in");
                         insertTransactionRow(outTx, false, conn);
                         insertTransactionRow(inTx, false, conn);
-                        conn.commit();
+                        commitOrIndeterminate(conn, "Transfer");
                         committed = true;
                         committedFlag.set(true);
                         fromAfterHolder = fromAfter;
@@ -1652,9 +1752,12 @@ public final class SqlBackend
                         if (e instanceof Error err) throw err;
                         throw new RuntimeException(e);
                     }
-                    restoreAutoCommitAfterCommit(borrowed, conn, "Transfer");
+                    restoreAutoCommitAfterCommitOrCommitted(borrowed, conn, "Transfer",
+                            from, to, fromAfterHolder, toAfterHolder, outIdHolder, inIdHolder);
                     return new TransferResult(from, to, fromAfterHolder, toAfterHolder, outIdHolder, inIdHolder);
                 });
+            } catch (CommittedTransferException e) {
+                throw e;
             } catch (PersistenceException e) {
                 if (e.isCommitted() || committedFlag.get()) {
                     if (!e.isCommitted()) {
@@ -1670,7 +1773,7 @@ public final class SqlBackend
                             e, true);
                 }
                 throw new PersistenceException("Failed to transfer", e);
-            } catch (RuntimeException | Error e) {
+            } catch (RuntimeException e) {
                 if (committedFlag.get()) {
                     if (e instanceof PersistenceException pe && pe.isCommitted()) {
                         throw pe;
@@ -1682,9 +1785,174 @@ public final class SqlBackend
                             committedCause, true);
                 }
                 throw e;
+            } catch (Error e) {
+                // An Error is never a storage outcome: it escapes untouched even when the
+                // transfer already committed, instead of becoming a committed receipt.
+                throw e;
             }
         } finally {
             access.unlock();
+        }
+    }
+
+    // ---------------- atomic import ----------------
+
+    @Override
+    public ImportCommitResult importPrepared(UUID nonce, Account prepared, Transaction preparedTx,
+                                             boolean createMissing) throws PersistenceException {
+        Lock access = accessLock();
+        access.lock();
+        java.util.concurrent.atomic.AtomicBoolean committedFlag =
+                new java.util.concurrent.atomic.AtomicBoolean(false);
+        java.util.concurrent.atomic.AtomicReference<Amount> beforeRef =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<Amount> afterRef =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        try {
+            ensureInitialized();
+            try {
+                return withBorrowed((borrowed, conn) -> {
+                    boolean entered = false;
+                    boolean replayPath = false;
+                    boolean committed = false;
+                    try {
+                        // The caller's Account is only a hint for a missing account. Begin
+                        // before any read or write. The key is decided first: a consumed key is a
+                        // REPLAY whatever the account state or audit id, matching the JSON path, so
+                        // the audit insert below is never reached for a replay. The key is claimed
+                        // before the account row lock, so a racer on the same key waits holding no lock.
+                        conn.setAutoCommit(false);
+                        entered = true;
+                        UUID accountId = preparedTx.accountId();
+                        String cid = Currency.normalizeId(preparedTx.currencyId());
+                        Amount target = preparedTx.amount();
+                        try (PreparedStatement ps = conn.prepareStatement(
+                                V2Schema.nonceInsertSql(dialect))) {
+                            ps.setString(1, nonce.toString());
+                            ps.setString(2, Instant.now().toString());
+                            if (ps.executeUpdate() != 1) {
+                                replayPath = true;
+                                cleanupReplay(borrowed, conn);
+                                return ImportCommitResult.replay();
+                            }
+                        }
+                        // Lock the live row and derive the SET from its balance, so a general
+                        // transfer that committed first is observed instead of overwritten.
+                        Optional<Account> existing = loadForUpdateWithConnection(accountId, conn);
+                        Amount before;
+                        if (existing.isEmpty()) {
+                            if (!createMissing) {
+                                // Rolls back the key insert above together with everything else,
+                                // so a missing account never burns the key.
+                                cleanupMissingAccount(borrowed, conn);
+                                return ImportCommitResult.accountMissing();
+                            }
+                            before = Amount.zero(target.scale());
+                            Map<String, Amount> initial = new LinkedHashMap<>();
+                            if (prepared != null) {
+                                initial.putAll(prepared.balances());
+                            }
+                            initial.put(cid, target);
+                            String ownerName = prepared == null || prepared.ownerName() == null
+                                    ? accountId.toString() : prepared.ownerName();
+                            insertAccountRows(Account.create(accountId, ownerName, initial), conn);
+                        } else {
+                            Amount current = existing.get().balanceOf(cid);
+                            before = current == null ? Amount.zero(target.scale()) : current;
+                            saveAccountRows(existing.get().setBalance(cid, target), conn);
+                        }
+                        Transaction authoritative = new Transaction(preparedTx.id(), accountId,
+                                preparedTx.counterparty(), cid, target, TransactionType.SET,
+                                before, target, preparedTx.timestamp(), preparedTx.reason());
+                        insertTransactionRow(authoritative, false, conn);
+                        commitOrIndeterminate(conn, "Import balance");
+                        committed = true;
+                        committedFlag.set(true);
+                        beforeRef.set(before);
+                        afterRef.set(target);
+                    } catch (Throwable e) {
+                        if (!replayPath && !committed) {
+                            rollbackForFailure(borrowed, conn, e, entered);
+                        }
+                        if (e instanceof SQLException sql) {
+                            throw sql;
+                        }
+                        if (e instanceof RuntimeException re) {
+                            throw re;
+                        }
+                        if (e instanceof Error err) {
+                            throw err;
+                        }
+                        throw new RuntimeException(e);
+                    }
+                    restoreAutoCommitAfterCommitOrCommittedImport(borrowed, conn, "Import balance",
+                            beforeRef.get(), afterRef.get(), preparedTx.id());
+                    return ImportCommitResult.committed(beforeRef.get(), afterRef.get(),
+                            preparedTx.id());
+                });
+            } catch (CommittedImportException e) {
+                throw e;
+            } catch (PersistenceException e) {
+                if (e.isCommitted() || committedFlag.get()) {
+                    Amount before = beforeRef.get();
+                    Amount after = afterRef.get();
+                    if (before != null && after != null) {
+                        throw new CommittedImportException(e.getMessage(),
+                                e.getCause() != null ? e.getCause() : e,
+                                before, after, preparedTx.id());
+                    }
+                    if (!e.isCommitted()) {
+                        throw new PersistenceException(e.getMessage(),
+                                e.getCause() != null ? e.getCause() : e, true);
+                    }
+                    throw e;
+                }
+                throw e;
+            } catch (SQLException e) {
+                if (committedFlag.get() && beforeRef.get() != null) {
+                    throw new CommittedImportException(
+                            "Import balance committed successfully, but post-commit cleanup failed;"
+                                    + " the data is committed — do not treat this as a rollback.",
+                            e, beforeRef.get(), afterRef.get(), preparedTx.id());
+                }
+                throw new PersistenceException("Failed to import balance " + nonce, e);
+            } catch (RuntimeException e) {
+                if (committedFlag.get() && beforeRef.get() != null) {
+                    if (e instanceof PersistenceException pe && pe.isCommitted()) {
+                        throw pe;
+                    }
+                    Throwable cause = e.getCause();
+                    Throwable committedCause = cause != null ? cause : e;
+                    throw new CommittedImportException(
+                            "Import balance committed successfully, but post-commit cleanup failed;"
+                                    + " the data is committed — do not treat this as a rollback.",
+                            committedCause, beforeRef.get(), afterRef.get(), preparedTx.id());
+                }
+                throw e;
+            } catch (Error e) {
+                // An Error is never a storage outcome: it escapes untouched even when the
+                // import already committed, instead of becoming a committed receipt.
+                throw e;
+            }
+        } finally {
+            access.unlock();
+        }
+    }
+
+    /**
+     * Import variant of the post-commit restore: on failure the already-committed balances
+     * and transaction id travel with the exception so the caller can report success with
+     * the real receipt instead of fabricating one.
+     */
+    private void restoreAutoCommitAfterCommitOrCommittedImport(BorrowedConnection borrowed,
+                                                               Connection conn, String operation,
+                                                               Amount before, Amount after,
+                                                               UUID txId) {
+        try {
+            restoreAutoCommitAfterCommit(borrowed, conn, operation);
+        } catch (PersistenceException e) {
+            throw new CommittedImportException(e.getMessage(),
+                    e.getCause() != null ? e.getCause() : e, before, after, txId);
         }
     }
 
@@ -1796,7 +2064,7 @@ public final class SqlBackend
                                 return RedemptionResult.replay();
                             }
                         }
-                        conn.commit();
+                        commitOrIndeterminate(conn, "Redeem banknote");
                     } catch (Throwable e) {
                         if (!replayPath) {
                             rollbackForFailure(borrowed, conn, e, entered);
@@ -2006,10 +2274,10 @@ public final class SqlBackend
         ps.setString(2, t.accountId().toString());
         ps.setString(3, t.counterparty() == null ? null : t.counterparty().toString());
         ps.setString(4, t.currencyId());
-        ps.setString(5, amountToString(t.amount()));
+        ps.setString(5, evidenceToString(t.amount()));
         ps.setString(6, t.type().name());
-        ps.setString(7, t.balanceBefore() == null ? null : amountToString(t.balanceBefore()));
-        ps.setString(8, t.balanceAfter() == null ? null : amountToString(t.balanceAfter()));
+        ps.setString(7, evidenceToString(t.balanceBefore()));
+        ps.setString(8, evidenceToString(t.balanceAfter()));
         ps.setString(9, t.timestamp().toString());
         ps.setString(10, t.reason());
         ps.setBoolean(11, reverted);
@@ -2155,6 +2423,32 @@ public final class SqlBackend
     }
 
     private static String amountToString(Amount a) {
+        if (a == null) {
+            return null;
+        }
+        // Balance write entry: refuse an over-cap or over-wide amount with a cap
+        // diagnosis instead of letting MySQL truncate it into VARCHAR(64)
+        // (or SQLite keep a balance no reader can explain). Audit rows use
+        // evidenceToString below: they are append-only evidence (including of
+        // pre-cap history), never cap-refused. Reads stay lenient — a legacy
+        // over-cap row still loads, and the service cap gate diagnoses it.
+        String plain = a.value().toPlainString();
+        var refusal = AmountCap.storableRefusal(plain);
+        if (refusal.isPresent()) {
+            throw new PersistenceException(refusal.get());
+        }
+        return plain;
+    }
+
+    /**
+     * Audit write entry. Never cap-refused: an audit row records what happened
+     * (or what was attempted), and refusing it would make legacy history
+     * unrestorable and reversals of legacy rows unrecordable. The economic
+     * invariant — no balance above the cap — is enforced at the balance entry
+     * above and the service gates, which every production money path passes
+     * through before any audit row is built.
+     */
+    private static String evidenceToString(Amount a) {
         return a == null ? null : a.value().toPlainString();
     }
 

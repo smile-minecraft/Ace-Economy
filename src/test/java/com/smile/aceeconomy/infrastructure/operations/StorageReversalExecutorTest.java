@@ -20,12 +20,14 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.SQLException;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.smile.aceeconomy.infrastructure.persistence.sql.SqlConnectionProvider;
@@ -321,6 +323,40 @@ final class StorageReversalExecutorTest {
         assertEquals(1, txRepo.loadAll().size(), "no reversal audit record may appear");
         assertEquals(originalId, txRepo.loadAll().get(0).id());
         assertFalse(txRepo.isReverted(originalId), "original marker must remain unset");
+    }
+
+    @Test
+    void indeterminateStoreOutcomePropagatesInsteadOfExecutionFailed() {
+        UUID owner = UUID.randomUUID();
+        com.smile.aceeconomy.ports.inmemory.InMemoryAccountRepository accountRepo =
+                new com.smile.aceeconomy.ports.inmemory.InMemoryAccountRepository();
+        accountRepo.create(owner, "alice", Map.of(CUR, Fixtures.amt("100.00")));
+        UUID originalId = UUID.randomUUID();
+        Transaction original = depositTx(originalId, owner, "100.00", "0.00", "100.00");
+
+        ReversalPlan plan = new ReversalPlan(
+                List.of(original),
+                List.of(new ReversalPlan.AccountDelta(owner, CUR, Fixtures.amt("-100.00"))),
+                List.of(originalId),
+                com.smile.aceeconomy.operations.RollbackCategory.DEPOSIT);
+
+        com.smile.aceeconomy.ports.persistence.IndeterminatePersistenceException indeterminate =
+                new com.smile.aceeconomy.ports.persistence.IndeterminatePersistenceException(
+                        "Apply reversal may have committed although its confirmation was lost",
+                        new SQLException("injected commit response lost"));
+        StorageReversalExecutor executor = new StorageReversalExecutor(
+                accountRepo,
+                (accounts1, records, markers) -> {
+                    throw indeterminate;
+                },
+                CLOCK);
+
+        com.smile.aceeconomy.ports.persistence.IndeterminatePersistenceException escaped = assertThrows(
+                com.smile.aceeconomy.ports.persistence.IndeterminatePersistenceException.class,
+                () -> executor.execute(plan),
+                "an indeterminate reversal must propagate,"
+                        + " never become an ordinary retryable EXECUTION_FAILED");
+        assertSame(indeterminate, escaped, "the original indeterminate failure must propagate untouched");
     }
 
     // ---- JSON end-to-end ----

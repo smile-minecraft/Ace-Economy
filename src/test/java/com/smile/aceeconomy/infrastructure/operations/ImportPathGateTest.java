@@ -122,6 +122,69 @@ class ImportPathGateTest {
     }
 
     @Test
+    void directoryWithSensitiveMemberIsRejectedBeforeAnyContentRead(@TempDir Path dataFolder) throws Exception {
+        Path userdata = importDir(dataFolder).resolve("userdata");
+        Files.createDirectories(userdata);
+        // Fictitious fixture content only — never a real server file.
+        write(userdata.resolve("123e4567-e89b-12d3-a456-426614174000.yml"), "money: 1\n");
+        write(userdata.resolve("config.yml"), "fixture: true\n");
+
+        ImportPathGate.contentReadsForTests.set(0);
+
+        assertThrows(ImportPathRejectedException.class,
+                () -> ImportPathGate.gate(dataFolder, "userdata", ImportSource.ESSENTIALS));
+        assertEquals(0, ImportPathGate.contentReadsForTests.get(),
+                "a banned member must be rejected before any member content is read");
+    }
+
+    @Test
+    void directoryWithSensitiveMemberIsRejectedForCmiBeforeAnyContentRead(@TempDir Path dataFolder)
+            throws Exception {
+        Path sheets = importDir(dataFolder).resolve("sheets");
+        Files.createDirectories(sheets);
+        write(sheets.resolve("sheet.csv"), "uuid,name,balance\n");
+        write(sheets.resolve("config.yml"), "fixture: true\n");
+
+        ImportPathGate.contentReadsForTests.set(0);
+
+        assertThrows(ImportPathRejectedException.class,
+                () -> ImportPathGate.gate(dataFolder, "sheets", ImportSource.CMI));
+        assertEquals(0, ImportPathGate.contentReadsForTests.get(),
+                "a banned member must be rejected before any member content is read");
+    }
+
+    @Test
+    void enumerationRejectsSwappedInSensitiveMemberBeforeReading(@TempDir Path dataFolder) throws Exception {
+        Path userdata = importDir(dataFolder).resolve("userdata");
+        Files.createDirectories(userdata);
+        write(userdata.resolve("123e4567-e89b-12d3-a456-426614174000.yml"), "money: 1\n");
+        ImportPathGate.GatedImport gated =
+                ImportPathGate.gate(dataFolder, "userdata", ImportSource.ESSENTIALS);
+        // A banned name planted after approval must not have its content read.
+        write(userdata.resolve("config.yml"), "fixture: true\n");
+
+        ImportPathGate.contentReadsForTests.set(0);
+
+        assertThrows(ImportPathRejectedException.class,
+                () -> ImportPathGate.listMembersSecure(gated, "userdata"));
+        assertEquals(0, ImportPathGate.contentReadsForTests.get(),
+                "a banned member must be rejected before any member content is read");
+    }
+
+    @Test
+    void directSensitiveFileIsRejectedWithoutContentRead(@TempDir Path dataFolder) throws Exception {
+        Path dir = importDir(dataFolder);
+        write(dir.resolve("config.yml"), "fixture: true\n");
+
+        ImportPathGate.contentReadsForTests.set(0);
+
+        assertThrows(ImportPathRejectedException.class,
+                () -> ImportPathGate.gate(dataFolder, "config.yml", ImportSource.ESSENTIALS));
+        assertEquals(0, ImportPathGate.contentReadsForTests.get(),
+                "a banned file must be rejected before its content is read");
+    }
+
+    @Test
     void wrongExtensionForSourceIsRejected(@TempDir Path dataFolder) throws Exception {
         Path dir = importDir(dataFolder);
         write(dir.resolve("dump.db"), "binary");

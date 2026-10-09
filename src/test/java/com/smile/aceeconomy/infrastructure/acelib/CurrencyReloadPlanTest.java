@@ -102,6 +102,20 @@ class CurrencyReloadPlanTest {
     }
 
     @Test
+    void scaleChangeDetailSaysRestartAloneDoesNotMigrate() {
+        CurrencyReloadPlan.Classification plan = CurrencyReloadPlan.classify(
+                live(), candidateDollarToken("金幣", "$", 3, true, "活動代幣", "ⓒ", 0, false));
+        assertEquals(CurrencyReloadPlan.Disposition.DANGEROUS, plan.disposition());
+        assertTrue(plan.details().stream().anyMatch(d -> d.contains("dollar")),
+                "details must name the affected currency: " + plan.details());
+        assertTrue(plan.details().stream().anyMatch(d -> d.contains("migrat")),
+                "details must say stored balances need migration, not just a restart: "
+                        + plan.details());
+        assertTrue(plan.summary().contains("restart"),
+                "summary must still tell the operator a restart is required: " + plan.summary());
+    }
+
+    @Test
     void defaultChangeIsDangerous() {
         CurrencyReloadPlan.Classification plan = CurrencyReloadPlan.classify(
                 live(), candidateDollarToken("金幣", "$", 2, false, "活動代幣", "ⓒ", 0, true));

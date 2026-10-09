@@ -21,7 +21,9 @@ import java.util.Objects;
  *       rollback support, which no persistence backend currently offers; refusing is
  *       safer than leaving sparse maps behind;</li>
  *   <li>{@code DANGEROUS} — removed ids, scale changes and default changes would
- *       reinterpret or orphan stored balances.</li>
+ *       reinterpret or orphan stored balances. A restart alone never rewrites stored
+ *       amounts, so a scale change additionally needs a data migration; the detail
+ *       says so instead of reading as "restart to migrate".</li>
  * </ul>
  *
  * <p>The classifier is pure and never throws: an unparsable candidate yields
@@ -86,7 +88,9 @@ public final class CurrencyReloadPlan {
             Currency old = live.get(c.id());
             if (old.scale() != c.scale()) {
                 scaleChanged.add("currency scale changed: " + c.id()
-                        + " " + old.scale() + " -> " + c.scale() + " (restart required)");
+                        + " " + old.scale() + " -> " + c.scale()
+                        + " (restart alone does not migrate stored balances;"
+                        + " data migration required)");
             }
             if (old.isDefault() != c.isDefault()) {
                 // The parser guarantees exactly one default, so any flag flip is a default move.

@@ -15,6 +15,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyBoolean;
@@ -216,7 +217,7 @@ class SqlBackendRuntimeCleanupTest {
     }
 
     @Test
-    void restoreAutoCommitFailureAfterCommitWithErrorMustWrapAsPersistenceExceptionCommitted() throws Exception {
+    void restoreAutoCommitFailureAfterCommitWithErrorMustEscapeAndAbandon() throws Exception {
         Connection connection = mock(Connection.class);
         Statement statement = mock(Statement.class);
         when(connection.createStatement()).thenReturn(statement);
@@ -236,11 +237,9 @@ class SqlBackendRuntimeCleanupTest {
 
         SqlBackend backend = new SqlBackend(new SqlConnectionProvider(connection), new SqliteDialect());
 
-        PersistenceException thrown = assertThrows(PersistenceException.class, backend::initialize,
-                "post-commit restore failure for Error must be wrapped as PersistenceException");
-        assertTrue(thrown.getMessage().toLowerCase().contains("committed"),
-                "message must contain committed guidance even for Error");
-        assertEquals(injected, thrown.getCause(), "original Error must be preserved as cause");
+        AssertionError escaped = assertThrows(AssertionError.class, backend::initialize,
+                "a post-commit restore Error must escape untouched, never be wrapped as a storage failure");
+        assertSame(injected, escaped, "the original Error must escape untouched");
         verify(connection).close();
     }
 
@@ -309,7 +308,7 @@ class SqlBackendRuntimeCleanupTest {
     }
 
     @Test
-    void savePostCommitRestoreFailureWithErrorMustWrapAndAbandon() throws Exception {
+    void savePostCommitRestoreFailureWithErrorMustEscapeAndAbandon() throws Exception {
         Connection connection = mock(Connection.class);
         PreparedStatement selectPs = mock(PreparedStatement.class);
         PreparedStatement insertPs = mock(PreparedStatement.class);
@@ -337,9 +336,9 @@ class SqlBackendRuntimeCleanupTest {
         backend.setInitializedForTest(true);
         Account account = Account.create(UUID.randomUUID(), "alice", Map.of("dollar", Fixtures.amt("10.00")));
 
-        PersistenceException thrown = assertThrows(PersistenceException.class, () -> backend.save(account));
-        assertTrue(thrown.getMessage().toLowerCase().contains("committed"));
-        assertEquals(injected, thrown.getCause());
+        AssertionError escaped = assertThrows(AssertionError.class, () -> backend.save(account),
+                "a post-commit restore Error must escape untouched, never be wrapped as a storage failure");
+        assertSame(injected, escaped, "the original Error must escape untouched");
         verify(connection).close();
     }
 
@@ -372,7 +371,7 @@ class SqlBackendRuntimeCleanupTest {
     }
 
     @Test
-    void truncateAndRecreatePostCommitRestoreFailureWithErrorMustWrapCommitted() throws Exception {
+    void truncateAndRecreatePostCommitRestoreFailureWithErrorMustEscapeAndAbandon() throws Exception {
         Connection connection = mock(Connection.class);
         Statement statement = mock(Statement.class);
         when(connection.createStatement()).thenReturn(statement);
@@ -393,9 +392,9 @@ class SqlBackendRuntimeCleanupTest {
 
         SqlBackend backend = new SqlBackend(new SqlConnectionProvider(connection), new SqliteDialect());
 
-        PersistenceException thrown = assertThrows(PersistenceException.class, backend::truncateAndRecreate);
-        assertTrue(thrown.getMessage().toLowerCase().contains("committed"));
-        assertEquals(injected, thrown.getCause());
+        AssertionError escaped = assertThrows(AssertionError.class, backend::truncateAndRecreate,
+                "a post-commit restore Error must escape untouched, never be wrapped as a storage failure");
+        assertSame(injected, escaped, "the original Error must escape untouched");
         verify(connection).close();
     }
 
@@ -433,7 +432,7 @@ class SqlBackendRuntimeCleanupTest {
     }
 
     @Test
-    void restorePostCommitFailureWithErrorMustWrapCommitted() throws Exception {
+    void restorePostCommitFailureWithErrorMustEscapeAndAbandon() throws Exception {
         Connection connection = mock(Connection.class);
         Statement statement = mock(Statement.class);
         when(connection.createStatement()).thenReturn(statement);
@@ -456,10 +455,10 @@ class SqlBackendRuntimeCleanupTest {
         String snapshot = "{\"schemaVersion\":1,\"accounts\":{},\"transactions\":[],\"nonces\":{}}";
         byte[] bytes = snapshot.getBytes(StandardCharsets.UTF_8);
 
-        PersistenceException thrown = assertThrows(PersistenceException.class,
-                () -> backend.restore(new java.io.ByteArrayInputStream(bytes)));
-        assertTrue(thrown.getMessage().toLowerCase().contains("committed"));
-        assertEquals(injected, thrown.getCause());
+        AssertionError escaped = assertThrows(AssertionError.class,
+                () -> backend.restore(new java.io.ByteArrayInputStream(bytes)),
+                "a post-commit restore Error must escape untouched, never be wrapped as a storage failure");
+        assertSame(injected, escaped, "the original Error must escape untouched");
         verify(connection).close();
     }
 

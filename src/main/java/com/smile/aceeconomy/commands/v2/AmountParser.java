@@ -2,6 +2,7 @@ package com.smile.aceeconomy.commands.v2;
 
 import com.smile.acelib.command.CommandException;
 import com.smile.aceeconomy.domain.Amount;
+import com.smile.aceeconomy.domain.AmountCap;
 
 import java.math.BigDecimal;
 
@@ -19,8 +20,12 @@ import java.math.BigDecimal;
  */
 public final class AmountParser {
 
-    /** Hard economy cap: 1e15 of any currency. */
-    private static final BigDecimal MAX_VALUE = new BigDecimal("1000000000000000");
+    /**
+     * Hard economy cap, shared with the service gates and storage write guards
+     * through {@link AmountCap}. Exactly the cap parses; anything above is a
+     * typed overflow.
+     */
+    private static final BigDecimal MAX_VALUE = AmountCap.max();
 
     private AmountParser() {
     }

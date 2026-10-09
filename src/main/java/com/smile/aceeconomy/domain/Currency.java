@@ -41,12 +41,12 @@ public final class Currency {
         return new Currency(normalized, displayName, symbol, scale, isDefault);
     }
 
-    /** Trim + case-fold (lower-case). A null id is treated as empty. */
+    /** Trim + case-fold (lower-case) with a fixed locale so ids resolve identically on every host. A null id is treated as empty. */
     public static String normalizeId(String id) {
         if (id == null) {
             return "";
         }
-        return id.trim().toLowerCase();
+        return id.trim().toLowerCase(java.util.Locale.ROOT);
     }
 
     public String id() {

@@ -6,6 +6,8 @@ import com.smile.aceeconomy.domain.Currency;
 import com.smile.aceeconomy.domain.CurrencyDisplayHolder;
 import com.smile.aceeconomy.domain.CurrencyRegistry;
 import com.smile.aceeconomy.domain.EconomyResult;
+import com.smile.aceeconomy.ports.persistence.IndeterminatePersistenceException;
+import com.smile.aceeconomy.ports.persistence.PersistenceException;
 
 import net.milkbowl.vault.economy.Economy;
 import net.milkbowl.vault.economy.EconomyResponse;
@@ -28,6 +30,23 @@ import java.util.logging.Logger;
  *   <li>deposit/withdraw failure → {@code EconomyResponse} with {@code amount=0}, the current
  *       (or zero) balance, {@code FAILURE} and the v2 message; the transaction is NOT retried.</li>
  *   <li>balance/has on a missing account → {@code 0.0}/{@code false} (safe default, never throws).</li>
+ *   <li>a storage exception escaping the API → the same explicit outcome as a v2 failure:
+ *       lookups answer {@code false}, mutations answer {@code FAILURE} with {@code amount=0};
+ *       nothing ever propagates to the Vault caller.</li>
+ *   <li>a committed storage outcome (post-commit cleanup failed after the data moved) →
+ *       {@code FAILURE} whose message says the balance may already have moved and must not
+ *       be retried. Vault has no third outcome type, so the message — not a claimed
+ *       success, and never an invented receipt — is what keeps this distinct from an
+ *       ordinary failure. Nothing here retries, and no transaction id or authoritative
+ *       balance is fabricated: the balance field stays the last cached value.</li>
+ *   <li>an indeterminate outcome (commit response lost: neither proven committed nor
+ *       proven rolled back) → {@code FAILURE} with the same no-retry guidance, worded
+ *       as uncertain rather than confirmed.</li>
+ *   <li>an {@link Error} anywhere in the failure chain always escapes instead of
+ *       becoming a Vault outcome: it is never a storage outage or a business
+ *       result.</li>
+ *   <li>player-visible messages are fixed safe strings; backend details stay in the
+ *       diagnostic log with the original throwable attached.</li>
  * </ul>
  *
  * <p>Vault has no per-currency concept, so the adapter always operates on the registry's default
@@ -186,7 +205,12 @@ public final class VaultEconomyProvider implements Economy {
         if (player == null) {
             return false;
         }
-        return api.loadAccount(player.getUniqueId()).isSuccess();
+        try {
+            return api.loadAccount(player.getUniqueId()).isSuccess();
+        } catch (RuntimeException e) {
+            logStorageFailure("hasAccount", e);
+            return false;
+        }
     }
 
     @Override
@@ -212,7 +236,12 @@ public final class VaultEconomyProvider implements Economy {
         if (player == null) {
             return false;
         }
-        return api.createAccount(player.getUniqueId(), player.getName()).isSuccess();
+        try {
+            return api.createAccount(player.getUniqueId(), player.getName()).isSuccess();
+        } catch (RuntimeException e) {
+            logStorageFailure("createPlayerAccount", e);
+            return false;
+        }
     }
 
     @Override
@@ -330,7 +359,14 @@ public final class VaultEconomyProvider implements Economy {
             return new EconomyResponse(0, 0, EconomyResponse.ResponseType.FAILURE,
                     "amount scale exceeds currency precision");
         }
-        EconomyResult<Amount> r = api.deposit(player.getUniqueId(), currencyId, amt);
+        EconomyResult<Amount> r;
+        try {
+            r = api.deposit(player.getUniqueId(), currencyId, amt);
+        } catch (PersistenceException e) {
+            return storageFailure(player, currencyId, "deposit", e);
+        } catch (RuntimeException e) {
+            return unexpectedFailure(player, currencyId, "deposit", e);
+        }
         if (r.isSuccess()) {
             return new EconomyResponse(amount, r.value().value().doubleValue(),
                     EconomyResponse.ResponseType.SUCCESS, null);
@@ -376,13 +412,128 @@ public final class VaultEconomyProvider implements Economy {
             return new EconomyResponse(0, 0, EconomyResponse.ResponseType.FAILURE,
                     "amount scale exceeds currency precision");
         }
-        EconomyResult<Amount> r = api.withdraw(player.getUniqueId(), currencyId, amt);
+        EconomyResult<Amount> r;
+        try {
+            r = api.withdraw(player.getUniqueId(), currencyId, amt);
+        } catch (PersistenceException e) {
+            return storageFailure(player, currencyId, "withdraw", e);
+        } catch (RuntimeException e) {
+            return unexpectedFailure(player, currencyId, "withdraw", e);
+        }
         if (r.isSuccess()) {
             return new EconomyResponse(amount, r.value().value().doubleValue(),
                     EconomyResponse.ResponseType.SUCCESS, null);
         }
         return new EconomyResponse(0, balanceOf(player, currencyId), EconomyResponse.ResponseType.FAILURE,
                 r.message());
+    }
+
+    /**
+     * Maps an escaped storage failure to the explicit Vault failure shape (never a
+     * success, never a receipt). Three outcomes stay distinct:
+     * <ul>
+     *   <li>uncommitted → ordinary failure, safe to try again later;</li>
+     *   <li>committed → failure whose fixed message states the balance may already have
+     *       moved and forbids retrying (Vault offers no third outcome type, so the
+     *       message — never a claimed success or an invented receipt — is what keeps
+     *       this distinct);</li>
+     *   <li>indeterminate (commit response lost) → failure with the same no-retry
+     *       guidance, worded as uncertain rather than confirmed.</li>
+     * </ul>
+     * <p>Nothing here retries, and no transaction id or authoritative balance is
+     * invented: the balance field stays the last cached value. Player-visible messages
+     * are fixed safe strings — backend details (file paths, connection state) go only
+     * to the diagnostic log with the original throwable attached.</p>
+     */
+    private EconomyResponse storageFailure(OfflinePlayer player, String currencyId,
+                                           String operation, PersistenceException e) {
+        throwIfErrorCause(e);
+        if (e instanceof IndeterminatePersistenceException) {
+            LOG.log(java.util.logging.Level.WARNING,
+                    "Vault " + operation + ": storage outcome is uncertain (commit response lost);"
+                            + " answering FAILURE without a receipt — do not retry,"
+                            + " verify the balance or transaction history", e);
+            return new EconomyResponse(0, balanceOf(player, currencyId),
+                    EconomyResponse.ResponseType.FAILURE, indeterminateMessage());
+        }
+        if (e.isCommitted()) {
+            LOG.log(java.util.logging.Level.WARNING,
+                    "Vault " + operation + ": storage reported a committed outcome;"
+                            + " answering FAILURE without a receipt — do not retry,"
+                            + " verify the balance or transaction history", e);
+            return new EconomyResponse(0, balanceOf(player, currencyId),
+                    EconomyResponse.ResponseType.FAILURE, committedMessage());
+        }
+        LOG.log(java.util.logging.Level.WARNING,
+                "Vault " + operation + ": storage failure (uncommitted)", e);
+        return new EconomyResponse(0, balanceOf(player, currencyId),
+                EconomyResponse.ResponseType.FAILURE, uncommittedMessage());
+    }
+
+    /**
+     * Maps a non-storage bug to the same explicit failure shape so it can never escape
+     * into a Vault caller. The message names the failure type for diagnosis without
+     * leaking internals; the full throwable stays on the diagnostic log.
+     */
+    private EconomyResponse unexpectedFailure(OfflinePlayer player, String currencyId,
+                                              String operation, RuntimeException e) {
+        LOG.log(java.util.logging.Level.WARNING,
+                "Vault " + operation + ": unexpected failure ("
+                        + e.getClass().getSimpleName() + "), answering FAILURE instead of throwing",
+                e);
+        return new EconomyResponse(0, balanceOf(player, currencyId),
+                EconomyResponse.ResponseType.FAILURE,
+                operation + " failed: " + e.getClass().getSimpleName());
+    }
+
+    private static String uncommittedMessage() {
+        return "storage unavailable; nothing was changed, please try again later";
+    }
+
+    private static String committedMessage() {
+        return "the transaction is committed; the balance may already have moved — do not retry,"
+                + " verify the balance or transaction history first";
+    }
+
+    private static String indeterminateMessage() {
+        return "the result is uncertain; it may already be committed — do not retry,"
+                + " verify the balance or transaction history first";
+    }
+
+    /**
+     * Rethrows when the failure chain carries an {@link Error}. An Error is never a
+     * storage outage or a business result: it must escape instead of becoming a Vault
+     * failure response or a fail-closed default.
+     */
+    private static void throwIfErrorCause(Throwable failure) {
+        Throwable current = failure;
+        while (current != null) {
+            if (current instanceof Error error) {
+                throw error;
+            }
+            current = current.getCause();
+        }
+    }
+
+    /** Logs an escaped storage failure behind a boolean lookup, which stays fail-closed. */
+    private static void logStorageFailure(String operation, RuntimeException e) {
+        throwIfErrorCause(e);
+        if (e instanceof IndeterminatePersistenceException) {
+            LOG.log(java.util.logging.Level.WARNING,
+                    "Vault " + operation + ": storage outcome is uncertain (commit response lost);"
+                            + " answering false without claiming anything — do not retry,"
+                            + " verify the balance or transaction history", e);
+            return;
+        }
+        if (e instanceof PersistenceException persistence && persistence.isCommitted()) {
+            LOG.log(java.util.logging.Level.WARNING,
+                    "Vault " + operation + ": storage reported a committed outcome;"
+                            + " answering false without claiming anything — do not retry,"
+                            + " verify the balance or transaction history", e);
+            return;
+        }
+        LOG.log(java.util.logging.Level.WARNING,
+                "Vault " + operation + ": storage failure, answering false instead of throwing", e);
     }
 
     // ---------- banks (unsupported) ----------

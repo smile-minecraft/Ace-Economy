@@ -1,16 +1,22 @@
 package com.smile.aceeconomy.bootstrap;
 
 import com.smile.aceeconomy.api.v2.EconomyApi;
+import com.smile.aceeconomy.api.v2.InMemoryTransactionEventPublisher;
+import com.smile.aceeconomy.application.EconomyService;
 import com.smile.aceeconomy.commands.v2.CommandModels;
 import com.smile.aceeconomy.domain.Amount;
 import com.smile.aceeconomy.domain.Currency;
 import com.smile.aceeconomy.domain.CurrencyDisplayHolder;
 import com.smile.aceeconomy.domain.CurrencyRegistry;
+import com.smile.aceeconomy.domain.DebtPolicy;
 import com.smile.aceeconomy.domain.EconomyError;
 import com.smile.aceeconomy.domain.EconomyResult;
+import com.smile.aceeconomy.infrastructure.banknote.BanknoteFlow;
 import com.smile.aceeconomy.infrastructure.item.FakeBanknoteFactory;
 import com.smile.aceeconomy.ports.BanknoteClaim;
 import com.smile.aceeconomy.ports.FoliaContextExecutor;
+import com.smile.aceeconomy.ports.inmemory.InMemoryAccountRepository;
+import com.smile.aceeconomy.ports.persistence.AtomicRedemptionStore;
 import org.bukkit.Location;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
@@ -162,9 +168,18 @@ class WithdrawCommandDeliveryTest {
     private PlayerInventory inventory;
     private ItemStack delivered;
 
+    private BanknoteFlow flowWith(ScheduledExecutorService watchdogs, Duration timeout) {
+        EconomyService economy = new EconomyService(registry, DebtPolicy.disabled(), Amount.zero(2),
+                new InMemoryAccountRepository(), tx -> {
+                }, java.time.Instant::now, new InMemoryTransactionEventPublisher());
+        AtomicRedemptionStore redemptions = Mockito.mock(AtomicRedemptionStore.class);
+        return new BanknoteFlow(api, economy, redemptions, banknotes, display, folia,
+                Runnable::run, watchdogs, timeout);
+    }
+
     private ProductionAdapters.Withdrawals withdrawals() {
-        return new ProductionAdapters.Withdrawals(api, display, banknotes, Runnable::run, folia,
-                timeouts, Duration.ofMillis(200));
+        return new ProductionAdapters.Withdrawals(
+                flowWith(timeouts, Duration.ofMillis(200)));
     }
 
     /** Real single-thread watchdog scheduler for end-to-end bounded-wait tests (no manual firing). */
@@ -385,7 +400,7 @@ class WithdrawCommandDeliveryTest {
     }
 
     @Test
-    void mintThrowingWithFailedRefundStillFailsTypedExactlyOnceWithoutRetry() {
+    void mintThrowingWithFailedRefundStaysPendingExactlyOnceWithoutRetry() {
         UUID playerId = UUID.randomUUID();
         folia.player = onlinePlayer(playerId);
         when(inventory.firstEmpty()).thenReturn(0);
@@ -398,8 +413,8 @@ class WithdrawCommandDeliveryTest {
         EconomyResult<CommandModels.WithdrawReceipt> result =
                 withdrawals().withdraw(playerId, "dollar", amount).join();
 
-        assertFalse(result.isSuccess(), "a failed refund must still fail the withdraw closed");
-        assertEquals(EconomyError.INVALID_AMOUNT, result.error());
+        assertFalse(result.isSuccess(), "an uncompensated mint failure must stay diagnosable");
+        assertEquals(EconomyError.TRANSACTION_CANCELLED, result.error());
         // the compensation is attempted exactly once: never retried, never double-refunded
         verify(api, times(1)).deposit(playerId, "dollar", amount);
     }
@@ -435,8 +450,7 @@ class WithdrawCommandDeliveryTest {
         ScheduledExecutorService watchdogs = realWatchdogs();
         try {
             ProductionAdapters.Withdrawals withdrawals =
-                    new ProductionAdapters.Withdrawals(api, display, banknotes, Runnable::run, folia,
-                            watchdogs, Duration.ofMillis(150));
+                    new ProductionAdapters.Withdrawals(flowWith(watchdogs, Duration.ofMillis(150)));
             CompletableFuture<EconomyResult<CommandModels.WithdrawReceipt>> future =
                     withdrawals.withdraw(playerId, "dollar", amount);
 
@@ -464,8 +478,7 @@ class WithdrawCommandDeliveryTest {
         ScheduledExecutorService watchdogs = realWatchdogs();
         try {
             ProductionAdapters.Withdrawals withdrawals =
-                    new ProductionAdapters.Withdrawals(api, display, banknotes, Runnable::run, folia,
-                            watchdogs, Duration.ofMillis(150));
+                    new ProductionAdapters.Withdrawals(flowWith(watchdogs, Duration.ofMillis(150)));
             CompletableFuture<EconomyResult<CommandModels.WithdrawReceipt>> future =
                     withdrawals.withdraw(playerId, "dollar", amount);
 

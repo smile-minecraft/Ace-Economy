@@ -5,7 +5,6 @@ import com.smile.aceeconomy.domain.Amount;
 import com.smile.aceeconomy.domain.Currency;
 import com.smile.aceeconomy.domain.CurrencyDisplayHolder;
 import com.smile.aceeconomy.domain.CurrencyRegistry;
-import com.smile.aceeconomy.domain.EconomyResult;
 import com.smile.aceeconomy.infrastructure.operations.LeaderboardCache;
 import com.smile.aceeconomy.operations.LeaderboardEntry;
 import com.smile.aceeconomy.ports.Clock;
@@ -47,8 +46,14 @@ import javax.annotation.Nullable;
  * {@code /baltop} (both sides read the same cached ranking). A missing or expired snapshot
  * resolves to {@code null} rather than falling back to a synchronous database query.</p>
  *
+ * <p>Balance placeholders follow the same never-block rule: a primed entry is served from
+ * the read cache without storage I/O, while a miss only enqueues a background prime through
+ * {@link PlaceholderBalanceLoader} and resolves to {@code null} immediately. The next
+ * refresh then observes the primed entry. A miss therefore never reports a zero balance
+ * for an account that simply has not been loaded yet.</p>
+ *
  * <p>Fail-closed behavior: any unknown placeholder name, malformed currency id, unknown currency,
- * out-of-range position, or unavailable account resolves to {@code null}. Returning {@code null}
+ * unavailable account, or not-yet-primed balance resolves to {@code null}. Returning {@code null}
  * from PAPI leaves the literal placeholder unexpanded rather than showing a wrong value.</p>
  */
 public final class PlaceholderResolver {
@@ -64,9 +69,15 @@ public final class PlaceholderResolver {
     private final LeaderboardCache leaderboard;
     private final Duration leaderboardTtl;
     private final Clock clock;
+    /**
+     * Miss-triggered background priming for balances. Null when the resolver is used without
+     * a loader (misses then stay misses until another path primes the entry); never blocks
+     * the calling thread either way.
+     */
+    private final PlaceholderBalanceLoader balanceLoads;
 
     public PlaceholderResolver(EconomyApi api, CurrencyRegistry currencies) {
-        this(api, new CurrencyDisplayHolder(currencies), null, null, null);
+        this(api, new CurrencyDisplayHolder(currencies), null, null, null, null);
     }
 
     /**
@@ -75,7 +86,17 @@ public final class PlaceholderResolver {
      * and placeholders.
      */
     public PlaceholderResolver(EconomyApi api, CurrencyDisplayHolder display) {
-        this(api, display, null, null, null);
+        this(api, display, null, null, null, null);
+    }
+
+    /**
+     * Non-blocking constructor sharing one display holder. Balance misses enqueue a
+     * background prime through {@code balanceLoads} and resolve to {@code null}
+     * immediately; a null loader disables priming (misses stay misses).
+     */
+    public PlaceholderResolver(EconomyApi api, CurrencyDisplayHolder display,
+            PlaceholderBalanceLoader balanceLoads) {
+        this(api, display, null, null, null, balanceLoads);
     }
 
     /**
@@ -86,7 +107,7 @@ public final class PlaceholderResolver {
      */
     public PlaceholderResolver(EconomyApi api, CurrencyRegistry currencies,
             LeaderboardCache leaderboard, Duration leaderboardTtl, Clock clock) {
-        this(api, new CurrencyDisplayHolder(currencies), leaderboard, leaderboardTtl, clock);
+        this(api, new CurrencyDisplayHolder(currencies), leaderboard, leaderboardTtl, clock, null);
     }
 
     /**
@@ -97,6 +118,17 @@ public final class PlaceholderResolver {
      */
     public PlaceholderResolver(EconomyApi api, CurrencyDisplayHolder display,
             LeaderboardCache leaderboard, Duration leaderboardTtl, Clock clock) {
+        this(api, display, leaderboard, leaderboardTtl, clock, null);
+    }
+
+    /**
+     * Full production constructor: snapshot-backed rank/top plus non-blocking balance
+     * priming. A {@code null} loader disables balance priming (misses stay misses until
+     * another path primes the entry).
+     */
+    public PlaceholderResolver(EconomyApi api, CurrencyDisplayHolder display,
+            LeaderboardCache leaderboard, Duration leaderboardTtl, Clock clock,
+            PlaceholderBalanceLoader balanceLoads) {
         this.api = Objects.requireNonNull(api, "api");
         this.display = Objects.requireNonNull(display, "display");
         if (leaderboard != null) {
@@ -106,6 +138,7 @@ public final class PlaceholderResolver {
         this.leaderboard = leaderboard;
         this.leaderboardTtl = leaderboardTtl;
         this.clock = clock;
+        this.balanceLoads = balanceLoads;
     }
 
     /**
@@ -288,21 +321,34 @@ public final class PlaceholderResolver {
         return displayName ? c.displayName() : c.symbol();
     }
 
+    /**
+     * Cached balance for the calling thread: a primed entry is formatted without storage
+     * I/O, while a miss only enqueues a background prime and resolves to {@code null}
+     * (fail closed — never a guessed zero).
+     */
     @Nullable
-    private String rawBalance(OfflinePlayer player, String currencyId) {        EconomyResult<Amount> r = api.getBalance(player.getUniqueId(), currencyId);
-        if (r.isFailure()) {
-            return null; // unavailable account
+    private String rawBalance(OfflinePlayer player, String currencyId) {
+        java.util.Optional<Amount> cached = api.cachedBalance(player.getUniqueId(), currencyId);
+        if (cached.isPresent()) {
+            return cached.get().value().toPlainString();
         }
-        return r.value().value().toPlainString();
+        if (balanceLoads != null) {
+            balanceLoads.request(player.getUniqueId(), currencyId);
+        }
+        return null; // not yet primed: background load on its way (or primed by next refresh)
     }
 
+    /** Cached formatted balance; same never-block miss handling as {@link #rawBalance}. */
     @Nullable
     private String formattedBalance(OfflinePlayer player, String currencyId) {
-        EconomyResult<Amount> r = api.getBalance(player.getUniqueId(), currencyId);
-        if (r.isFailure()) {
-            return null; // unavailable account
+        java.util.Optional<Amount> cached = api.cachedBalance(player.getUniqueId(), currencyId);
+        if (cached.isEmpty()) {
+            if (balanceLoads != null) {
+                balanceLoads.request(player.getUniqueId(), currencyId);
+            }
+            return null; // not yet primed: background load on its way (or primed by next refresh)
         }
         Currency c = display.get().get(currencyId);
-        return c.symbol() + r.value().value().toPlainString();
+        return c.symbol() + cached.get().value().toPlainString();
     }
 }

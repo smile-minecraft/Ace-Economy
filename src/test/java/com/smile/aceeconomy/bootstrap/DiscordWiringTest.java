@@ -1,13 +1,13 @@
 package com.smile.aceeconomy.bootstrap;
 
+import com.smile.aceeconomy.api.v2.InMemoryTransactionEventPublisher;
 import com.smile.aceeconomy.domain.Amount;
 import com.smile.aceeconomy.domain.Transaction;
 import com.smile.aceeconomy.domain.TransactionType;
 import com.smile.aceeconomy.infrastructure.integration.discord.DiscordPayload;
+import com.smile.aceeconomy.infrastructure.persistence.PersistentAuditSink;
 import com.smile.aceeconomy.infrastructure.integration.discord.DiscordSendResult;
 import com.smile.aceeconomy.infrastructure.integration.discord.DiscordTransport;
-import com.smile.aceeconomy.ports.AuditException;
-import com.smile.aceeconomy.ports.AuditSink;
 import com.smile.aceeconomy.ports.inmemory.InMemoryTransactionRepository;
 import com.smile.aceeconomy.ports.persistence.TransactionRepository;
 import org.junit.jupiter.api.AfterEach;
@@ -62,6 +62,7 @@ import static org.junit.jupiter.api.Assertions.fail;
 class DiscordWiringTest {
 
     private ExecutorService ioExecutor;
+    private InMemoryTransactionEventPublisher publisher;
     private final TransactionRepository repository = new InMemoryTransactionRepository();
     private final ResourceOwner resources = new ResourceOwner();
     private final AtomicInteger transportCreated = new AtomicInteger();
@@ -75,6 +76,7 @@ class DiscordWiringTest {
             t.setDaemon(true);
             return t;
         });
+        publisher = new InMemoryTransactionEventPublisher();
         logHandler = new CapturingLogHandler();
         logger = Logger.getLogger("discord-wiring-test-" + UUID.randomUUID());
         logger.setUseParentHandlers(false);
@@ -91,14 +93,14 @@ class DiscordWiringTest {
     // ---- enabled + valid URL ----------------------------------------------
 
     @Test
-    void enabledWithValidUrlDecoratesAuditSinkAndRegistersShutdown() {
+    void enabledWithValidUrlUsesPlainSinkAndRegistersPostCommitListener() {
         DiscordWiring.TransportFactory factory = url -> {
             transportCreated.incrementAndGet();
             return new FakeTransport();
         };
 
         DiscordWiring.Outcome outcome = DiscordWiring.wire(
-                repository, ioExecutor,
+                repository, ioExecutor, publisher,
                 true, "https://hooks.discord.example/services/foo",
                 logger, resources, factory);
 
@@ -107,31 +109,36 @@ class DiscordWiringTest {
         assertNotNull(outcome.shutdownHook());
         assertEquals(1, transportCreated.get(), "transport must be created exactly once");
         assertNotNull(outcome.auditSink());
-        assertFalse(outcome.auditSink() instanceof AuditSinkSpy,
-                "enabled wiring must decorate the original audit sink");
+        assertTrue(outcome.auditSink() instanceof PersistentAuditSink,
+                "enabled wiring must keep the plain persistence sink: notification travels "
+                        + "only through the post-commit channel, never through a notifying decorator");
+        assertNotNull(outcome.postCommitListener(),
+                "enabled wiring must expose the registered post-commit listener for shutdown cleanup");
         // No diagnostic should have been logged on a successful wiring.
         assertEquals(0, logHandler.records().size(),
                 "no diagnostic should be logged when wiring succeeds");
     }
 
     @Test
-    void enabledWiringRoutesNotificationsThroughTransport() throws Exception {
+    void enabledWiringRoutesPostCommitThroughTransport() throws Exception {
         FakeTransport transport = new FakeTransport();
         DiscordWiring.TransportFactory factory = url -> transport;
 
         DiscordWiring.Outcome outcome = DiscordWiring.wire(
-                repository, ioExecutor,
+                repository, ioExecutor, publisher,
                 true, "https://hooks.discord.example/services/foo",
                 logger, resources, factory);
 
         Transaction tx = sampleTransaction();
-        outcome.auditSink().record(tx);
+        publisher.publishPostCommit(tx);
 
         assertTrue(transport.awaitSent(2_000),
                 "transport must receive the payload within timeout");
 
-        assertEquals(1, transport.sent.size(), "decorated audit sink must call transport");
+        assertEquals(1, transport.sent.size(), "one committed transaction notifies exactly once");
         assertFalse(transport.sent.get(0).toJson().isEmpty(), "payload must be JSON");
+        assertTrue(((InMemoryTransactionRepository) repository).all().isEmpty(),
+                "a bare post-commit notification must not persist anything by itself");
     }
 
     @Test
@@ -141,17 +148,22 @@ class DiscordWiringTest {
         DiscordWiring.TransportFactory factory = url -> transport;
 
         DiscordWiring.Outcome outcome = DiscordWiring.wire(
-                repository, ioExecutor,
+                repository, ioExecutor, publisher,
                 true, "https://hooks.discord.example/services/foo",
                 logger, resources, factory);
 
         Transaction tx = sampleTransaction();
-        // Transport failure must not turn into AuditException.
+        // Persistence and notification are separate paths now: the plain sink persists,
+        // and only the committed announcement notifies. Transport failure must not turn
+        // into AuditException on either path.
         outcome.auditSink().record(tx);
+        publisher.publishPostCommit(tx);
         transport.awaitSent(2_000);
 
         assertEquals(1, ((InMemoryTransactionRepository) repository).all().size(),
-                "inner audit must persist even on transport failure");
+                "plain sink must persist even on transport failure");
+        assertEquals(1, transport.sent.size(),
+                "the committed announcement must still be attempted exactly once");
     }
 
     // ---- disabled ---------------------------------------------------------
@@ -165,20 +177,22 @@ class DiscordWiringTest {
         };
 
         DiscordWiring.Outcome outcome = DiscordWiring.wire(
-                repository, ioExecutor,
+                repository, ioExecutor, publisher,
                 false, "https://hooks.discord.example/services/foo",
                 logger, resources, factory);
 
         assertFalse(outcome.active());
         assertEquals(DiscordWiring.REASON_DISABLED, outcome.rejectReason());
         assertNull(outcome.shutdownHook());
+        assertNull(outcome.postCommitListener(),
+                "no post-commit listener may be registered when wiring is inactive");
         assertEquals(0, transportCreated.get());
     }
 
     @Test
     void disabledWithoutUrlDoesNotLog() {
         DiscordWiring.Outcome outcome = DiscordWiring.wire(
-                repository, ioExecutor,
+                repository, ioExecutor, publisher,
                 false, "",
                 logger, resources, url -> fail("not constructed"));
 
@@ -197,20 +211,22 @@ class DiscordWiringTest {
         };
 
         DiscordWiring.Outcome outcome = DiscordWiring.wire(
-                repository, ioExecutor,
+                repository, ioExecutor, publisher,
                 true, "",
                 logger, resources, factory);
 
         assertFalse(outcome.active());
         assertEquals(DiscordWiring.REASON_MISSING_URL, outcome.rejectReason());
         assertNull(outcome.shutdownHook());
+        assertNull(outcome.postCommitListener(),
+                "no post-commit listener may be registered when wiring is inactive");
         assertEquals(0, transportCreated.get());
     }
 
     @Test
     void enabledWithNullUrlDoesNotConstructTransport() {
         DiscordWiring.Outcome outcome = DiscordWiring.wire(
-                repository, ioExecutor,
+                repository, ioExecutor, publisher,
                 true, null,
                 logger, resources, url -> fail("not constructed"));
 
@@ -265,7 +281,7 @@ class DiscordWiringTest {
         DiscordWiring.Outcome outcome;
         try {
             outcome = DiscordWiring.wire(
-                    repository, ioExecutor,
+                    repository, ioExecutor, publisher,
                     true, url, logger, resources, factory);
         } catch (Exception e) {
             fail("invalid URL must not throw out of wire(): " + e.getMessage());
@@ -275,6 +291,8 @@ class DiscordWiringTest {
         assertFalse(outcome.active(), "invalid url must not produce active wiring");
         assertEquals(DiscordWiring.REASON_INVALID_URL, outcome.rejectReason());
         assertNull(outcome.shutdownHook());
+        assertNull(outcome.postCommitListener(),
+                "no post-commit listener may be registered when wiring is inactive");
         assertEquals(0, transportCreated.get(), "no transport may be constructed");
     }
 
@@ -285,7 +303,7 @@ class DiscordWiringTest {
         // Use a URL that fails the scheme check so the secret content never reaches the diagnostic.
         String secretUrl = "ftp://SECRET-DISCORD-WEBHOOK.example/services/foo";
         DiscordWiring.wire(
-                repository, ioExecutor,
+                repository, ioExecutor, publisher,
                 true, secretUrl, logger, resources, url -> fail("not constructed"));
 
         assertEquals(1, logHandler.records().size(),
@@ -329,7 +347,7 @@ class DiscordWiringTest {
         DiscordWiring.Outcome outcome;
         try {
             outcome = DiscordWiring.wire(
-                    repository, ioExecutor,
+                    repository, ioExecutor, publisher,
                     true, "ftp://SECRET-DISCORD-WEBHOOK.example/x",
                     logger, resources, factory, throwingConsumer);
         } catch (Exception e) {
@@ -343,6 +361,8 @@ class DiscordWiringTest {
         assertEquals(DiscordWiring.REASON_INVALID_URL, outcome.rejectReason());
         assertNull(outcome.shutdownHook(),
                 "no shutdown hook may be registered when wiring failed");
+        assertNull(outcome.postCommitListener(),
+                "no post-commit listener may be registered when wiring failed");
         assertEquals(1, consumerCalls.get(),
                 "diagnostics consumer must have been invoked exactly once");
         assertEquals(0, transportCreated.get(),
@@ -368,7 +388,7 @@ class DiscordWiringTest {
         DiscordWiring.Outcome outcome;
         try {
             outcome = DiscordWiring.wire(
-                    repository, ioExecutor,
+                    repository, ioExecutor, publisher,
                     true, "ftp://SECRET-DISCORD-WEBHOOK.example/x",
                     logger, resources, factory, throwingConsumer);
         } catch (Throwable e) {
@@ -382,6 +402,8 @@ class DiscordWiringTest {
         assertEquals(DiscordWiring.REASON_INVALID_URL, outcome.rejectReason());
         assertNull(outcome.shutdownHook(),
                 "no shutdown hook may be registered when wiring failed");
+        assertNull(outcome.postCommitListener(),
+                "no post-commit listener may be registered when wiring failed");
         assertEquals(1, consumerCalls.get(),
                 "diagnostics consumer must have been invoked exactly once");
         assertEquals(0, transportCreated.get(),
@@ -391,13 +413,13 @@ class DiscordWiringTest {
     @Test
     void invalidUrlDiagnosticIsFixed() {
         DiscordWiring.wire(
-                repository, ioExecutor,
+                repository, ioExecutor, publisher,
                 true, "ftp://a.example/x", logger, resources, url -> fail("not constructed"));
         DiscordWiring.wire(
-                repository, ioExecutor,
+                repository, ioExecutor, publisher,
                 true, "mailto:b@example.com", logger, resources, url -> fail("not constructed"));
         DiscordWiring.wire(
-                repository, ioExecutor,
+                repository, ioExecutor, publisher,
                 true, "javascript:alert(1)", logger, resources, url -> fail("not constructed"));
 
         assertEquals(3, logHandler.records().size());
@@ -414,7 +436,7 @@ class DiscordWiringTest {
     void shutdownHookIsRegisteredAndRunsWithoutThrowing() {
         DiscordWiring.TransportFactory factory = url -> new FakeTransport();
         DiscordWiring.Outcome outcome = DiscordWiring.wire(
-                repository, ioExecutor,
+                repository, ioExecutor, publisher,
                 true, "https://hooks.discord.example/services/foo",
                 logger, resources, factory, msg -> { /* no-op */ });
         Runnable hook = outcome.shutdownHook();
@@ -427,7 +449,7 @@ class DiscordWiringTest {
         CloseTrackingTransport transport = new CloseTrackingTransport();
         DiscordWiring.TransportFactory factory = url -> transport;
         DiscordWiring.Outcome outcome = DiscordWiring.wire(
-                repository, ioExecutor,
+                repository, ioExecutor, publisher,
                 true, "https://hooks.discord.example/services/foo",
                 logger, resources, factory, msg -> { /* no-op */ });
 
@@ -445,7 +467,7 @@ class DiscordWiringTest {
         ThrowingCloseTransport transport = new ThrowingCloseTransport();
         DiscordWiring.TransportFactory factory = url -> transport;
         DiscordWiring.Outcome outcome = DiscordWiring.wire(
-                repository, ioExecutor,
+                repository, ioExecutor, publisher,
                 true, "https://hooks.discord.example/services/foo",
                 logger, resources, factory, msg -> { /* no-op */ });
 
@@ -463,7 +485,7 @@ class DiscordWiringTest {
         PendingFutureTransport transport = new PendingFutureTransport();
         DiscordWiring.TransportFactory factory = url -> transport;
         DiscordWiring.Outcome outcome = DiscordWiring.wire(
-                repository, ioExecutor,
+                repository, ioExecutor, publisher,
                 true, "https://hooks.discord.example/services/foo",
                 logger, resources, factory, msg -> { /* no-op */ });
 
@@ -479,7 +501,7 @@ class DiscordWiringTest {
                 com.smile.aceeconomy.domain.Amount.of(400.0, 2),
                 Instant.now(),
                 "transfer");
-        outcome.auditSink().record(tx);
+        publisher.publishPostCommit(tx);
 
         // At this point, the transport has a pending future, and the notifier
         // will wait for it to complete before shutdown finishes.
@@ -517,13 +539,13 @@ class DiscordWiringTest {
         };
 
         DiscordWiring.Outcome outcome = DiscordWiring.wire(
-                repository, ioExecutor,
+                repository, ioExecutor, publisher,
                 true, "https://hooks.discord.example/services/foo",
                 logger, resources, factory, msg -> { /* no-op */ });
 
         // Send a transaction to create a pending HTTP response future in the notifier.
         Transaction tx = sampleTransaction();
-        outcome.auditSink().record(tx);
+        publisher.publishPostCommit(tx);
 
         // Wait for sendAsync to be invoked (notifier has queued the HTTP request).
         assertTrue(sendAsyncCalled.await(2, TimeUnit.SECONDS),
@@ -603,15 +625,6 @@ class DiscordWiringTest {
     }
 
     // ---- fakes -------------------------------------------------------------
-
-    private static final class AuditSinkSpy implements AuditSink {
-        final List<Transaction> recorded = new ArrayList<>();
-
-        @Override
-        public void record(Transaction transaction) throws AuditException {
-            recorded.add(transaction);
-        }
-    }
 
     /** In-process fake transport; supports SUCCESS/FAIL modes without I/O. */
     private static final class FakeTransport implements DiscordTransport {

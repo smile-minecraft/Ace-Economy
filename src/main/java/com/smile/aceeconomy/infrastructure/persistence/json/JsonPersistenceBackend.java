@@ -10,12 +10,16 @@ import com.smile.aceeconomy.domain.TransactionType;
 import com.smile.aceeconomy.ports.AccountRepository;
 import com.smile.aceeconomy.ports.operations.LeaderboardRepository;
 import com.smile.aceeconomy.ports.operations.LeaderboardRow;
+import com.smile.aceeconomy.ports.persistence.AtomicImportStore;
 import com.smile.aceeconomy.ports.persistence.AtomicRedemptionStore;
 import com.smile.aceeconomy.ports.persistence.AtomicReversalStore;
 import com.smile.aceeconomy.ports.persistence.AtomicTransferStore;
+import com.smile.aceeconomy.ports.persistence.CommittedImportException;
+import com.smile.aceeconomy.ports.persistence.CommittedTransferException;
 import com.smile.aceeconomy.ports.persistence.NonceStore;
 import com.smile.aceeconomy.ports.persistence.PersistenceException;
 import com.smile.aceeconomy.ports.persistence.PersistenceLifecycle;
+import com.smile.aceeconomy.ports.persistence.ImportCommitResult;
 import com.smile.aceeconomy.ports.persistence.RedemptionResult;
 import com.smile.aceeconomy.ports.persistence.TransactionRepository;
 
@@ -26,7 +30,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -39,14 +42,28 @@ import java.util.concurrent.locks.ReentrantLock;
  * File-backed v2 persistence backend (JSON). Implements the account, transaction and lifecycle
  * ports with a single atomic file as the source of truth.
  *
- * <p>Durability / transaction boundary:</p>
+ * <p>Durability / transaction boundary (process-crash scope only; hardware power loss
+ * has not been verified — see below):</p>
  * <ul>
- *   <li>Every mutation rewrites the whole model through a temp file + atomic rename, so a crash
- *       mid-write never corrupts the live file (all-or-none at the file level).</li>
- *   <li>{@link #appendBatch} updates the model once and performs a single atomic rewrite, so a
+ *   <li>Every mutation rewrites the whole model through a temp file next to the live
+ *       file, forces the temp content to storage, then replaces the live file with an
+ *       atomic rename and syncs the file and its directory. The live file is therefore
+ *       always either the previous or the new complete snapshot, never a half-written
+ *       one. A failed write attempts to clean up its temp file on a best-effort basis;
+ *       cleanup may itself fail, and a killed process skips cleanup entirely, so a temp
+ *       file may be left behind — it never collides with the live file and is ignored.</li>
+ *   <li>{@link #appendBatch} updates the model once and performs a single publish, so a
  *       transfer's out+in records are persisted together or not at all.</li>
  *   <li>{@link #restore} parses and validates the incoming snapshot fully before any live state is
  *       touched, so a corrupt backup cannot destroy existing data.</li>
+ *   <li>If the live file was already replaced but the durability sync could not be
+ *       confirmed, the backend keeps the published state in memory, reports the failure
+ *       as committed ({@code PersistenceException.isCommitted() == true}, never a safe
+ *       retry), and halts further writes until {@link #initialize()} re-reads the file.
+ *       Reads keep serving the published state while halted.</li>
+ *   <li>The filesystem must support atomic file replacement. When it does not, the
+ *       backend refuses the publish with an explicit diagnosis instead of silently
+ *       falling back to a non-atomic replacement.</li>
  *   <li>Concurrency scope is strictly a single {@code JsonPersistenceBackend} instance within a
  *       single JVM ({@code ReentrantLock} + copy-on-write). v2.2 does not provide cross-process or
  *       multi-instance file locking / CAS; two backends on the same file (even in one JVM) or in
@@ -54,29 +71,89 @@ import java.util.concurrent.locks.ReentrantLock;
  *       file.</li>
  * </ul>
  *
+ * <p>Honest boundary: the fsync + atomic-rename + halted-writes design narrows the loss
+ * window to operating-system and hardware behavior (page cache, drive write cache,
+ * power loss), which this project has not tested. Do not claim proven safety against
+ * arbitrary hardware power loss on the basis of the automated tests: they simulate IO
+ * failures through an injectable publish path, they never cut power.</p>
+ *
  * <p>Honest boundary: the instance-local lock makes concurrent {@code save(expected, updated)} on
  * the same object linearizable; callers must not share a file across backends and must not rely on
  * this backend for distributed coordination.</p>
  */
 public final class JsonPersistenceBackend
         implements AccountRepository, TransactionRepository, PersistenceLifecycle,
-        AtomicReversalStore, AtomicRedemptionStore, AtomicTransferStore, NonceStore,
-        LeaderboardRepository {
+        AtomicReversalStore, AtomicRedemptionStore, AtomicTransferStore, AtomicImportStore,
+        NonceStore, LeaderboardRepository {
 
     private final Path dataFile;
     /** Instance-local only: not a file lock, not cross-process. See class javadoc. */
     private final ReentrantLock lock = new ReentrantLock();
     private JsonModel model = new JsonModel();
     private volatile boolean initialized = false;
+    private final JsonFilePublisher publisher;
+    /**
+     * Set when a publish replaced the live file but the durability sync could not be
+     * confirmed. Further mutations fail fast until {@link #initialize()} re-reads the
+     * file; reads keep serving the published state. Guarded by {@link #lock}.
+     */
+    private boolean writeHalted = false;
+    private String haltReason = null;
 
     public JsonPersistenceBackend(Path dataFile) {
+        this(dataFile, new DefaultJsonFilePublisher());
+    }
+
+    /** Injectable publish path for tests; production callers use the public constructor. */
+    JsonPersistenceBackend(Path dataFile, JsonFilePublisher publisher) {
         this.dataFile = dataFile;
+        this.publisher = publisher;
     }
 
     private void ensureInitialized() {
         if (!initialized) {
             throw new PersistenceException(
                     "Persistence backend not initialized: call initialize() or truncateAndRecreate() first (file: " + dataFile + ")");
+        }
+    }
+
+    private void ensureWritable() {
+        if (writeHalted) {
+            throw new PersistenceException(
+                    "JSON persistence halted writes after a publish whose durability could not be confirmed"
+                            + " (file=" + dataFile + (haltReason == null ? "" : "; " + haltReason)
+                            + "). Verify the file, then call initialize() to resume.");
+        }
+    }
+
+    private void markHalted(String reason) {
+        writeHalted = true;
+        haltReason = reason;
+    }
+
+    /**
+     * Swaps in the successor model and publishes it. A pre-publish failure rolls the
+     * in-memory model back and stays retryable ({@code committed=false}); a failure
+     * after the live file was replaced keeps the published model, halts further
+     * writes, and reports {@code committed=true} so callers never retry it as an
+     * uncommitted write.
+     */
+    private void commit(JsonModel previous, JsonModel next, String failureMessage) {
+        model = next;
+        try {
+            persist();
+        } catch (JsonPostPublishException e) {
+            markHalted(e.getMessage());
+            throw new PersistenceException(failureMessage
+                    + "; the new data was already published but its durability sync failed"
+                    + " (file=" + dataFile + "). Writes are halted: verify the file,"
+                    + " then call initialize() to resume.", e, true);
+        } catch (IOException e) {
+            model = previous;
+            throw new PersistenceException(failureMessage, e);
+        } catch (RuntimeException | Error e) {
+            model = previous;
+            throw e;
         }
     }
 
@@ -111,8 +188,17 @@ public final class JsonPersistenceBackend
                 model = loaded;
             } else {
                 model = new JsonModel();
-                persist();
+                try {
+                    persist();
+                } catch (JsonPostPublishException e) {
+                    markHalted(e.getMessage());
+                    throw new PersistenceException("Initialized " + dataFile
+                            + " but its durability sync failed: writes are halted until the file"
+                            + " is verified and initialize() runs again.", e, true);
+                }
             }
+            writeHalted = false;
+            haltReason = null;
             initialized = true;
         } catch (IOException e) {
             throw new PersistenceException("Failed to initialize JSON persistence at " + dataFile, e);
@@ -164,7 +250,15 @@ public final class JsonPersistenceBackend
             initialized = false;
             model = new JsonModel();
             persist();
+            writeHalted = false;
+            haltReason = null;
             initialized = true;
+        } catch (JsonPostPublishException e) {
+            initialized = false;
+            markHalted(e.getMessage());
+            throw new PersistenceException("Recreated " + dataFile
+                    + " but its durability sync failed: writes are halted until the file"
+                    + " is verified and initialize() runs again.", e, true);
         } catch (IOException e) {
             initialized = false;
             throw new PersistenceException("Failed to recreate JSON persistence at " + dataFile, e);
@@ -201,15 +295,31 @@ public final class JsonPersistenceBackend
                             + " incompatible with expected " + JsonModel.SCHEMA_VERSION);
         }
         SnapshotPreflight.validateRecords(candidate);
+        // Restore-only cap gate on balance strings (audit evidence stays
+        // restorable, plain loads stay lenient): a snapshot that would store an
+        // over-cap or over-wide balance is refused before the live model moves.
+        SnapshotPreflight.checkRestoreCaps(candidate);
         lock.lock();
         try {
             ensureInitialized();
+            ensureWritable();
             JsonModel previous = model;
             try {
                 model = candidate;
                 persist();
+            } catch (JsonPostPublishException e) {
+                markHalted(e.getMessage());
+                throw new PersistenceException("Restore published to " + dataFile
+                        + " but its durability sync failed: writes are halted until the file"
+                        + " is verified and initialize() runs again.", e, true);
             } catch (IOException e) {
                 model = previous; // roll back in-memory state on write failure
+                throw e;
+            } catch (RuntimeException | Error e) {
+                // Pre-publish failures that are not IOExceptions (for example the
+                // atomic-replacement diagnosis): nothing was published, so the live
+                // model must be restored just like the checked-IO path above.
+                model = previous;
                 throw e;
             }
         } finally {
@@ -280,6 +390,7 @@ public final class JsonPersistenceBackend
         lock.lock();
         try {
             ensureInitialized();
+            ensureWritable();
             JsonModel.JsonAccount current = model.accounts.get(account.owner().toString());
             if (current != null && !sameAccount(toAccount(current), account)) {
                 throw optimisticConflict(account.owner());
@@ -289,17 +400,8 @@ public final class JsonPersistenceBackend
             }
             JsonModel previous = model;
             JsonModel next = shallowCopy(previous);
-            model = next;
-            try {
-                next.accounts.put(account.owner().toString(), toJsonAccount(account));
-                persist();
-            } catch (IOException e) {
-                model = previous;
-                throw new PersistenceException("Failed to save account " + account.owner(), e);
-            } catch (RuntimeException e) {
-                model = previous;
-                throw e;
-            }
+            next.accounts.put(account.owner().toString(), toJsonAccount(account));
+            commit(previous, next, "Failed to save account " + account.owner());
         } finally {
             lock.unlock();
         }
@@ -313,6 +415,7 @@ public final class JsonPersistenceBackend
         lock.lock();
         try {
             ensureInitialized();
+            ensureWritable();
             JsonModel.JsonAccount current = model.accounts.get(updated.owner().toString());
             if (current == null || !sameAccount(toAccount(current), expected)) {
                 throw optimisticConflict(updated.owner());
@@ -323,16 +426,7 @@ public final class JsonPersistenceBackend
             JsonModel previous = model;
             JsonModel next = shallowCopy(previous);
             next.accounts.put(updated.owner().toString(), toJsonAccount(updated));
-            model = next;
-            try {
-                persist();
-            } catch (IOException e) {
-                model = previous;
-                throw new PersistenceException("Failed to save account " + updated.owner(), e);
-            } catch (RuntimeException e) {
-                model = previous;
-                throw e;
-            }
+            commit(previous, next, "Failed to save account " + updated.owner());
         } finally {
             lock.unlock();
         }
@@ -343,25 +437,16 @@ public final class JsonPersistenceBackend
         lock.lock();
         try {
             ensureInitialized();
+            ensureWritable();
             JsonModel.JsonAccount existing = model.accounts.get(uuid.toString());
             if (existing != null) {
                 return toAccount(existing); // safe: never overwrite an existing account
             }
+            Account account = Account.create(uuid, ownerName, initialBalances);
             JsonModel previous = model;
             JsonModel next = shallowCopy(previous);
-            model = next;
-            Account account;
-            try {
-                account = Account.create(uuid, ownerName, initialBalances);
-                next.accounts.put(uuid.toString(), toJsonAccount(account));
-                persist();
-            } catch (IOException e) {
-                model = previous;
-                throw new PersistenceException("Failed to create account " + uuid, e);
-            } catch (RuntimeException e) {
-                model = previous;
-                throw e;
-            }
+            next.accounts.put(uuid.toString(), toJsonAccount(account));
+            commit(previous, next, "Failed to create account " + uuid);
             return account;
         } finally {
             lock.unlock();
@@ -375,19 +460,11 @@ public final class JsonPersistenceBackend
         lock.lock();
         try {
             ensureInitialized();
+            ensureWritable();
             JsonModel previous = model;
             JsonModel next = shallowCopy(previous);
-            model = next;
-            try {
-                insert(transaction);
-                persist();
-            } catch (IOException e) {
-                model = previous;
-                throw new PersistenceException("Failed to append transaction " + transaction.id(), e);
-            } catch (RuntimeException e) {
-                model = previous;
-                throw e;
-            }
+            insertInto(next, transaction);
+            commit(previous, next, "Failed to append transaction " + transaction.id());
         } finally {
             lock.unlock();
         }
@@ -398,22 +475,14 @@ public final class JsonPersistenceBackend
         lock.lock();
         try {
             ensureInitialized();
+            ensureWritable();
             JsonModel previous = model;
             JsonModel next = shallowCopy(previous);
-            model = next;
-            try {
-                for (Transaction t : transactions) {
-                    insert(t);
-                }
-                // Single atomic rewrite => all-or-none for the whole batch.
-                persist();
-            } catch (IOException e) {
-                model = previous;
-                throw new PersistenceException("Failed to append transaction batch", e);
-            } catch (RuntimeException e) {
-                model = previous;
-                throw e;
+            for (Transaction t : transactions) {
+                insertInto(next, t);
             }
+            // Single publish => all-or-none for the whole batch.
+            commit(previous, next, "Failed to append transaction batch");
         } finally {
             lock.unlock();
         }
@@ -424,19 +493,11 @@ public final class JsonPersistenceBackend
         lock.lock();
         try {
             ensureInitialized();
+            ensureWritable();
             JsonModel previous = model;
             JsonModel next = shallowCopy(previous);
-            model = next;
-            try {
-                markOnModel(next, transactionId);
-                persist();
-            } catch (IOException e) {
-                model = previous;
-                throw new PersistenceException("Failed to mark transaction reverted " + transactionId, e);
-            } catch (RuntimeException e) {
-                model = previous;
-                throw e;
-            }
+            markOnModel(next, transactionId);
+            commit(previous, next, "Failed to mark transaction reverted " + transactionId);
         } finally {
             lock.unlock();
         }
@@ -498,14 +559,23 @@ public final class JsonPersistenceBackend
                               List<UUID> revertMarkerIds) throws PersistenceException {
         // Keep the snapshot overload source-compatible, but derive the mutation from the live
         // model and the signed audit intent instead of copying caller state.
-        applyReversalDeltas(reversalRecords, revertMarkerIds);
+        applyReversalDeltas(reversalRecords, revertMarkerIds, null);
+    }
+
+    @Override
+    public void applyReversal(List<Account> updatedAccounts, List<Transaction> reversalRecords,
+                              List<UUID> revertMarkerIds, DebtPolicy debtPolicy)
+            throws PersistenceException {
+        applyReversalDeltas(reversalRecords, revertMarkerIds, debtPolicy);
     }
 
     private void applyReversalDeltas(List<Transaction> reversalRecords,
-                                     List<UUID> revertMarkerIds) throws PersistenceException {
+                                     List<UUID> revertMarkerIds,
+                                     DebtPolicy debtPolicy) throws PersistenceException {
         lock.lock();
         try {
             ensureInitialized();
+            ensureWritable();
             // Idempotency: all reverted => no-op; none reverted => full apply;
             // partial (some reverted) => reject to avoid duplicating the already-committed leg.
             if (!revertMarkerIds.isEmpty()) {
@@ -541,44 +611,43 @@ public final class JsonPersistenceBackend
             }
             JsonModel previous = model;
             JsonModel next = shallowCopy(previous);
-            model = next;
-            try {
-                Map<UUID, Account> live = new LinkedHashMap<>();
-                for (Transaction record : reversalRecords) {
-                    UUID owner = record.accountId();
-                    Account base = live.get(owner);
-                    if (base == null) {
-                        JsonModel.JsonAccount stored = next.accounts.get(owner.toString());
-                        if (stored == null) {
-                            throw new PersistenceException("account not found for reversal: " + owner);
-                        }
-                        base = toAccount(stored);
+            Map<UUID, Account> live = new LinkedHashMap<>();
+            for (Transaction record : reversalRecords) {
+                UUID owner = record.accountId();
+                Account base = live.get(owner);
+                if (base == null) {
+                    JsonModel.JsonAccount stored = next.accounts.get(owner.toString());
+                    if (stored == null) {
+                        throw new PersistenceException("account not found for reversal: " + owner);
                     }
-                    String currencyId = Currency.normalizeId(record.currencyId());
-                    Amount delta = reversalDelta(record);
-                    Amount before = base.balanceOf(currencyId);
-                    if (before == null) {
-                        before = Amount.zero(delta.scale());
-                    }
-                    Account updated = delta.isNegative()
-                            ? base.withdraw(currencyId, delta.abs())
-                            : base.deposit(currencyId, delta);
-                    Amount after = updated.balanceOf(currencyId);
-                    live.put(owner, updated);
-                    next.accounts.put(owner.toString(), toJsonAccount(updated));
-                    insert(authoritativeReversal(record, before, after));
+                    base = toAccount(stored);
                 }
-                for (UUID markerId : revertMarkerIds) {
-                    markOnModel(next, markerId);
+                String currencyId = Currency.normalizeId(record.currencyId());
+                Amount delta = reversalDelta(record);
+                Amount before = base.balanceOf(currencyId);
+                if (before == null) {
+                    before = Amount.zero(delta.scale());
                 }
-                persist();
-            } catch (IOException e) {
-                model = previous;
-                throw new PersistenceException("Failed to apply reversal atomically at " + dataFile, e);
-            } catch (RuntimeException e) {
-                model = previous;
-                throw e;
+                Account updated = delta.isNegative()
+                        ? base.withdraw(currencyId, delta.abs())
+                        : base.deposit(currencyId, delta);
+                Amount after = updated.balanceOf(currencyId);
+                if (debtPolicy != null && !debtPolicy.allows(after)) {
+                    // Inside the atomic scope, before the single commit below: a spend that
+                    // landed after the caller's pre-check is visible in this re-read, so the
+                    // violation aborts with the previous model untouched (no balance effect,
+                    // no record, no marker).
+                    throw new AtomicReversalStore.DebtLimitExceededException(
+                            debtRejectionMessage(record.accountId(), currencyId, after, debtPolicy));
+                }
+                live.put(owner, updated);
+                next.accounts.put(owner.toString(), toJsonAccount(updated));
+                insertInto(next, authoritativeReversal(record, before, after));
             }
+            for (UUID markerId : revertMarkerIds) {
+                markOnModel(next, markerId);
+            }
+            commit(previous, next, "Failed to apply reversal atomically at " + dataFile);
         } finally {
             lock.unlock();
         }
@@ -591,6 +660,7 @@ public final class JsonPersistenceBackend
         lock.lock();
         try {
             ensureInitialized();
+            ensureWritable();
             String key = nonce.toString();
             if (model.nonces.containsKey(key)) {
                 return false;
@@ -598,13 +668,7 @@ public final class JsonPersistenceBackend
             JsonModel previous = model;
             JsonModel next = shallowCopy(previous);
             next.nonces.put(key, java.time.Instant.now().toString());
-            model = next;
-            try {
-                persist();
-            } catch (IOException e) {
-                model = previous;
-                throw new PersistenceException("Failed to persist consumed nonce " + nonce, e);
-            }
+            commit(previous, next, "Failed to persist consumed nonce " + nonce);
             return true;
         } finally {
             lock.unlock();
@@ -636,6 +700,7 @@ public final class JsonPersistenceBackend
         lock.lock();
         try {
             ensureInitialized();
+            ensureWritable();
             String key = nonce.toString();
             if (model.nonces.containsKey(key)) {
                 return RedemptionResult.replay();
@@ -661,15 +726,9 @@ public final class JsonPersistenceBackend
             JsonModel previous = model;
             JsonModel next = shallowCopy(previous);
             next.accounts.put(updated.owner().toString(), toJsonAccount(updated));
-            next.transactions.add(JsonModel.JsonTransaction.fromDomain(authoritative));
+            insertInto(next, authoritative);
             next.nonces.put(key, java.time.Instant.now().toString());
-            model = next;
-            try {
-                persist();
-            } catch (IOException e) {
-                model = previous;
-                throw new PersistenceException("Failed to persist banknote redemption " + nonce, e);
-            }
+            commit(previous, next, "Failed to persist banknote redemption " + nonce);
             return RedemptionResult.committed(before, after, transaction.id());
         } finally {
             lock.unlock();
@@ -683,6 +742,7 @@ public final class JsonPersistenceBackend
         lock.lock();
         try {
             ensureInitialized();
+            ensureWritable();
             JsonModel.JsonAccount fromStored = model.accounts.get(from.toString());
             JsonModel.JsonAccount toStored = model.accounts.get(to.toString());
             if (fromStored == null || toStored == null) {
@@ -712,14 +772,19 @@ public final class JsonPersistenceBackend
             JsonModel next = shallowCopy(previous);
             next.accounts.put(updatedFrom.owner().toString(), toJsonAccount(updatedFrom));
             next.accounts.put(updatedTo.owner().toString(), toJsonAccount(updatedTo));
-            next.transactions.add(JsonModel.JsonTransaction.fromDomain(outTx));
-            next.transactions.add(JsonModel.JsonTransaction.fromDomain(inTx));
-            model = next;
+            insertInto(next, outTx);
+            insertInto(next, inTx);
             try {
-                persist();
-            } catch (IOException e) {
-                model = previous;
-                throw new PersistenceException("Failed to persist transfer", e);
+                commit(previous, next, "Failed to persist transfer");
+            } catch (PersistenceException e) {
+                if (e.isCommitted()) {
+                    // The model was already published with these ids; carry the real receipt
+                    // instead of letting callers fabricate one.
+                    throw new CommittedTransferException(e.getMessage(),
+                            e.getCause() != null ? e.getCause() : e,
+                            new TransferResult(from, to, fromAfter, toAfter, outId, inId));
+                }
+                throw e;
             }
             return new TransferResult(from, to, fromAfter, toAfter, outId, inId);
         } finally {
@@ -733,6 +798,7 @@ public final class JsonPersistenceBackend
         lock.lock();
         try {
             ensureInitialized();
+            ensureWritable();
             String key = nonce.toString();
             if (model.nonces.containsKey(key)) {
                 return RedemptionResult.replay();
@@ -753,21 +819,88 @@ public final class JsonPersistenceBackend
                     before, after, java.time.Instant.now(), "banknote-deposit");
 
             // Copy-on-write: build the successor model with balance + audit record + consumed
-            // nonce, swap it in, then persist once. A write failure restores the previous
-            // reference, so memory and file never disagree about whether the redemption happened.
+            // nonce, then publish it once. A pre-publish failure leaves the previous model
+            // live, so memory and file never disagree about whether the redemption happened.
             JsonModel previous = model;
             JsonModel next = shallowCopy(previous);
             next.accounts.put(updated.owner().toString(), toJsonAccount(updated));
-            next.transactions.add(JsonModel.JsonTransaction.fromDomain(credit));
+            insertInto(next, credit);
             next.nonces.put(key, java.time.Instant.now().toString());
-            model = next;
-            try {
-                persist();
-            } catch (IOException e) {
-                model = previous;
-                throw new PersistenceException("Failed to persist banknote redemption " + nonce, e);
-            }
+            commit(previous, next, "Failed to persist banknote redemption " + nonce);
             return RedemptionResult.committed(before, after, credit.id());
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    // ---------------- atomic import ----------------
+
+    @Override
+    public ImportCommitResult importPrepared(UUID nonce, Account prepared, Transaction preparedTx,
+                                             boolean createMissing) throws PersistenceException {
+        lock.lock();
+        try {
+            ensureInitialized();
+            ensureWritable();
+            String key = nonce.toString();
+            if (model.nonces.containsKey(key)) {
+                return ImportCommitResult.replay();
+            }
+            String ownerKey = preparedTx.accountId().toString();
+            JsonModel.JsonAccount stored = model.accounts.get(ownerKey);
+            String cid = Currency.normalizeId(preparedTx.currencyId());
+            Amount target = preparedTx.amount();
+            Account updated;
+            Amount before;
+            if (stored == null) {
+                if (!createMissing) {
+                    return ImportCommitResult.accountMissing();
+                }
+                before = Amount.zero(target.scale());
+                Map<String, Amount> initial = new LinkedHashMap<>();
+                if (prepared != null) {
+                    initial.putAll(prepared.balances());
+                }
+                initial.put(cid, target);
+                updated = Account.create(preparedTx.accountId(),
+                        prepared == null || prepared.ownerName() == null
+                                ? preparedTx.accountId().toString() : prepared.ownerName(),
+                        initial);
+            } else {
+                // Derived from the live row inside the same lock, never by overwriting it
+                // with the caller's snapshot: a general transaction that committed first is
+                // observed here, so concurrent imports and transfers cannot lose updates.
+                Account live = toAccount(stored);
+                Amount current = live.balanceOf(cid);
+                before = current == null ? Amount.zero(target.scale()) : current;
+                updated = live.setBalance(cid, target);
+            }
+            Transaction authoritative = new Transaction(preparedTx.id(), preparedTx.accountId(),
+                    preparedTx.counterparty(), cid, target, TransactionType.SET, before, target,
+                    preparedTx.timestamp(), preparedTx.reason());
+
+            // Copy-on-write: the successor carries balance + audit record + consumed key, then
+            // publishes once. A pre-publish failure (for example a duplicate audit id) leaves
+            // the previous model live, so the account and the key stay untouched and a retry
+            // converges instead of reporting a duplicate skip.
+            JsonModel previous = model;
+            JsonModel next = shallowCopy(previous);
+            next.accounts.put(updated.owner().toString(), toJsonAccount(updated));
+            insertInto(next, authoritative);
+            next.nonces.put(key, java.time.Instant.now().toString());
+            try {
+                commit(previous, next, "Failed to persist import " + nonce);
+            } catch (PersistenceException e) {
+                if (e.isCommitted()) {
+                    // The model was already published with this receipt; carry it instead of
+                    // letting callers fabricate one or retry a durable write.
+                    throw new CommittedImportException(e.getMessage(),
+                            e.getCause() != null ? e.getCause() : e,
+                            before, target, preparedTx.id());
+                }
+                throw e;
+            }
+            return ImportCommitResult.committed(before, target, preparedTx.id());
         } finally {
             lock.unlock();
         }
@@ -806,6 +939,23 @@ public final class JsonPersistenceBackend
         };
     }
 
+    /**
+     * Clear debt-policy refusal naming the governing setting, worded like the
+     * ordinary-transaction refusal so operators see one consistent rule.
+     */
+    private static String debtRejectionMessage(UUID accountId, String currencyId, Amount after,
+                                               DebtPolicy debtPolicy) {
+        String where = "account " + accountId + " (" + Currency.normalizeId(currencyId) + ")";
+        if (!debtPolicy.isAllowNegative()) {
+            return "rollback rejected: reversal would make balance " + after + " for " + where
+                    + ", which economy.allow-negative-balance=false forbids"
+                    + " (insufficient funds); nothing was changed";
+        }
+        return "rollback rejected: reversal would make balance " + after + " for " + where
+                + " exceeding debt limit " + debtPolicy.debtLimit()
+                + " (debt limit exceeded); nothing was changed";
+    }
+
     private static Transaction authoritativeReversal(Transaction record, Amount before, Amount after) {
         Amount auditAmount = record.type() == TransactionType.SET ? after : record.amount().abs();
         return new Transaction(record.id(), record.accountId(), record.counterparty(),
@@ -813,14 +963,14 @@ public final class JsonPersistenceBackend
                 record.timestamp(), record.reason());
     }
 
-    private void insert(Transaction t) {
+    private static void insertInto(JsonModel target, Transaction t) {
         String id = t.id().toString();
-        for (JsonModel.JsonTransaction existing : model.transactions) {
+        for (JsonModel.JsonTransaction existing : target.transactions) {
             if (existing.id.equals(id)) {
                 throw new PersistenceException("Duplicate transaction id: " + id);
             }
         }
-        model.transactions.add(JsonModel.JsonTransaction.fromDomain(t));
+        target.transactions.add(JsonModel.JsonTransaction.fromDomain(t));
     }
 
     /**
@@ -902,16 +1052,66 @@ public final class JsonPersistenceBackend
 
     private void persist() throws IOException {
         String json = model.toJson();
-        Path parent = dataFile.getParent();
-        Path tmp = parent == null
-                ? Files.createTempFile("ace-json-", ".tmp")
-                : Files.createTempFile(parent, "ace-json-", ".tmp");
-        Files.writeString(tmp, json, StandardCharsets.UTF_8);
+        Path dir = siblingDir();
+        Path tmp = publisher.createTempFile(dir, "ace-json-", ".tmp");
+        boolean published = false;
         try {
-            Files.move(tmp, dataFile, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-        } catch (AtomicMoveNotSupportedException e) {
-            Files.move(tmp, dataFile, StandardCopyOption.REPLACE_EXISTING);
+            publisher.writeString(tmp, json);
+            publisher.syncFile(tmp);
+            try {
+                publisher.moveAtomic(tmp, dataFile);
+            } catch (AtomicMoveNotSupportedException e) {
+                throw atomicReplacementUnsupported(dir, e);
+            }
+            published = true;
+            publisher.syncFile(dataFile);
+            publisher.syncDirectory(dir);
+        } catch (JsonPostPublishException e) {
+            throw e;
+        } catch (IOException e) {
+            if (published) {
+                throw new JsonPostPublishException(
+                        "Published " + dataFile + " but the post-publish durability sync failed", e);
+            }
+            throw e;
+        } catch (RuntimeException e) {
+            if (published) {
+                throw new JsonPostPublishException(
+                        "Published " + dataFile + " but the post-publish durability sync failed", e);
+            }
+            throw e;
+        } finally {
+            // A leftover temp file must never fail the operation and must never be
+            // mistaken for a snapshot: after a successful move this is a no-op.
+            try {
+                Files.deleteIfExists(tmp);
+            } catch (IOException ignored) {
+                // Best effort cleanup; the temp name can never collide with the live file.
+            }
         }
+    }
+
+    /**
+     * The temp file must live next to the live file so the replacement stays on one
+     * filesystem; a system temp directory could force a cross-device move.
+     */
+    private Path siblingDir() {
+        Path parent = dataFile.getParent();
+        if (parent != null) {
+            return parent;
+        }
+        Path absolute = dataFile.toAbsolutePath().getParent();
+        return absolute == null ? Path.of(System.getProperty("java.io.tmpdir")) : absolute;
+    }
+
+    private static PersistenceException atomicReplacementUnsupported(Path dir,
+                                                                     AtomicMoveNotSupportedException e) {
+        return new PersistenceException(
+                "JSON persistence requires an atomic file replacement, but the filesystem holding "
+                        + dir + " does not support it. Move the data file to a local filesystem with"
+                        + " atomic-move support (for example ext4, APFS, or a local NTFS volume), then"
+                        + " re-initialize. Nothing was published: the live file and memory are unchanged.",
+                e);
     }
 
     private static JsonModel.JsonAccount toJsonAccount(Account account) {

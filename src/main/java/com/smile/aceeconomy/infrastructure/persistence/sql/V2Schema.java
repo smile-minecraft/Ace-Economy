@@ -14,6 +14,14 @@ import java.util.List;
  *   <li>Indexes are declared inline in {@code CREATE TABLE} to stay idempotent without a separate
  *       {@code CREATE INDEX IF NOT EXISTS} (older MySQL rejects that syntax).</li>
  *   <li>Amounts and balances are stored as exact decimal strings (no float drift).</li>
+ *   <li>Amount columns stay {@code VARCHAR(64)} against the public {@code AmountCap} (10^15):
+ *       the cap's plain form is 16 digits (19 chars at scale 2, 25 at scale 8), so the
+ *       width holds the cap up to scale 46 even with a minus sign (47 for positive
+ *       amounts) with wide margin — no DDL widening (and no
+ *       live-database migration) is needed. The write entry
+ *       ({@code SqlBackend.amountToString}) additionally refuses any over-cap or
+ *       over-wide string with a cap diagnosis, so MySQL can never silently truncate
+ *       a hostile value into the column.</li>
  *   <li>The version row is written with {@code INSERT OR IGNORE}/{@code INSERT IGNORE} so re-running
  *       initialization never duplicates it.</li>
  *   <li>The durable nonce table is ADDITIVE: it is created with {@code IF NOT EXISTS} by the same

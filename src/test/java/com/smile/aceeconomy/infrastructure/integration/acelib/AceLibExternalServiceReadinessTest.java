@@ -3,6 +3,19 @@ package com.smile.aceeconomy.infrastructure.integration.acelib;
 import com.smile.acelib.external.ExternalIntegrationService;
 import com.smile.acelib.external.IntegrationProbeResult;
 import com.smile.acelib.external.IntegrationStatus;
+import com.smile.acelib.external.BuildCheckProvider;
+import com.smile.acelib.external.BuildCheckResult;
+import com.smile.acelib.external.EconomyProvider;
+import com.smile.acelib.external.EconomyResult;
+import com.smile.acelib.external.ExternalOperationResult;
+import com.smile.acelib.external.PermissionProvider;
+import com.smile.acelib.external.PermissionResult;
+import com.smile.acelib.external.PlaceholderHandler;
+import com.smile.acelib.external.PlaceholderProvider;
+
+import java.util.UUID;
+
+import org.bukkit.OfflinePlayer;
 
 import org.junit.jupiter.api.Test;
 
@@ -29,6 +42,73 @@ class AceLibExternalServiceReadinessTest {
 
         @Override
         public void shutdown() {
+        }
+
+        @Override
+        public EconomyResult getBalance(OfflinePlayer player) {
+            return null;
+        }
+
+        @Override
+        public EconomyResult withdraw(OfflinePlayer player, double amount) {
+            return null;
+        }
+
+        @Override
+        public EconomyResult deposit(OfflinePlayer player, double amount) {
+            return null;
+        }
+
+        @Override
+        public void setEconomyProvider(EconomyProvider provider) {
+        }
+
+        @Override
+        public void clearEconomyProvider() {
+        }
+
+        @Override
+        public PermissionResult getPermissionGroups(UUID playerId) {
+            return null;
+        }
+
+        @Override
+        public void setPermissionProvider(PermissionProvider provider) {
+        }
+
+        @Override
+        public void clearPermissionProvider() {
+        }
+
+        @Override
+        public ExternalOperationResult registerPlaceholder(String id, PlaceholderHandler handler) {
+            return null;
+        }
+
+        @Override
+        public ExternalOperationResult unregisterPlaceholder(String id) {
+            return null;
+        }
+
+        @Override
+        public void setPlaceholderProvider(PlaceholderProvider provider) {
+        }
+
+        @Override
+        public void clearPlaceholderProvider() {
+        }
+
+        @Override
+        public BuildCheckResult canBuild(UUID playerId, String world, int x, int y, int z) {
+            return null;
+        }
+
+        @Override
+        public void setBuildCheckProvider(BuildCheckProvider provider) {
+        }
+
+        @Override
+        public void clearBuildCheckProvider() {
         }
     }
 
@@ -82,6 +162,75 @@ class AceLibExternalServiceReadinessTest {
 
             @Override
             public void shutdown() {
+            }
+
+            @Override
+            public com.smile.acelib.external.EconomyResult getBalance(OfflinePlayer player) {
+                return null;
+            }
+
+            @Override
+            public com.smile.acelib.external.EconomyResult withdraw(OfflinePlayer player, double amount) {
+                return null;
+            }
+
+            @Override
+            public com.smile.acelib.external.EconomyResult deposit(OfflinePlayer player, double amount) {
+                return null;
+            }
+
+            @Override
+            public void setEconomyProvider(com.smile.acelib.external.EconomyProvider provider) {
+            }
+
+            @Override
+            public void clearEconomyProvider() {
+            }
+
+            @Override
+            public com.smile.acelib.external.PermissionResult getPermissionGroups(UUID playerId) {
+                return null;
+            }
+
+            @Override
+            public void setPermissionProvider(com.smile.acelib.external.PermissionProvider provider) {
+            }
+
+            @Override
+            public void clearPermissionProvider() {
+            }
+
+            @Override
+            public com.smile.acelib.external.ExternalOperationResult registerPlaceholder(
+                    String id, com.smile.acelib.external.PlaceholderHandler handler) {
+                return null;
+            }
+
+            @Override
+            public com.smile.acelib.external.ExternalOperationResult unregisterPlaceholder(String id) {
+                return null;
+            }
+
+            @Override
+            public void setPlaceholderProvider(com.smile.acelib.external.PlaceholderProvider provider) {
+            }
+
+            @Override
+            public void clearPlaceholderProvider() {
+            }
+
+            @Override
+            public com.smile.acelib.external.BuildCheckResult canBuild(
+                    UUID playerId, String world, int x, int y, int z) {
+                return null;
+            }
+
+            @Override
+            public void setBuildCheckProvider(com.smile.acelib.external.BuildCheckProvider provider) {
+            }
+
+            @Override
+            public void clearBuildCheckProvider() {
             }
         };
         AceLibExternalServiceReadiness r = new AceLibExternalServiceReadiness(svc);

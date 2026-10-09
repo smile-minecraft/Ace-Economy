@@ -1,6 +1,9 @@
 package com.smile.aceeconomy.gui.v2;
 
 import com.smile.acelib.gui.GuiSession;
+import com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter;
+import com.smile.aceeconomy.infrastructure.banknote.BanknoteFlow;
+import com.smile.aceeconomy.ports.FoliaContextExecutor;
 
 import org.bukkit.entity.HumanEntity;
 import org.bukkit.entity.Player;
@@ -70,9 +73,25 @@ import java.util.UUID;
 public final class BankGuiClickListener implements Listener {
 
     private final V2BankGuiSession session;
+    private final FoliaContextExecutor folia;
+    private final ConfigLangAdapter messages;
 
     public BankGuiClickListener(@NotNull V2BankGuiSession session) {
+        this(session, null, null);
+    }
+
+    /**
+     * Production wiring: {@code folia} and {@code messages} consume the async
+     * click outcome and reply on the player's region thread. Either may be
+     * {@code null} in offline unit tests, which keeps the previous
+     * fire-and-forget dispatch with no reply.
+     */
+    public BankGuiClickListener(@NotNull V2BankGuiSession session,
+                                FoliaContextExecutor folia,
+                                ConfigLangAdapter messages) {
         this.session = Objects.requireNonNull(session, "session");
+        this.folia = folia;
+        this.messages = messages;
     }
 
     @EventHandler(ignoreCancelled = false)
@@ -357,8 +376,14 @@ public final class BankGuiClickListener implements Listener {
      * immediately into a private snapshot, so a later hand swap cannot credit one item
      * while removing another. Other actions need no item and use the snapshot-free path
      * so an unclonable held item can never block a withdraw or close.
+     *
+     * <p>The returned outcome is consumed, not discarded: failures and pending
+     * states reply on the player's region thread through the session's
+     * {@link FoliaContextExecutor} seam, never on an IO thread. Successes stay
+     * silent, preserving the existing click behaviour.
      */
     private void dispatch(Player player, UUID uuid, long generation, int slot, BankGuiAction action) {
+        final java.util.concurrent.CompletableFuture<V2BankGuiSession.ClickOutcome> future;
         try {
             if (action.type() == BankGuiAction.Type.DEPOSIT) {
                 ItemStack held;
@@ -367,14 +392,100 @@ public final class BankGuiClickListener implements Listener {
                 } catch (Throwable t) {
                     return;
                 }
-                session.handleClickAsync(uuid, generation, slot, held);
+                future = session.handleClickAsync(uuid, generation, slot, held);
             } else {
-                session.handleClickAsync(uuid, generation, slot);
+                future = session.handleClickAsync(uuid, generation, slot);
             }
         } catch (Throwable ignored) {
             // Dispatch is best-effort on the event thread; the click stays
             // cancelled above, so at worst the player clicks again.
+            return;
         }
+        if (future == null) {
+            return;
+        }
+        future.whenComplete((outcome, failure) -> reply(player, outcome, failure));
+    }
+
+    /**
+     * Reply to one click outcome on the player's region thread. Mapping is
+     * total: every failure and pending state names its cause, while successes
+     * and plain allowances stay silent. Never throws.
+     */
+    private void reply(Player player, V2BankGuiSession.ClickOutcome outcome, Throwable failure) {
+        if (folia == null || messages == null || player == null) {
+            return;
+        }
+        Reply reply = replyFor(outcome, failure);
+        if (reply == null) {
+            return;
+        }
+        try {
+            folia.runForPlayer(player, () -> {
+                try {
+                    messages.sendChatWithFallback(player,
+                            messages.renderMessage(reply.key(), reply.vars()), null);
+                } catch (Throwable ignored) {
+                    // Messaging is best-effort; the ledger state is already settled.
+                }
+            });
+        } catch (Throwable ignored) {
+            // The region dispatch itself was rejected (shutdown, offline player):
+            // the click stayed cancelled, so the player can click again.
+        }
+    }
+
+    record Reply(String key, java.util.Map<String, Object> vars) {
+    }
+
+    static Reply replyFor(V2BankGuiSession.ClickOutcome outcome, Throwable failure) {
+        if (failure != null) {
+            return new Reply("general.transaction-failed", java.util.Map.of());
+        }
+        if (outcome == null) {
+            return new Reply("general.transaction-failed", java.util.Map.of());
+        }
+        if (outcome.isInventoryFull()) {
+            return new Reply("general.inventory-full", java.util.Map.of());
+        }
+        if (outcome.isItemMismatch()) {
+            return new Reply("banknote.redeem-mismatch", java.util.Map.of());
+        }
+        if (outcome.isCreditRetained()) {
+            long value = outcome.retainedValue();
+            if (value >= 0) {
+                return new Reply("banknote.redeem-retained",
+                        java.util.Map.of("amount", Long.toString(value)));
+            }
+            return new Reply("banknote.redeem-failed", java.util.Map.of());
+        }
+        if (outcome.isPending()) {
+            String reason = outcome.reason() == null ? "" : outcome.reason();
+            if (BanknoteFlow.PENDING_CREDIT_INDETERMINATE.equals(reason)) {
+                return new Reply("banknote.redeem-pending", java.util.Map.of());
+            }
+            if (BanknoteFlow.PENDING_SHUTDOWN.equals(reason)) {
+                return new Reply("general.transaction-cancelled", java.util.Map.of());
+            }
+            return new Reply("banknote.withdraw-pending", java.util.Map.of());
+        }
+        if (outcome.isRejected()) {
+            return switch (outcome.reason()) {
+                case "insufficient.funds" ->
+                        new Reply("economy.insufficient-funds", java.util.Map.of());
+                case "replay.detected" ->
+                        new Reply("banknote.redeem-replay", java.util.Map.of());
+                case "delivery.uncertain" ->
+                        new Reply("banknote.delivery-uncertain", java.util.Map.of());
+                case "stale.generation", "transaction.cancelled" ->
+                        new Reply("general.transaction-cancelled", java.util.Map.of());
+                default -> new Reply("general.transaction-failed", java.util.Map.of());
+            };
+        }
+        // Successes, plain allowances and snapshot failures that the session
+        // already reports stay silent: the click was cancelled and the player
+        // sees the GUI state itself.
+        return null;
     }
 
     @EventHandler(ignoreCancelled = false)

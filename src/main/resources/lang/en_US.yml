@@ -54,6 +54,7 @@ economy:
   withdraw-redeem: "<green>Redeemed banknote: <yellow>{amount}</yellow> <gray>(Issuer: {issuer})</gray></green>"
   min-withdraw-amount: "<red>Minimum withdraw amount is {amount}!</red>"
   account-not-found: "<red>Account not found!</red>"
+  currency-scale-mismatch: "<red>Currency scale mismatch — transaction refused, nothing changed: <white>{details}</white></red>"
 
 admin:
   give: "<green>Given <yellow>{amount}</yellow> to <aqua>{player}</aqua></green>"
@@ -222,3 +223,8 @@ banknote:
   redeem-success: "<green>Redeemed banknote: <yellow>{amount}</yellow> <gray>(Issuer: {issuer})</gray></green>"
   redeem-failed: "<red>Redemption failed!</red>"
   redeem-retained: "<yellow>Banknote redeemed for <yellow>{amount}</yellow>, but the item could not be removed. Keep it and contact an administrator.</yellow>"
+  redeem-replay: "<red>This banknote was already redeemed!</red>"
+  redeem-mismatch: "<yellow>The banknote was credited, but the held item had been swapped, so nothing was removed. Keep the item and contact an administrator if it is still there.</yellow>"
+  withdraw-pending: "<yellow>Withdraw result uncertain: the deduction, the note handover and any correction are all unconfirmed. Do not retry; contact an administrator.</yellow>"
+  redeem-pending: "<yellow>Redemption result uncertain; the note was kept. Do not retry; contact an administrator.</yellow>"
+  delivery-uncertain: "<yellow>Delivery was uncertain; the note was voided and the amount refunded. Contact an administrator if your balance looks wrong.</yellow>"

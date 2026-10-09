@@ -56,7 +56,7 @@ final class V2CommandSupport {
                            Function<T, String> successMessage) {
         Objects.requireNonNull(future, "future").whenComplete((result, failure) -> {
             if (failure != null) {
-                CommandReply.replyError(context, unwrap(failure));
+                CommandReply.replyError(context, mapFailure(messages, failure));
             } else if (result == null) {
                 String msg = messages != null
                         ? messages.plainMessage("command.empty-result", java.util.Map.of())
@@ -80,7 +80,7 @@ final class V2CommandSupport {
                                     java.util.function.Function<T, net.kyori.adventure.text.Component> componentMapper) {
         Objects.requireNonNull(future, "future").whenComplete((result, failure) -> {
             if (failure != null) {
-                CommandReply.replyError(context, unwrap(failure));
+                CommandReply.replyError(context, mapFailure(messages, failure));
             } else if (result == null) {
                 String msg = messages != null
                         ? messages.plainMessage("command.empty-result", java.util.Map.of())
@@ -110,7 +110,7 @@ final class V2CommandSupport {
                                 Function<T, String> successMessage) {
         Objects.requireNonNull(future, "future").whenComplete((value, failure) -> {
             if (failure != null) {
-                CommandReply.replyError(context, unwrap(failure));
+                CommandReply.replyError(context, mapFailure(messages, failure));
             } else {
                 // If messages available and successMessage produced via plainMessage, keep String path;
                 // caller may also use replyValueLocalized for Component.
@@ -125,7 +125,7 @@ final class V2CommandSupport {
                                          java.util.function.Function<T, net.kyori.adventure.text.Component> componentMapper) {
         Objects.requireNonNull(future, "future").whenComplete((value, failure) -> {
             if (failure != null) {
-                CommandReply.replyError(context, unwrap(failure));
+                CommandReply.replyError(context, mapFailure(messages, failure));
             } else {
                 net.kyori.adventure.text.Component comp = componentMapper.apply(value);
                 CommandReply.replyComponent(context, messages, comp);
@@ -144,14 +144,14 @@ final class V2CommandSupport {
     }
 
     static void replyFailure(CommandContext context, Throwable failure) {
-        CommandReply.replyError(context, unwrap(failure));
+        CommandReply.replyError(context, mapFailure(null, failure));
     }
 
     static void replyFailureLocalized(CommandContext context, Throwable failure,
                                       com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter messages,
                                       String key, java.util.Map<String, Object> vars) {
         // For now, direct error reply via exception with localized message
-        CommandReply.replyError(context, unwrap(failure));
+        CommandReply.replyError(context, mapFailure(messages, failure));
     }
 
     static SubCommandCompleter currencies(CommandServices services) {
@@ -162,6 +162,47 @@ final class V2CommandSupport {
     static SubCommandCompleter players(CommandServices services) {
         return (context, args) -> CommandCompletion.byPrefix(
                 services.players().onlinePlayerNames(), CommandCompletion.last(args));
+    }
+
+    /**
+     * Maps a failed future to the error the player sees. Already-typed command errors
+     * pass through untouched; an {@link Error} anywhere in the chain passes through
+     * untouched as well — it is never a storage outage or a business result, so it
+     * must never be typed as one. Storage failures become typed storage errors
+     * (committed outcomes get their own no-retry code); anything else keeps the
+     * previous unwrap so a bug still surfaces for diagnosis instead of masquerading
+     * as an outage.
+     */
+    private static Throwable mapFailure(
+            com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter messages, Throwable failure) {
+        if (failure instanceof com.smile.acelib.command.CommandException) {
+            return failure;
+        }
+        Error error = findError(failure);
+        if (error != null) {
+            return error;
+        }
+        com.smile.aceeconomy.ports.persistence.PersistenceException storage =
+                StorageFailures.find(failure);
+        if (storage != null) {
+            return StorageFailures.from(messages, storage);
+        }
+        return unwrap(failure);
+    }
+
+    /**
+     * Finds the first {@link Error} in the cause chain, or {@code null} when the
+     * failure carries none. Callers let it escape instead of mapping it.
+     */
+    private static Error findError(Throwable failure) {
+        Throwable current = failure;
+        while (current != null) {
+            if (current instanceof Error error) {
+                return error;
+            }
+            current = current.getCause();
+        }
+        return null;
     }
 
     private static Throwable unwrap(Throwable failure) {

@@ -193,11 +193,6 @@ public final class FakeGuiService implements GuiService {
         return available ? "READY" : "UNAVAILABLE";
     }
 
-    @Override
-    public void shutdown() {
-        sessions.clear();
-    }
-
     private static GuiAsyncRequest newRequest(UUID uuid, long sessionGen, int page, long reqGen) {
         try {
             Constructor<GuiAsyncRequest> ctor = GuiAsyncRequest.class.getDeclaredConstructor(

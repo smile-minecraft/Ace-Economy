@@ -11,5 +11,11 @@ public enum SessionError {
     FLUSH_FAILED,
     FLUSH_INTERRUPTED,
     CANCELLED,
-    ALREADY_DISABLED
+    ALREADY_DISABLED,
+    /**
+     * An in-memory lock/epoch tracking map reached {@code LockEpochCapacity.MAX_TRACKED_IDS}
+     * distinct IDs and refused to grow further. The triggering operation changed nothing;
+     * the diagnosis names the limit and the restart remedy.
+     */
+    CAPACITY_EXCEEDED
 }

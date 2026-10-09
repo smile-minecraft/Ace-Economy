@@ -13,6 +13,7 @@ import com.smile.aceeconomy.domain.Currency;
 import com.smile.aceeconomy.domain.CurrencyRegistry;
 import com.smile.aceeconomy.domain.EconomyResult;
 import com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter;
+import com.smile.aceeconomy.infrastructure.banknote.BanknoteFlow;
 import com.smile.aceeconomy.ports.BankGuiUseCase;
 import com.smile.aceeconomy.ports.DepositResult;
 import com.smile.aceeconomy.ports.FoliaContextExecutor;
@@ -66,6 +67,13 @@ public final class BankFormSession {
     private final EconomyApi balances;
     private final Supplier<CurrencyRegistry> currencies;
     private final ConfigLangAdapter messages;
+    /**
+     * Shared banknote pipeline. {@code null} in offline unit tests that drive
+     * the synchronous use-case path; production always wires the flow so money
+     * moves off the region thread with the same handover guarantees as the
+     * command and Java GUI entries.
+     */
+    private final BanknoteFlow banknoteFlow;
 
     private final AtomicLong openGeneration = new AtomicLong(0);
     private final Map<UUID, Long> active = new ConcurrentHashMap<>();
@@ -79,12 +87,23 @@ public final class BankFormSession {
                            @NotNull EconomyApi balances,
                            @NotNull Supplier<CurrencyRegistry> currencies,
                            @NotNull ConfigLangAdapter messages) {
+        this(forms, folia, useCase, balances, currencies, messages, null);
+    }
+
+    public BankFormSession(@Nullable FormService forms,
+                           @NotNull FoliaContextExecutor folia,
+                           @NotNull BankGuiUseCase useCase,
+                           @NotNull EconomyApi balances,
+                           @NotNull Supplier<CurrencyRegistry> currencies,
+                           @NotNull ConfigLangAdapter messages,
+                           BanknoteFlow banknoteFlow) {
         this.forms = forms;
         this.folia = Objects.requireNonNull(folia, "folia");
         this.useCase = Objects.requireNonNull(useCase, "useCase");
         this.balances = Objects.requireNonNull(balances, "balances");
         this.currencies = Objects.requireNonNull(currencies, "currencies");
         this.messages = Objects.requireNonNull(messages, "messages");
+        this.banknoteFlow = banknoteFlow;
     }
 
     /**
@@ -161,6 +180,10 @@ public final class BankFormSession {
             active.remove(playerId, generation);
             return;
         }
+        if (banknoteFlow != null) {
+            runDepositAsync(playerId, generation);
+            return;
+        }
         try {
             folia.runForPlayer(player, () -> {
                 if (!isCurrent(playerId, generation)) {
@@ -195,6 +218,139 @@ public final class BankFormSession {
             });
         } catch (Throwable dispatchFailure) {
             active.remove(playerId, generation);
+        }
+    }
+
+    /**
+     * Shared-flow deposit: snapshot the held item on the region thread, commit
+     * on the IO executor and remove the note on the region thread through the
+     * flow. The region callback returns immediately after submitting, so the
+     * calling thread never waits on storage.
+     */
+    private void runDepositAsync(UUID playerId, long generation) {
+        Player player = Bukkit.getPlayer(playerId);
+        if (player == null) {
+            active.remove(playerId, generation);
+            return;
+        }
+        try {
+            folia.runForPlayer(player, () -> {
+                if (!isCurrent(playerId, generation)) {
+                    return;
+                }
+                Player current = Bukkit.getPlayer(playerId);
+                if (current == null || !current.isOnline()) {
+                    active.remove(playerId, generation);
+                    return;
+                }
+                ItemStack held;
+                try {
+                    held = current.getInventory().getItemInMainHand();
+                } catch (Throwable readFailure) {
+                    active.remove(playerId, generation);
+                    return;
+                }
+                if (held == null) {
+                    active.remove(playerId, generation);
+                    tell(current, "gui.bank-form-deposit-no-item", Map.of());
+                    return;
+                }
+                try {
+                    if (held.getType().isAir() || held.getAmount() <= 0) {
+                        active.remove(playerId, generation);
+                        tell(current, "gui.bank-form-deposit-no-item", Map.of());
+                        return;
+                    }
+                } catch (Throwable readFailure) {
+                    active.remove(playerId, generation);
+                    return;
+                }
+                // Clone on the region thread: the flow decodes and compares
+                // against this private snapshot, so a later hand swap cannot
+                // credit one item while removing another.
+                ItemStack snapshot;
+                try {
+                    ItemStack cloned = held.clone();
+                    if (cloned == null || cloned == held) {
+                        active.remove(playerId, generation);
+                        tell(current, "general.transaction-failed", Map.of());
+                        return;
+                    }
+                    snapshot = cloned;
+                } catch (Throwable cloneFailure) {
+                    active.remove(playerId, generation);
+                    tell(current, "general.transaction-failed", Map.of());
+                    return;
+                }
+                banknoteFlow.redeem(playerId, snapshot, BanknoteFlow.Hand.MAIN_HAND,
+                                useCase::deposit, () -> isCurrent(playerId, generation))
+                        .whenComplete((outcome, failure) -> finishDeposit(
+                                playerId, generation, outcome, failure));
+            });
+        } catch (Throwable dispatchFailure) {
+            active.remove(playerId, generation);
+        }
+    }
+
+    private void finishDeposit(UUID playerId, long generation,
+                               BanknoteFlow.RedeemOutcome outcome, Throwable failure) {
+        boolean current = active.remove(playerId, generation);
+        Player live = Bukkit.getPlayer(playerId);
+        if (!current || live == null) {
+            return;
+        }
+        if (failure != null) {
+            if (failure instanceof Error error) {
+                throw error;
+            }
+            tellOnRegion(live, "general.transaction-failed", Map.of());
+            return;
+        }
+        if (outcome == null) {
+            tellOnRegion(live, "general.transaction-failed", Map.of());
+            return;
+        }
+        if (outcome.isCredited()) {
+            tellOnRegion(live, "gui.bank-form-deposit-success",
+                    Map.of("amount", outcome.value(), "currency", outcome.currencyId()));
+            return;
+        }
+        if (outcome.isCreditRetained()) {
+            tellOnRegion(live, "banknote.redeem-retained",
+                    Map.of("amount", Long.toString(outcome.value())));
+            return;
+        }
+        if (outcome.isItemMismatch()) {
+            tellOnRegion(live, "banknote.redeem-mismatch", Map.of());
+            return;
+        }
+        if (outcome.isPending()) {
+            tellOnRegion(live, "banknote.redeem-pending", Map.of());
+            return;
+        }
+        if ("replay.detected".equals(outcome.reason())) {
+            tellOnRegion(live, "banknote.redeem-replay", Map.of());
+            return;
+        }
+        if ("transaction.cancelled".equals(outcome.reason())) {
+            tellOnRegion(live, "general.transaction-cancelled", Map.of());
+            return;
+        }
+        tellOnRegion(live, "general.transaction-failed", Map.of());
+    }
+
+    /**
+     * Send one player message on the player's region thread. The redeem and
+     * withdraw completions above settle on IO threads, so messaging directly
+     * would touch Bukkit off its region thread. The dispatch is best-effort:
+     * a rejected dispatch (shutdown, offline player) drops a message whose
+     * ledger state is already settled.
+     */
+    private void tellOnRegion(Player player, String key, Map<String, Object> vars) {
+        try {
+            folia.runForPlayer(player, () -> tell(player, key, vars));
+        } catch (Throwable ignored) {
+            // The ledger state is already settled; the message is best-effort.
         }
     }
 
@@ -391,6 +547,10 @@ public final class BankFormSession {
                     active.remove(playerId, generation);
                     return;
                 }
+                if (banknoteFlow != null) {
+                    runWithdrawAsync(playerId, generation, current, amount, currencyId);
+                    return;
+                }
                 if (live.getInventory().firstEmpty() == -1) {
                     pendingWithdraw.remove(playerId, current);
                     active.remove(playerId, generation);
@@ -414,6 +574,134 @@ public final class BankFormSession {
             pendingWithdraw.remove(playerId, pending);
             active.remove(playerId, generation);
         }
+    }
+
+    /**
+     * Shared-flow withdraw: the region callback submits the deduction, mint and
+     * handover to the flow and returns immediately, so the calling thread never
+     * waits on storage. The flow probes inventory on the region thread, moves
+     * money on the IO executor and hands the note over on the region thread;
+     * the reply below runs on the region thread as well.
+     */
+    private void runWithdrawAsync(UUID playerId, long generation, PendingWithdraw current,
+                                  long amount, String currencyId) {
+        Currency currency;
+        try {
+            CurrencyRegistry registry = currencies.get();
+            if (!registry.contains(currencyId)) {
+                pendingWithdraw.remove(playerId, current);
+                active.remove(playerId, generation);
+                Player live = Bukkit.getPlayer(playerId);
+                if (live != null) {
+                    tellOnRegion(live, "general.unknown-currency", Map.of("currency", currencyId));
+                }
+                return;
+            }
+            currency = registry.get(currencyId);
+        } catch (Throwable registryFailure) {
+            pendingWithdraw.remove(playerId, current);
+            active.remove(playerId, generation);
+            return;
+        }
+        Amount parsed;
+        try {
+            parsed = Amount.of(amount, currency.scale());
+        } catch (IllegalArgumentException invalid) {
+            pendingWithdraw.remove(playerId, current);
+            active.remove(playerId, generation);
+            Player live = Bukkit.getPlayer(playerId);
+            if (live != null) {
+                tellOnRegion(live, "general.invalid-amount", Map.of("amount", Long.toString(amount)));
+            }
+            return;
+        }
+        try {
+            banknoteFlow.withdraw(playerId, currency.id(), parsed,
+                            () -> isCurrent(playerId, generation))
+                    .whenComplete((outcome, failure) ->
+                            finishWithdraw(playerId, generation, current, outcome, failure));
+        } catch (Throwable submitFailure) {
+            pendingWithdraw.remove(playerId, current);
+            active.remove(playerId, generation);
+        }
+    }
+
+    private void finishWithdraw(UUID playerId, long generation, PendingWithdraw expected,
+                                BanknoteFlow.WithdrawOutcome outcome, Throwable failure) {
+        PendingWithdraw current = pendingWithdraw.get(playerId);
+        if (current == null || current.generation() != generation
+                || current.amount() != expected.amount()
+                || !current.currencyId().equals(expected.currencyId())) {
+            return;
+        }
+        pendingWithdraw.remove(playerId, current);
+        boolean wasCurrent = active.remove(playerId, generation);
+        if (!wasCurrent) {
+            return;
+        }
+        Player live = Bukkit.getPlayer(playerId);
+        if (live == null || !live.isOnline()) {
+            return;
+        }
+        if (failure != null) {
+            Throwable cause = failure instanceof java.util.concurrent.CompletionException completed
+                    && completed.getCause() != null ? completed.getCause() : failure;
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            if (cause instanceof com.smile.aceeconomy.ports.persistence.IndeterminatePersistenceException
+                    || cause instanceof com.smile.aceeconomy.ports.persistence.PersistenceException committed
+                    && committed.isCommitted()) {
+                tellOnRegion(live, "banknote.withdraw-pending", Map.of());
+            } else {
+                tellOnRegion(live, "general.transaction-failed", Map.of());
+            }
+            return;
+        }
+        if (outcome == null) {
+            tellOnRegion(live, "general.transaction-failed", Map.of());
+            return;
+        }
+        if (outcome.isDelivered()) {
+            tellOnRegion(live, "gui.bank-form-withdraw-success",
+                    Map.of("amount", expected.amount(), "currency", expected.currencyId()));
+            return;
+        }
+        if (outcome.isRefusedFull()) {
+            tellOnRegion(live, "general.inventory-full", Map.of());
+            return;
+        }
+        if (outcome.isRefused()) {
+            com.smile.aceeconomy.domain.EconomyError error = outcome.error();
+            if (error == com.smile.aceeconomy.domain.EconomyError.INSUFFICIENT_FUNDS
+                    || error == com.smile.aceeconomy.domain.EconomyError.DEBT_LIMIT_EXCEEDED
+                    || error == com.smile.aceeconomy.domain.EconomyError.DEBT_DISABLED) {
+                tellOnRegion(live, "economy.insufficient-funds", Map.of());
+            } else if (error == com.smile.aceeconomy.domain.EconomyError.CURRENCY_NOT_FOUND) {
+                tellOnRegion(live, "general.unknown-currency",
+                        Map.of("currency", expected.currencyId()));
+            } else if (error == com.smile.aceeconomy.domain.EconomyError.TRANSACTION_CANCELLED) {
+                tellOnRegion(live, "general.transaction-cancelled", Map.of());
+            } else {
+                tellOnRegion(live, "general.transaction-failed", Map.of());
+            }
+            return;
+        }
+        if (outcome.isRefunded()) {
+            if (BanknoteFlow.REASON_INVENTORY_FULL.equals(outcome.reason())) {
+                tellOnRegion(live, "general.inventory-full", Map.of());
+            } else if (BanknoteFlow.REASON_STALE_GENERATION.equals(outcome.reason())) {
+                tellOnRegion(live, "general.transaction-cancelled", Map.of());
+            } else {
+                tellOnRegion(live, "general.transaction-failed", Map.of());
+            }
+            return;
+        }
+        if (outcome.isVoidRefunded()) {
+            tellOnRegion(live, "banknote.delivery-uncertain", Map.of());
+            return;
+        }
+        tellOnRegion(live, "banknote.withdraw-pending", Map.of());
     }
 
     private boolean isCurrent(UUID playerId, long generation) {

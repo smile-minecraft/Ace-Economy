@@ -269,6 +269,12 @@ class EconomyServiceAtomicityTest {
         Amount bobBal = verify2.load(bob).orElseThrow().balanceOf("dollar");
         Amount total = aliceBal.add(bobBal);
         assertEquals(0, Amount.of(2000L, 2).compareTo(total));
+        // The success receipt must carry the real committed ids, not fabricated ones.
+        List<com.smile.aceeconomy.domain.Transaction> committedRows = verify2.loadAll();
+        assertTrue(committedRows.stream().anyMatch(t -> t.id().equals(r.value().outTransactionId())),
+                "success receipt must carry the real committed out id");
+        assertTrue(committedRows.stream().anyMatch(t -> t.id().equals(r.value().inTransactionId())),
+                "success receipt must carry the real committed in id");
         verify2.close();
         freshBackend.close();
         try { backend.close(); } catch (Exception ignored) {}

@@ -1,12 +1,14 @@
 package com.smile.aceeconomy.infrastructure.persistence.json;
 
 import com.smile.aceeconomy.domain.Account;
+import com.smile.aceeconomy.domain.AmountCap;
 import com.smile.aceeconomy.domain.Transaction;
 import com.smile.aceeconomy.ports.persistence.PersistenceException;
 
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 
@@ -19,7 +21,10 @@ import java.util.UUID;
  * is touched: malformed JSON, incompatible schema versions, invalid records (bad UUIDs,
  * amounts, types, timestamps), duplicate transaction ids and currencies outside the configured
  * allowlist. Currency ids are matched against an explicit allowlist instead of a denylist so
- * legitimate currency ids (including names like {@code token}) are never misjudged.</p>
+ * legitimate currency ids (including names like {@code token}) are never misjudged.
+ * Balances above the public amount cap are <em>not</em> rejected here: plain loads and the
+ * backup-sanity check stay lenient by design, and only {@code restore()} adds the
+ * restore-only gate ({@link #checkRestoreCaps}) before touching live state.</p>
  *
  * <p>This validator adds no new backend semantics; it only runs the existing ones early.</p>
  */
@@ -127,6 +132,30 @@ public final class SnapshotPreflight {
             if (!seenTransactionIds.add(domain.id().toString())) {
                 throw new PersistenceException(
                         "Duplicate transaction id in snapshot: " + domain.id());
+            }
+        }
+    }
+
+    /**
+     * Restore-only cap gate over a parsed snapshot's <em>balance</em> strings.
+     * A snapshot that would store an over-cap (or over-wide) balance is refused
+     * here, while the caller still holds no live state.
+     *
+     * <p>Deliberately separate from {@link #validateRecords}: plain loads and the
+     * backup-sanity check stay lenient, so a legacy over-cap row still loads and
+     * is diagnosed by the service gate on the next transaction instead. Audit
+     * rows in the same snapshot stay restorable as evidence. Both backends call
+     * this from {@code restore()} right after {@link #validateRecords} and
+     * before touching any live row.</p>
+     *
+     * @throws PersistenceException naming the account, currency and cap on refusal
+     */
+    public static void checkRestoreCaps(JsonModel model) throws PersistenceException {
+        Objects.requireNonNull(model, "model");
+        for (Map.Entry<String, JsonModel.JsonAccount> entry : model.accounts.entrySet()) {
+            var refusal = AmountCap.restoreRefusal(entry.getKey(), entry.getValue().balances);
+            if (refusal.isPresent()) {
+                throw new PersistenceException(refusal.get());
             }
         }
     }

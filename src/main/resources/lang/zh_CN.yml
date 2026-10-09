@@ -54,6 +54,7 @@ economy:
   withdraw-redeem: "<green>已兑换支票：<yellow>{amount}</yellow> <gray>(签发人：{issuer})</gray></green>"
   min-withdraw-amount: "<red>最低提取金额为 {amount}！</red>"
   account-not-found: "<red>找不到账户数据！</red>"
+  currency-scale-mismatch: "<red>货币精度不一致——交易已拒绝，未变更任何数据：<white>{details}</white></red>"
 
 admin:
   give: "<green>已给予 <aqua>{player}</aqua> <yellow>{amount}</yellow></green>"
@@ -222,3 +223,8 @@ banknote:
   redeem-success: "<green>已兑换支票：<yellow>{amount}</yellow> <gray>(签发人：{issuer})</gray></green>"
   redeem-failed: "<red>兑换失败，交易被取消！</red>"
   redeem-retained: "<yellow>支票已入账 <yellow>{amount}</yellow>，但物品无法移除。请保留支票并联系管理员。</yellow>"
+  redeem-replay: "<red>这张支票已经兑换过了！</red>"
+  redeem-mismatch: "<yellow>支票已入账，但手上的物品已被更换，因此未移除任何物品。若物品还在请保留并联系管理员。</yellow>"
+  withdraw-pending: "<yellow>取款结果不确定，扣款、交付与退款皆尚未确认。请勿重复尝试并联系管理员。</yellow>"
+  redeem-pending: "<yellow>兑换结果不确定，支票已保留。请勿重复尝试，请联系管理员。</yellow>"
+  delivery-uncertain: "<yellow>交付结果不确定，支票已作废并退款。若余额有误请联系管理员。</yellow>"

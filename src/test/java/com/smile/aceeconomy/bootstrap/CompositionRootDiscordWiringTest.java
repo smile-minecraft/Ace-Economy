@@ -1,13 +1,14 @@
 package com.smile.aceeconomy.bootstrap;
 
+import com.smile.aceeconomy.api.v2.InMemoryTransactionEventPublisher;
 import com.smile.aceeconomy.domain.Amount;
 import com.smile.aceeconomy.domain.Transaction;
 import com.smile.aceeconomy.domain.TransactionType;
 import com.smile.aceeconomy.infrastructure.integration.discord.DiscordPayload;
 import com.smile.aceeconomy.infrastructure.integration.discord.DiscordSendResult;
 import com.smile.aceeconomy.infrastructure.integration.discord.DiscordTransport;
+import com.smile.aceeconomy.infrastructure.persistence.PersistentAuditSink;
 import com.smile.aceeconomy.ports.AuditException;
-import com.smile.aceeconomy.ports.AuditSink;
 import com.smile.aceeconomy.ports.inmemory.InMemoryTransactionRepository;
 import com.smile.aceeconomy.ports.persistence.TransactionRepository;
 import org.junit.jupiter.api.AfterEach;
@@ -53,6 +54,7 @@ import static org.junit.jupiter.api.Assertions.fail;
 class CompositionRootDiscordWiringTest {
 
     private ExecutorService ioExecutor;
+    private InMemoryTransactionEventPublisher publisher;
     private final TransactionRepository transactions = new InMemoryTransactionRepository();
     private final ResourceOwner resources = new ResourceOwner();
     private final AtomicInteger transportCreated = new AtomicInteger();
@@ -66,6 +68,7 @@ class CompositionRootDiscordWiringTest {
             t.setDaemon(true);
             return t;
         });
+        publisher = new InMemoryTransactionEventPublisher();
         logHandler = new CapturingLogHandler();
         logger = Logger.getLogger("composition-root-wiring-test-" + UUID.randomUUID());
         logger.setUseParentHandlers(false);
@@ -92,16 +95,18 @@ class CompositionRootDiscordWiringTest {
         };
 
         DiscordWiring.Outcome outcome = CompositionRoot.wireDiscord(
-                transactions, ioExecutor, resources,
+                transactions, ioExecutor, publisher, resources,
                 true, "https://hooks.discord.example/services/foo",
                 logger, factory, msg -> { /* capture diagnostics via logHandler below */ });
 
         assertTrue(outcome.active(),
                 "production seam must mark wiring active when enabled + URL is valid");
         assertEquals(DiscordWiring.REASON_OK, outcome.rejectReason());
-        assertNotNull(outcome.auditSink(), "outcome must expose a decorated audit sink");
-        assertFalse(outcome.auditSink() instanceof AuditSinkSpy,
-                "audit sink must be a decorator, not the raw base sink");
+        assertNotNull(outcome.auditSink(), "outcome must expose the plain persistence sink");
+        assertTrue(outcome.auditSink() instanceof PersistentAuditSink,
+                "seam must keep the plain sink: notification travels only through post-commit");
+        assertNotNull(outcome.postCommitListener(),
+                "seam must expose the registered post-commit listener for shutdown cleanup");
         assertNotNull(outcome.shutdownHook(),
                 "production seam must register a shutdown hook");
         assertEquals(1, transportCreated.get(),
@@ -111,41 +116,41 @@ class CompositionRootDiscordWiringTest {
     }
 
     @Test
-    void enabledWiringRoutesAuditThroughTransport() throws Exception {
+    void enabledWiringRoutesPostCommitThroughTransport() throws Exception {
         FakeTransport transport = new FakeTransport();
         DiscordWiring.TransportFactory factory = url -> transport;
 
         DiscordWiring.Outcome outcome = CompositionRoot.wireDiscord(
-                transactions, ioExecutor, resources,
+                transactions, ioExecutor, publisher, resources,
                 true, "https://hooks.discord.example/services/foo",
                 logger, factory, msg -> { });
 
-        // Driving the audit sink must reach the transport via the decorator.
+        // Driving the post-commit channel must reach the transport.
         Transaction tx = sampleTransaction();
-        outcome.auditSink().record(tx);
+        publisher.publishPostCommit(tx);
 
         // Wait for the async delivery to complete (transport future is completed synchronously
         // in FakeTransport, so the whenComplete fires before deliver returns).
         waitForTransportCall(transport, 2_000);
 
         assertEquals(1, transport.sent.size(),
-                "audit sink decorator must route to the transport factory");
+                "one committed announcement must reach the transport exactly once");
         assertFalse(transport.sent.get(0).toJson().isEmpty());
     }
 
     @Test
-    void enabledWiringAuditExceptionFromInnerPropagatesAndDoesNotCallTransport() throws Exception {
+    void enabledWiringAuditFailureStillReportedAndSkipsTransport() throws Exception {
         FakeTransport transport = new FakeTransport();
-        // A throwing repository so PersistentAuditSink fails on record().
+        // A throwing repository so the plain sink fails on record().
         ThrowingRepository throwingTransactions = new ThrowingRepository();
         DiscordWiring.TransportFactory factory = url -> transport;
 
         DiscordWiring.Outcome outcome = CompositionRoot.wireDiscord(
-                throwingTransactions, ioExecutor, resources,
+                throwingTransactions, ioExecutor, publisher, resources,
                 true, "https://hooks.discord.example/services/foo",
                 logger, factory, msg -> { });
 
-        // The decorator must propagate the inner AuditException so the application's
+        // The plain sink must propagate the persistence failure so the application's
         // contract (audit failure is reported, never swallowed) is preserved.
         // Executable throws Throwable so the lambda can re-throw the checked AuditException
         // directly without wrapping.
@@ -158,11 +163,10 @@ class CompositionRootDiscordWiringTest {
         });
         assertNotNull(thrown);
 
-        // The decorator must NOT attempt transport when the inner audit fails (the inner
-        // record() throws before notifier.notify() is called).
+        // No post-commit announcement was published, so the transport stays silent.
         waitForNoTransportCall(transport, 200);
         assertEquals(0, transport.sent.size(),
-                "transport must not be called when inner audit throws");
+                "transport must not be called without a committed announcement");
     }
 
     // ---- disabled / empty URL / invalid URL --------------------------------
@@ -176,13 +180,15 @@ class CompositionRootDiscordWiringTest {
         };
 
         DiscordWiring.Outcome outcome = CompositionRoot.wireDiscord(
-                transactions, ioExecutor, resources,
+                transactions, ioExecutor, publisher, resources,
                 false, "https://hooks.discord.example/services/foo",
                 logger, factory, msg -> fail("no diagnostic expected"));
 
         assertFalse(outcome.active());
         assertEquals(DiscordWiring.REASON_DISABLED, outcome.rejectReason());
         assertNull(outcome.shutdownHook());
+        assertNull(outcome.postCommitListener(),
+                "no post-commit listener may be registered when wiring is inactive");
         assertEquals(0, transportCreated.get());
         assertEquals(0, logHandler.records().size());
     }
@@ -190,7 +196,7 @@ class CompositionRootDiscordWiringTest {
     @Test
     void disabledWithEmptyUrlDoesNotConstructTransport() {
         DiscordWiring.Outcome outcome = CompositionRoot.wireDiscord(
-                transactions, ioExecutor, resources,
+                transactions, ioExecutor, publisher, resources,
                 false, "",
                 logger, url -> fail("not constructed"), msg -> fail("no diagnostic"));
 
@@ -201,13 +207,15 @@ class CompositionRootDiscordWiringTest {
     @Test
     void enabledWithEmptyUrlDoesNotConstructTransport() {
         DiscordWiring.Outcome outcome = CompositionRoot.wireDiscord(
-                transactions, ioExecutor, resources,
+                transactions, ioExecutor, publisher, resources,
                 true, "",
                 logger, url -> fail("not constructed"), msg -> fail("no diagnostic expected"));
 
         assertFalse(outcome.active());
         assertEquals(DiscordWiring.REASON_MISSING_URL, outcome.rejectReason());
         assertNull(outcome.shutdownHook());
+        assertNull(outcome.postCommitListener(),
+                "no post-commit listener may be registered when wiring is inactive");
     }
 
     @Test
@@ -245,7 +253,7 @@ class CompositionRootDiscordWiringTest {
         DiscordWiring.Outcome outcome;
         try {
             outcome = CompositionRoot.wireDiscord(
-                    transactions, ioExecutor, resources,
+                    transactions, ioExecutor, publisher, resources,
                     true, url, logger, factory, msg -> { });
         } catch (Exception e) {
             fail("invalid URL must not throw out of the seam: " + e.getMessage());
@@ -255,6 +263,8 @@ class CompositionRootDiscordWiringTest {
         assertFalse(outcome.active(), "invalid url must not produce active wiring");
         assertEquals(DiscordWiring.REASON_INVALID_URL, outcome.rejectReason());
         assertNull(outcome.shutdownHook());
+        assertNull(outcome.postCommitListener(),
+                "no post-commit listener may be registered when wiring is inactive");
         assertEquals(0, transportCreated.get(), "no transport may be constructed");
     }
 
@@ -266,7 +276,7 @@ class CompositionRootDiscordWiringTest {
         // Use the production-default 6-arg overload so the diagnostic flows to the logger
         // exactly as it does in production.
         CompositionRoot.wireDiscord(
-                transactions, ioExecutor, resources,
+                transactions, ioExecutor, publisher, resources,
                 true, secretUrl, logger);
 
         assertEquals(1, logHandler.records().size(),
@@ -290,7 +300,7 @@ class CompositionRootDiscordWiringTest {
         DiscordWiring.TransportFactory factory = url -> transport;
 
         DiscordWiring.Outcome outcome = CompositionRoot.wireDiscord(
-                transactions, ioExecutor, resources,
+                transactions, ioExecutor, publisher, resources,
                 true, "https://hooks.discord.example/services/foo",
                 logger, factory, msg -> { });
 
@@ -338,16 +348,6 @@ class CompositionRootDiscordWiringTest {
     private void waitForNoTransportCall(FakeTransport transport, long timeoutMs) throws InterruptedException {
         assertFalse(transport.awaitSent(timeoutMs),
                 "transport must not be called within timeout");
-    }
-
-    /** Simple {@link AuditSink} spy to verify decorator behaviour via instanceof checks. */
-    private static final class AuditSinkSpy implements AuditSink {
-        final List<Transaction> recorded = new ArrayList<>();
-
-        @Override
-        public void record(Transaction transaction) throws AuditException {
-            recorded.add(transaction);
-        }
     }
 
     /** In-process fake transport; supports SUCCESS/FAIL modes without I/O. */

@@ -135,16 +135,27 @@ class EconomyServiceTest {
         EconomyTestHarness h = newHarness(DebtPolicy.disabled());
         h.service.createAccount(alice, "Alice");
         h.service.createAccount(bob, "Bob");
+        java.util.List<com.smile.aceeconomy.domain.Transaction> notified =
+                new java.util.concurrent.CopyOnWriteArrayList<>();
+        h.publisher.registerPostCommit(notified::add);
         EconomyResult<TransferResult> r = h.service.transfer(alice, bob, "dollar", Amount.of(100, 2));
         assertTrue(r.isSuccess());
         assertEquals(Amount.of(900, 2), h.service.getBalance(alice, "dollar").value());
         assertEquals(Amount.of(1100, 2), h.service.getBalance(bob, "dollar").value());
 
-        assertEquals(2, h.audit.recorded().size());
-        assertEquals(TransactionType.TRANSFER_OUT, h.audit.recorded().get(0).type());
-        assertEquals(TransactionType.TRANSFER_IN, h.audit.recorded().get(1).type());
-        assertEquals(alice, h.audit.recorded().get(0).accountId());
-        assertEquals(bob, h.audit.recorded().get(1).accountId());
+        // The atomic store persists both audit records itself (out, then in); the service must
+        // not mirror them through audit.record again, so the separate sink stays empty while
+        // post-commit observers still see both committed legs with the real ids.
+        assertEquals(2, h.repo.recordedTransactions().size());
+        assertEquals(TransactionType.TRANSFER_OUT, h.repo.recordedTransactions().get(0).type());
+        assertEquals(TransactionType.TRANSFER_IN, h.repo.recordedTransactions().get(1).type());
+        assertEquals(alice, h.repo.recordedTransactions().get(0).accountId());
+        assertEquals(bob, h.repo.recordedTransactions().get(1).accountId());
+        assertTrue(h.audit.recorded().isEmpty(),
+                "atomic transfers must not duplicate the store's audit rows through the sink");
+        assertEquals(2, notified.size());
+        assertEquals(r.value().outTransactionId(), notified.get(0).id());
+        assertEquals(r.value().inTransactionId(), notified.get(1).id());
     }
 
     // ---------------- pre-commit cancellation ----------------
@@ -174,6 +185,8 @@ class EconomyServiceTest {
         assertEquals(EconomyError.TRANSACTION_CANCELLED, r.error());
         assertEquals(Amount.of(1000, 2), h.service.getBalance(alice, "dollar").value());
         assertEquals(Amount.of(1000, 2), h.service.getBalance(bob, "dollar").value());
+        assertTrue(h.repo.recordedTransactions().isEmpty(), "cancelled transfer must leave no audit residue");
+        assertTrue(h.audit.recorded().isEmpty(), "cancelled transfer must leave no sink residue");
     }
 
     // ---------------- audit failure not swallowed ----------------

@@ -66,6 +66,25 @@ class EssentialsParserTest {
     }
 
     @Test
+    void directBannedFileIsRefusedBeforeAnyContentRead(@TempDir Path dir) throws Exception {
+        Path banned = dir.resolve("config.yml");
+        // Fictitious fixture content only — never a real server file.
+        Files.writeString(banned, "fixture: true\n", StandardCharsets.UTF_8);
+
+        ImportPathGate.contentReadsForTests.set(0);
+
+        // Direct parser entry, bypassing resolve/checkFile: only the snapshot
+        // single-file gate stands between the banned name and a content read.
+        ImportParseResult result = EssentialsParser.parse(banned, "coin", 2);
+
+        assertTrue(result.records().isEmpty());
+        assertTrue(result.failures().stream().anyMatch(f -> f.contains("refusing sensitive")),
+                "expected a sensitive-name refusal, got: " + result.failures());
+        assertEquals(0, ImportPathGate.contentReadsForTests.get(),
+                "a banned file must be refused before its content is read");
+    }
+
+    @Test
     void missingNameFallsBackToNullOwner(@TempDir Path dir) throws Exception {
         write(dir, ALEX + ".yml", "money: 10\n");
 

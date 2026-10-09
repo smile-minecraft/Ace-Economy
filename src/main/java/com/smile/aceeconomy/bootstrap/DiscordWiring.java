@@ -1,13 +1,15 @@
 package com.smile.aceeconomy.bootstrap;
 
-import com.smile.aceeconomy.infrastructure.integration.discord.DiscordAuditSink;
+import com.smile.aceeconomy.api.v2.InMemoryTransactionEventPublisher;
 import com.smile.aceeconomy.infrastructure.integration.discord.DiscordNotifier;
 import com.smile.aceeconomy.infrastructure.integration.discord.DiscordPayloadFilter;
 import com.smile.aceeconomy.infrastructure.integration.discord.DiscordTransport;
 import com.smile.aceeconomy.infrastructure.integration.discord.HttpDiscordTransport;
+import com.smile.aceeconomy.infrastructure.integration.discord.PostCommitDiscordListener;
 import com.smile.aceeconomy.infrastructure.integration.discord.TransactionDiscordMapper;
 import com.smile.aceeconomy.infrastructure.persistence.PersistentAuditSink;
 import com.smile.aceeconomy.ports.AuditSink;
+import com.smile.aceeconomy.ports.CommittedTransactionListener;
 import com.smile.aceeconomy.ports.persistence.TransactionRepository;
 
 import java.net.URI;
@@ -26,15 +28,20 @@ import java.util.logging.Logger;
  * tests without booting Bukkit or any external server. Behavior:</p>
  * <ul>
  *   <li><b>enabled=false</b> — no transport is constructed; no shutdown hook is registered; the
- *       audit sink stays as the plain {@link PersistentAuditSink}.</li>
+ *       audit sink stays as the plain {@link PersistentAuditSink}; no post-commit listener
+ *       is registered.</li>
  *   <li><b>enabled=true, empty URL</b> — same as disabled; treated as a no-op wiring.</li>
  *   <li><b>enabled=true, invalid URL</b> — URL validation rejects it; a fixed diagnostic is logged
  *       (never echoing the URL); the audit sink stays as {@link PersistentAuditSink}; startup
  *       does not fail.</li>
  *   <li><b>enabled=true, valid URL</b> — an {@link HttpDiscordTransport} is built, a
- *       {@link DiscordNotifier} is wrapped around it, and the original audit sink is decorated
- *       with a {@link DiscordAuditSink}. A shutdown hook is registered with the supplied
- *       {@link ResourceOwner} so plugin teardown drains the notifier.</li>
+ *       {@link DiscordNotifier} is wrapped around it, and a {@link PostCommitDiscordListener}
+ *       is registered on the given publisher so every committed transaction is announced
+ *       exactly once. The audit sink stays the plain {@link PersistentAuditSink}: notification
+ *       travels only through the post-commit channel, never through a notifying audit
+ *       decorator, so atomically persisted transfers can neither be silenced nor duplicated.
+ *       A shutdown hook is registered with the supplied {@link ResourceOwner} so plugin
+ *       teardown drains the notifier.</li>
  * </ul>
  *
  * <p>The transport construction is injected as a {@link TransportFactory} so tests can verify
@@ -60,6 +67,7 @@ final class DiscordWiring {
     /** Wire outcome: the audit sink the application should use plus optional shutdown hook. */
     record Outcome(
             AuditSink auditSink,
+            CommittedTransactionListener postCommitListener,
             Runnable shutdownHook,
             boolean active,
             String rejectReason) {
@@ -77,11 +85,12 @@ final class DiscordWiring {
     static Outcome wire(
             TransactionRepository transactions,
             ExecutorService ioExecutor,
+            InMemoryTransactionEventPublisher publisher,
             boolean enabled,
             String webhookUrl,
             Logger logger,
             ResourceOwner resources) {
-        return wire(transactions, ioExecutor, enabled, webhookUrl, logger, resources,
+        return wire(transactions, ioExecutor, publisher, enabled, webhookUrl, logger, resources,
                 DiscordWiring::defaultTransport);
     }
 
@@ -89,12 +98,13 @@ final class DiscordWiring {
     static Outcome wire(
             TransactionRepository transactions,
             ExecutorService ioExecutor,
+            InMemoryTransactionEventPublisher publisher,
             boolean enabled,
             String webhookUrl,
             Logger logger,
             ResourceOwner resources,
             TransportFactory transportFactory) {
-        return wire(transactions, ioExecutor, enabled, webhookUrl, logger, resources,
+        return wire(transactions, ioExecutor, publisher, enabled, webhookUrl, logger, resources,
                 transportFactory, null);
     }
 
@@ -102,6 +112,7 @@ final class DiscordWiring {
     static Outcome wire(
             TransactionRepository transactions,
             ExecutorService ioExecutor,
+            InMemoryTransactionEventPublisher publisher,
             boolean enabled,
             String webhookUrl,
             Logger logger,
@@ -110,6 +121,7 @@ final class DiscordWiring {
             Consumer<String> diagnosticsSink) {
         Objects.requireNonNull(transactions, "transactions");
         Objects.requireNonNull(ioExecutor, "ioExecutor");
+        Objects.requireNonNull(publisher, "publisher");
         Objects.requireNonNull(logger, "logger");
         Objects.requireNonNull(resources, "resources");
         Objects.requireNonNull(transportFactory, "transportFactory");
@@ -118,10 +130,10 @@ final class DiscordWiring {
         Consumer<String> sink = diagnosticsSink != null ? diagnosticsSink : logger::warning;
 
         if (!enabled) {
-            return new Outcome(base, null, false, REASON_DISABLED);
+            return new Outcome(base, null, null, false, REASON_DISABLED);
         }
         if (webhookUrl == null || webhookUrl.isEmpty()) {
-            return new Outcome(base, null, false, REASON_MISSING_URL);
+            return new Outcome(base, null, null, false, REASON_MISSING_URL);
         }
         URI uri;
         try {
@@ -131,16 +143,17 @@ final class DiscordWiring {
             // Diagnostics delivery is best-effort: a throwing consumer or logger handler must
             // not abort CompositionRoot startup — the wiring still degrades to inactive/no-op.
             safeAcceptDiagnostic(sink, DIAGNOSTIC_REJECTED);
-            return new Outcome(base, null, false, REASON_INVALID_URL);
+            return new Outcome(base, null, null, false, REASON_INVALID_URL);
         }
         DiscordTransport transport = transportFactory.create(uri.toString());
         DiscordPayloadFilter filter = new DiscordPayloadFilter();
         TransactionDiscordMapper mapper = new TransactionDiscordMapper(filter, List.of());
         DiscordNotifier notifier = new DiscordNotifier(transport, mapper, ioExecutor, sink);
-        AuditSink decorated = new DiscordAuditSink(base, notifier);
+        PostCommitDiscordListener listener = new PostCommitDiscordListener(notifier);
         Runnable shutdownHook = () -> shutdownTransportAndNotifier(notifier, transport);
         resources.register(shutdownHook);
-        return new Outcome(decorated, shutdownHook, true, REASON_OK);
+        publisher.registerPostCommit(listener);
+        return new Outcome(base, listener, shutdownHook, true, REASON_OK);
     }
 
     /**

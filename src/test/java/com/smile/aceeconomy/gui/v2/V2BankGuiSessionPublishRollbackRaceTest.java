@@ -113,11 +113,6 @@ class V2BankGuiSessionPublishRollbackRaceTest {
         public String getModuleStatus() {
             return delegate.getModuleStatus();
         }
-
-        @Override
-        public void shutdown() {
-            delegate.shutdown();
-        }
     }
 
     @Test

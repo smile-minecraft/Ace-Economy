@@ -59,19 +59,25 @@ public final class LeaderboardService {
         Instant now = clock.instant();
         List<LeaderboardEntry> ranked = cache.getIfFresh(currencyId, ttl, now);
         if (ranked == null) {
+            long generation = cache.generation();
             ranked = computeRanking(currencyId);
-            cache.put(currencyId, ranked, now);
+            // A recompute that started before an invalidation must not refill the cache
+            // with its stale snapshot; the current caller still gets its computed page
+            // while the next query recomputes from the fresh source.
+            cache.putIfGenerationUnchanged(currencyId, ranked, now, generation);
         }
 
         int total = ranked.size();
         int totalPages = total == 0 ? 0 : (int) Math.ceil((double) total / limit);
-        int start = page * limit;
+        // The offset is computed in long: page * limit can exceed int range, and an int product
+        // would wrap back onto an earlier page instead of landing past the end.
+        long start = (long) page * limit;
         List<LeaderboardEntry> slice;
-        if (start < 0 || start >= total) {
+        if (start >= total) {
             slice = List.of();
         } else {
-            int end = Math.min(start + limit, total);
-            slice = List.copyOf(ranked.subList(start, end));
+            int end = (int) Math.min(start + limit, total);
+            slice = List.copyOf(ranked.subList((int) start, end));
         }
         return new LeaderboardPage(slice, page, limit, total, totalPages);
     }

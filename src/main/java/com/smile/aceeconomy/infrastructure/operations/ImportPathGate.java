@@ -18,6 +18,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -63,6 +64,17 @@ public final class ImportPathGate {
             "data-v2.json", "data-v2.sqlite");
 
     private static final Pattern WINDOWS_ABSOLUTE = Pattern.compile("^[A-Za-z]:[/\\\\].*");
+
+    /**
+     * Observable counter for path-based content-byte reads through the
+     * bounded reader (fingerprint hashing, snapshots and secure reads all
+     * funnel through {@link #readBytesSecure}). Metadata probes such as
+     * {@code Files.size} or attribute reads are not content reads and are not
+     * counted. Same-package callers reset it before the gated call and assert
+     * it stayed at zero to prove a banned member was rejected before any
+     * content was read.
+     */
+    static final AtomicLong contentReadsForTests = new AtomicLong();
 
     private ImportPathGate() {
     }
@@ -239,6 +251,12 @@ public final class ImportPathGate {
             String fingerprint = fingerprintDirectory ? directoryFingerprint(real, displayName) : null;
             return new GatedImport(real, attrs.fileKey(), true, -1, null, null, fingerprint);
         }
+        // Direct parser entries bypass resolve/checkFile, so the banned-name
+        // gate is repeated here before the size check and the content read.
+        if (isSensitiveName(real.getFileName().toString())) {
+            throw new ImportPathRejectedException(
+                    "refusing sensitive file as import input: " + displayName);
+        }
         if (attrs.size() > MAX_FILE_BYTES) {
             throw new ImportPathRejectedException("import file is too large (max "
                     + MAX_FILE_BYTES + " bytes): " + displayName);
@@ -354,6 +372,9 @@ public final class ImportPathGate {
                     displayName + ": import directory was never approved; refusing to read");
         }
         List<Path> names = listEntries(root.path(), displayName);
+        // Same name gate as the fingerprint: a member planted after approval
+        // is refused before its snapshot reads any content.
+        rejectSensitiveMembers(names, displayName);
         List<GatedImport> members = new ArrayList<>(names.size());
         StringBuilder canonical = new StringBuilder();
         for (Path name : names) {
@@ -532,6 +553,7 @@ public final class ImportPathGate {
             throw new ImportPathRejectedException(
                     displayName + ": import path must not be a symbolic link; refusing to read");
         }
+        contentReadsForTests.incrementAndGet();
         try (InputStream in = Files.newInputStream(path)) {
             return readBoundedBytes(in, displayName);
         }
@@ -609,8 +631,11 @@ public final class ImportPathGate {
      * listing itself is capped by {@link #MAX_DIRECTORY_ENTRIES}.
      */
     private static String directoryFingerprint(Path dir, String displayName) {
+        List<Path> entries = listEntries(dir, displayName);
+        // Name gate first: no member bytes are read before this passes.
+        rejectSensitiveMembers(entries, displayName);
         StringBuilder canonical = new StringBuilder();
-        for (Path entry : listEntries(dir, displayName)) {
+        for (Path entry : entries) {
             BasicFileAttributes attrs = readAttributes(entry, displayName);
             String name = entry.getFileName().toString();
             String identity = attrs.fileKey() == null ? null : attrs.fileKey().toString();
@@ -731,12 +756,11 @@ public final class ImportPathGate {
             throw new ImportPathRejectedException("import entry is not a regular file: " + displayName);
         }
         String name = file.getFileName().toString();
-        String lower = name.toLowerCase(Locale.ROOT);
-        if (SENSITIVE_NAMES.contains(lower)) {
+        if (isSensitiveName(name)) {
             throw new ImportPathRejectedException(
                     "refusing sensitive file as import input: " + displayName);
         }
-        String extension = extensionOf(lower);
+        String extension = extensionOf(name.toLowerCase(Locale.ROOT));
         Set<String> allowed = source == ImportSource.ESSENTIALS ? ESSENTIALS_EXTENSIONS : CMI_EXTENSIONS;
         if (!allowed.contains(extension)) {
             throw new ImportPathRejectedException("unsupported file type for " + source.name().toLowerCase(Locale.ROOT)
@@ -754,6 +778,32 @@ public final class ImportPathGate {
             return "";
         }
         return fileName.substring(dot + 1);
+    }
+
+    /**
+     * Source-independent banned-name check shared by the single-file gate and
+     * every directory path: a member with one of these names is refused even
+     * when its extension would otherwise be allowed.
+     */
+    private static boolean isSensitiveName(String fileName) {
+        return SENSITIVE_NAMES.contains(fileName.toLowerCase(Locale.ROOT));
+    }
+
+    /**
+     * Refuse a listed directory before any member content is read when any
+     * top-level member carries a banned name. This runs as a first pass over
+     * the names only — no attribute or content read happens before it — so a
+     * rejection here provably read zero member bytes. The member name in the
+     * message is truncated and control-stripped, never echoed raw.
+     */
+    private static void rejectSensitiveMembers(List<Path> entries, String displayName) {
+        for (Path entry : entries) {
+            String name = entry.getFileName().toString();
+            if (isSensitiveName(name)) {
+                throw new ImportPathRejectedException(
+                        displayName + ": refusing sensitive file as import input: " + truncate(name));
+            }
+        }
     }
 
     private static String truncate(String value) {

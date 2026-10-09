@@ -21,6 +21,7 @@ import org.jetbrains.annotations.NotNull;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -72,17 +73,34 @@ public final class BanknoteRedeemListener implements Listener {
     private final FoliaContextExecutor folia;
     private final ConfigLangAdapter messages;
     private final Logger audit;
+    /**
+     * Shared banknote pipeline. {@code null} in offline unit tests that drive
+     * the synchronous use-case path; production always wires the flow so the
+     * credit commits off the region thread with the same handover guarantees
+     * as the command, GUI and form entries.
+     */
+    private final com.smile.aceeconomy.infrastructure.banknote.BanknoteFlow banknoteFlow;
 
     public BanknoteRedeemListener(@NotNull BankGuiUseCase useCase,
                                   @NotNull BanknoteFactory banknotes,
                                   @NotNull FoliaContextExecutor folia,
                                   @NotNull ConfigLangAdapter messages,
                                   @NotNull Logger audit) {
+        this(useCase, banknotes, folia, messages, audit, null);
+    }
+
+    public BanknoteRedeemListener(@NotNull BankGuiUseCase useCase,
+                                  @NotNull BanknoteFactory banknotes,
+                                  @NotNull FoliaContextExecutor folia,
+                                  @NotNull ConfigLangAdapter messages,
+                                  @NotNull Logger audit,
+                                  com.smile.aceeconomy.infrastructure.banknote.BanknoteFlow banknoteFlow) {
         this.useCase = Objects.requireNonNull(useCase, "useCase");
         this.banknotes = Objects.requireNonNull(banknotes, "banknotes");
         this.folia = Objects.requireNonNull(folia, "folia");
         this.messages = Objects.requireNonNull(messages, "messages");
         this.audit = Objects.requireNonNull(audit, "audit");
+        this.banknoteFlow = banknoteFlow;
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
@@ -144,7 +162,97 @@ public final class BanknoteRedeemListener implements Listener {
         event.setCancelled(true);
         BanknoteClaim claim = decoded.get();
         boolean redeemMainHand = fromMainHand;
+        if (banknoteFlow != null) {
+            // Shared-flow path: the click-time snapshot is committed on the IO
+            // executor and removed on the region thread through the flow, so
+            // this handler never blocks the event thread on storage and never
+            // touches the inventory here. The reply below runs on the region
+            // thread as well.
+            com.smile.aceeconomy.infrastructure.banknote.BanknoteFlow.Hand flowHand =
+                    redeemMainHand
+                            ? com.smile.aceeconomy.infrastructure.banknote.BanknoteFlow.Hand.MAIN_HAND
+                            : com.smile.aceeconomy.infrastructure.banknote.BanknoteFlow.Hand.OFF_HAND;
+            UUID redeemer = player.getUniqueId();
+            try {
+                banknoteFlow.redeem(redeemer, snapshot, flowHand, useCase::deposit)
+                        .whenComplete((outcome, failure) ->
+                                finishSharedRedeem(redeemer, claim, outcome, failure));
+            } catch (Throwable ignored) {
+                // Submit is best-effort; the event stays cancelled so the player can click again.
+            }
+            return;
+        }
         folia.runForPlayer(player, () -> redeemInContext(player, claim, snapshot, redeemMainHand));
+    }
+
+    /**
+     * Reply to one shared-flow redeem on the player's region thread. The flow
+     * already removed the note on the region thread for clean credits and left
+     * every other item untouched; retained and pending outcomes are already
+     * audited by the flow with the nonce, so this only messages the player.
+     * Never throws and never touches storage.
+     */
+    private void finishSharedRedeem(UUID playerId,
+                                    BanknoteClaim claim,
+                                    com.smile.aceeconomy.infrastructure.banknote.BanknoteFlow.RedeemOutcome outcome,
+                                    Throwable failure) {
+        Player live;
+        try {
+            live = org.bukkit.Bukkit.getPlayer(playerId);
+        } catch (Throwable resolveFailure) {
+            return;
+        }
+        if (live == null) {
+            return;
+        }
+        String key;
+        Map<String, String> vars;
+        if (failure != null) {
+            Throwable cause = failure instanceof java.util.concurrent.CompletionException completed
+                    && completed.getCause() != null ? completed.getCause() : failure;
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            key = "banknote.redeem-failed";
+            vars = Map.of();
+        } else if (outcome == null) {
+            key = "banknote.redeem-failed";
+            vars = Map.of();
+        } else if (outcome.isCredited()) {
+            key = "banknote.redeem-success";
+            vars = Map.of("amount", Long.toString(outcome.value()),
+                    "issuer", String.valueOf(claim.issuer()));
+        } else if (outcome.isCreditRetained()) {
+            key = "banknote.redeem-retained";
+            vars = Map.of("amount", Long.toString(outcome.value()));
+        } else if (outcome.isItemMismatch()) {
+            key = "banknote.redeem-mismatch";
+            vars = Map.of();
+        } else if (outcome.isPending()) {
+            key = "banknote.redeem-pending";
+            vars = Map.of();
+        } else if ("replay.detected".equals(outcome.reason())) {
+            key = "banknote.redeem-replay";
+            vars = Map.of();
+        } else if ("transaction.cancelled".equals(outcome.reason())) {
+            key = "general.transaction-cancelled";
+            vars = Map.of();
+        } else {
+            key = "banknote.redeem-failed";
+            vars = Map.of();
+        }
+        try {
+            folia.runForPlayer(live, () -> {
+                try {
+                    messages.sendChatWithFallback(live,
+                            messages.renderMessage(key, Map.copyOf(vars)), null);
+                } catch (Throwable ignored) {
+                    // Messaging is best-effort; the ledger state is already settled.
+                }
+            });
+        } catch (Throwable ignored) {
+            // The region dispatch itself was rejected (shutdown, offline player).
+        }
     }
 
     private void redeemInContext(Player player, BanknoteClaim claim, ItemStack snapshot, boolean fromMainHand) {

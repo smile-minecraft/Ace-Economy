@@ -6,6 +6,7 @@ import com.smile.aceeconomy.infrastructure.persistence.sql.SqlBackend;
 import com.smile.aceeconomy.infrastructure.persistence.sql.SqlConnectionProvider;
 import com.smile.aceeconomy.infrastructure.persistence.sql.SqliteDialect;
 import com.smile.aceeconomy.ports.AccountRepository;
+import com.smile.aceeconomy.ports.persistence.AtomicImportStore;
 import com.smile.aceeconomy.ports.persistence.AtomicRedemptionStore;
 import com.smile.aceeconomy.ports.persistence.AtomicReversalStore;
 import com.smile.aceeconomy.ports.persistence.NonceStore;
@@ -67,14 +68,14 @@ public final class PersistenceBackendFactory {
     }
 
     /**
-     * Bundle of the ports exposed by a v2.0.0 backend. All six are the SAME
+     * Bundle of the ports exposed by a v2.0.0 backend. All seven are the SAME
      * instance — the wiring contract is that a single backend object simultaneously
      * satisfies {@link AccountRepository}, {@link TransactionRepository},
      * {@link PersistenceLifecycle}, {@link AtomicReversalStore},
-     * {@link AtomicRedemptionStore} and {@link NonceStore},
+     * {@link AtomicRedemptionStore}, {@link AtomicImportStore} and {@link NonceStore},
      * so reads via the repository ports always observe the same persisted state as writes
-     * via the lifecycle port, and rollback / redemption / nonce operations share one storage
-     * transaction boundary with ordinary reads and writes.
+     * via the lifecycle port, and rollback / redemption / import / nonce operations share
+     * one storage transaction boundary with ordinary reads and writes.
      */
     public record WiringResult(
             AccountRepository accounts,
@@ -82,12 +83,13 @@ public final class PersistenceBackendFactory {
             PersistenceLifecycle lifecycle,
             AtomicReversalStore reversals,
             AtomicRedemptionStore redemptions,
+            AtomicImportStore imports,
             NonceStore nonces) {
 
         public WiringResult {
             if (accounts != transactions || transactions != lifecycle
                     || lifecycle != reversals || reversals != redemptions
-                    || redemptions != nonces) {
+                    || redemptions != imports || imports != nonces) {
                 throw new IllegalArgumentException(
                         "wiring contract requires one shared backend instance for all ports");
             }
@@ -153,7 +155,7 @@ public final class PersistenceBackendFactory {
         JsonPersistenceBackend backend = new JsonPersistenceBackend(json.dataFile());
         backend.initialize();
         resources.register(backend::close);
-        return new WiringResult(backend, backend, backend, backend, backend, backend);
+        return new WiringResult(backend, backend, backend, backend, backend, backend, backend);
     }
 
     private static WiringResult createSqlite(
@@ -172,7 +174,7 @@ public final class PersistenceBackendFactory {
             SqlBackend backend = new SqlBackend(provider, new SqliteDialect());
             backend.initialize();
             resources.register(backend::close);
-            return new WiringResult(backend, backend, backend, backend, backend, backend);
+            return new WiringResult(backend, backend, backend, backend, backend, backend, backend);
         } catch (SQLException | RuntimeException | Error e) {
             SqlConnectionProvider provider = providerRef[0];
             if (provider != null) {
@@ -200,7 +202,7 @@ public final class PersistenceBackendFactory {
             SqlBackend backend = new SqlBackend(provider, new MySqlDialect());
             backend.initialize();
             resources.register(backend::close);
-            return new WiringResult(backend, backend, backend, backend, backend, backend);
+            return new WiringResult(backend, backend, backend, backend, backend, backend, backend);
         } catch (SQLException | RuntimeException | Error e) {
             SqlConnectionProvider provider = providerRef[0];
             if (provider != null) {
@@ -225,7 +227,7 @@ public final class PersistenceBackendFactory {
             SqlBackend backend = new SqlBackend(provider, new MySqlDialect());
             backend.initialize();
             resources.register(backend::close);
-            return new WiringResult(backend, backend, backend, backend, backend, backend);
+            return new WiringResult(backend, backend, backend, backend, backend, backend, backend);
         } catch (RuntimeException | Error e) {
             SqlConnectionProvider provider = providerRef[0];
             if (provider != null) {
