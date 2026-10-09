@@ -18,7 +18,7 @@ Use this checklist to start a server, change configuration safely, confirm stora
 
 ## Start-of-day checks
 
-After a normal start or restart, check the server console for `AceEconomy v2.1.0` and `AceLib v1.2.1`. Confirm that only one AceLib version is loaded. Then use a test account to run `/money balance` and, when appropriate, `/baltop top`.
+After a normal start or restart, check the server console for `AceEconomy v2.2.0` and `AceLib v1.2.1`. Confirm that only one AceLib version is loaded. Then use a test account to run `/money balance` and, when appropriate, `/baltop top`.
 
 If the server is not ready, do not open it to players. Keep the first AceEconomy, AceLib, or storage error and follow [Troubleshooting](troubleshooting.md).
 
@@ -30,11 +30,13 @@ The v2 backend is selected by `storage.type`:
 |---|---|---|
 | `json` | `plugins/AceEconomy/data-v2.json` | One server with a local file |
 | `sqlite` | `storage.sqlite.path` under the plugin data folder | One server with a SQLite database |
-| `mysql` | `storage.mysql.*` | A managed MySQL or MariaDB service |
+| `mysql` | `storage.mysql.*` | A single server using a managed MySQL or MariaDB service |
 
 Keep the SQLite path inside `plugins/AceEconomy/`. For MySQL, keep `pool-size` and `max-lifetime` under `storage.mysql`, and keep the password outside shared documentation.
 
 The same v2 account and transaction model is used for the supported backends.
+
+One store serves one live server. Do not point two servers at the same JSON file, SQLite file, or MySQL database: that layout is not supported and can diverge without an error. See [Persistence, backup, and restore](persistence.md#one-server-per-store).
 
 ## Safe configuration changes
 

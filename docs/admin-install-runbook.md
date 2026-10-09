@@ -17,6 +17,8 @@ Use a Java 25 server running Paper or Folia 26.1.2. AceEconomy requires `AceLib-
 
 Paper/Folia 26.1.2 is the officially supported server line. Folia 26.2 has been validated only on specific builds (VERIFIED-BETA); other 26.2 builds are unverified.
 
+> **Developer note (unreleased source tree):** the current source in this repo — not yet published as a release — builds against AceLib v1.4.0 (SHA-256 `80c5274b1d2ab1ed528f49b7878f58ad8dfb110492da59277b6aacc7b4e3185b`, [AceLib v1.4.0 Release](https://github.com/smile-minecraft/AceLib/releases/tag/v1.4.0)). Do not pair the published `AceEconomy-2.2.0.jar` attachment with AceLib 1.4.0: that published JAR still calls the removed `GuiService#shutdown()` and logs `NoSuchMethodError` on disable. Use AceLib 1.2.1 with the published attachment (above); use AceLib 1.4.0 only when building this source tree.
+
 Prepare these two plugin files:
 
 ```text

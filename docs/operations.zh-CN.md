@@ -18,7 +18,7 @@
 
 ## 每日开服检查
 
-想确认服务器可以接人，先看两件事。正常启动或重启之后，在服务器控制台确认出现了 `AceEconomy v2.1.0` 和 `AceLib v1.2.1`，并且只加载了一个 AceLib 版本。接着用一个测试账号执行 `/money balance`，必要时再执行 `/baltop top`。
+想确认服务器可以接人，先看两件事。正常启动或重启之后，在服务器控制台确认出现了 `AceEconomy v2.2.0` 和 `AceLib v1.2.1`，并且只加载了一个 AceLib 版本。接着用一个测试账号执行 `/money balance`，必要时再执行 `/baltop top`。
 
 如果服务器还没准备好，不要对玩家开放。保留最早出现的那条 AceEconomy、AceLib 或存储错误，然后按照[故障排除](troubleshooting.zh-CN.md)处理。
 
@@ -30,11 +30,13 @@
 | --- | --- | --- |
 | `json` | `plugins/AceEconomy/data-v2.json` | 单台服务器，使用本地文件 |
 | `sqlite` | 插件数据目录下的 `storage.sqlite.path` | 单台服务器，使用 SQLite 数据库 |
-| `mysql` | `storage.mysql.*` | 使用受管理的 MySQL 或 MariaDB 服务 |
+| `mysql` | `storage.mysql.*` | 使用受管理的 MySQL 或 MariaDB 服务的单台服务器 |
 
 SQLite 的路径必须留在 `plugins/AceEconomy/` 之内。MySQL 的 `pool-size` 和 `max-lifetime` 必须放在 `storage.mysql` 之下，密码不要写进共享文档。
 
 所有受支持的后端都使用同一套 v2 账户与交易模型。选错后端多半开机就会报错，做法见[故障排除](troubleshooting.zh-CN.md)。
+
+一份存储只服务一台正在运行的服务器。不要把两台服务器指向同一个 JSON 文件、SQLite 文件或 MySQL 数据库：这种接法不在支持范围内，而且可能在没有报错的情况下分歧。详见[持久化、备份与还原](persistence.zh-CN.md#一份存储只给一台服务器)。
 
 ## 安全地修改配置
 

@@ -17,6 +17,8 @@ Installing it for the first time? Start with the [admin installation runbook](do
 
 Paper/Folia 26.1.2 is the officially supported server line. Folia 26.2 has been validated only on specific builds (VERIFIED-BETA); other 26.2 builds are unverified.
 
+> **Developer note (unreleased source tree):** the current source in this repo — not yet published as a release — builds against AceLib v1.4.0 (SHA-256 `80c5274b1d2ab1ed528f49b7878f58ad8dfb110492da59277b6aacc7b4e3185b`, [AceLib v1.4.0 Release](https://github.com/smile-minecraft/AceLib/releases/tag/v1.4.0)). Do not pair the published `AceEconomy-2.2.0.jar` attachment with AceLib 1.4.0: that published JAR still calls the removed `GuiService#shutdown()` and logs `NoSuchMethodError` on disable. Use AceLib 1.2.1 with the published attachment (above); use AceLib 1.4.0 only when building this source tree.
+
 ## Quick start
 
 1. Stop the server before installing the plugins.
@@ -32,7 +34,7 @@ Paper/Folia 26.1.2 is the officially supported server line. Folia 26.2 has been 
 - **Bank dashboard:** Open a player-facing menu for account and withdrawal actions.
 - **Leaderboards:** Show the richest players for a selected currency.
 - **Multiple currencies:** Use the configured default currency or name another currency in a command.
-- **Flexible storage:** JSON is the default; SQLite and MySQL are also available.
+- **Flexible storage:** JSON is the default; SQLite and MySQL are also available. Each store serves a single server; sharing one store across servers is not supported.
 - **Integrations:** Optional Vault, PlaceholderAPI, and Discord support.
 - **Localization:** Built-in `en_US`, `zh_TW`, and `zh_CN` locales.
 

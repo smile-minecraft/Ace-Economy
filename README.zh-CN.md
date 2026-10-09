@@ -17,6 +17,8 @@ AceEconomy 为 Paper 和 Folia 服务器提供游戏内经济系统。玩家可�
 
 Paper/Folia 26.1.2 是正式支持的服务器线。Folia 26.2 仅在特定 build 上通过验证（VERIFIED-BETA），其余 26.2 build 未验证。
 
+> **开发者说明（尚未发布的源码）：**本仓库当前源码（尚未发布为 Release）需要以 AceLib v1.4.0 构建（SHA-256 `80c5274b1d2ab1ed528f49b7878f58ad8dfb110492da59277b6aacc7b4e3185b`，[AceLib v1.4.0 Release](https://github.com/smile-minecraft/AceLib/releases/tag/v1.4.0)）。请勿将已发布的 `AceEconomy-2.2.0.jar` 附件与 AceLib 1.4.0 搭配使用：该附件仍会调用已被移除的 `GuiService#shutdown()`，停用时会记录 `NoSuchMethodError`。已发布附件请用上文的 AceLib 1.2.1；只有自行构建本仓库源码时才用 AceLib 1.4.0。
+
 ## 快速开始
 
 1. 安装插件前先停止服务器。
@@ -32,7 +34,7 @@ Paper/Folia 26.1.2 是正式支持的服务器线。Folia 26.2 仅在特定 buil
 - **银行面板：** 打开供玩家使用的账户和提取操作菜单。
 - **排行榜：** 查看指定货币的富豪玩家。
 - **多种货币：** 使用配置的默认货币，或在指令中指定其他货币。
-- **灵活存储：** 默认使用 JSON，也支持 SQLite 和 MySQL。
+- **灵活存储：** 默认使用 JSON，也支持 SQLite 和 MySQL。每份存储只服务一台服务器，不支持多台服务器共用同一份存储。
 - **整合功能：** 可选支持 Vault、PlaceholderAPI 和 Discord。
 - **本地化：** 内置 `en_US`、`zh_TW` 和 `zh_CN` 语言。
 

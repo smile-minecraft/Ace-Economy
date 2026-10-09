@@ -25,7 +25,7 @@ Start with the symptom visible in the server console or in-game. Copy the releva
 
 **Check first:**
 
-- Confirm that `plugins/AceLib-1.2.1.jar` and `plugins/AceEconomy-2.1.0.jar` exist.
+- Confirm that `plugins/AceLib-1.2.1.jar` and `plugins/AceEconomy-2.2.0.jar` exist.
 - Remove `AceLib-0.5.0-SNAPSHOT.jar` and any duplicate AceLib JAR from the live plugin folder.
 - Check the first AceLib or Java error in the console, not only the final disable message.
 

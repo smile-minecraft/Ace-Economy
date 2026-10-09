@@ -178,7 +178,7 @@ Example: `/aceeco reload`
 
 ### Roll back a transaction: `/aceeco rollback`
 
-Use `rollback` when an administrator needs to reverse a recorded transaction by its id. This is a destructive administrative action, so it is console-only and requires both `aceeconomy.admin` and `aceeconomy.admin.rollback`. The transaction id is the UUID shown for the transaction; it must be a valid UUID or the command is rejected before anything is touched.
+Use `rollback` when an administrator needs to reverse a recorded transaction by its id. This is a destructive administrative action, so it is console-only and requires both `aceeconomy.admin` and `aceeconomy.admin.rollback`. The transaction id is the UUID shown for the transaction; it must be a valid UUID or the command is rejected before anything is touched. A rollback follows the same debt policy as ordinary transactions: when `economy.allow-negative-balance` is `false`, a reversal that would drive a balance negative is refused and nothing is changed; when `true`, the reversal may go negative within the configured debt limit.
 
 Outcomes are reported explicitly:
 
@@ -189,6 +189,7 @@ Outcomes are reported explicitly:
 | Unknown transaction | Typed error: no transaction with that id exists. |
 | Invalid id | Typed error: the argument is not a valid UUID; nothing is looked up. |
 | Missing transfer counterpart | Typed error: one leg of a transfer could not be located, so a safe reversal is impossible. |
+| Debt refused | Typed error: the reversal would drive a balance negative while `economy.allow-negative-balance` is `false` (or past the debt limit); nothing was changed and the transaction stays retryable. |
 | Execution failed | Typed error: the reversal was not applied and the transaction stays retryable. |
 | Marker persist failed | Typed error stating the reversal may already be applied while the reverted marker is missing; inspect storage and reconcile manually before any retry. |
 

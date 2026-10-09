@@ -7,6 +7,8 @@ Use this guide to choose a storage backend, copy data safely, create a managed s
 ## Contents
 
 - [Choose a backend](#choose-a-backend)
+- [One server per store](#one-server-per-store)
+- [Lock and epoch capacity limits](#lock-and-epoch-capacity-limits)
 - [JSON file](#json-file)
 - [SQLite file](#sqlite-file)
 - [MySQL and MariaDB](#mysql-and-mariadb)
@@ -23,14 +25,42 @@ AceEconomy stores the same logical v2 data through a JSON file or a SQL backend.
 | --- | --- | --- |
 | JSON | `<plugin-data>/data-v2.json` | A single server that wants one portable file. |
 | SQLite | `<plugin-data>/<storage.sqlite.path>` | A single server that wants a local SQL database file. |
-| MySQL | The configured database at `host:port/database`. | An installation that already operates a database service. |
-| MariaDB | Configure it through `storage.type: mysql`; there is no `mariadb` value. | A MariaDB service exposed through the MySQL-compatible connection settings. |
+| MySQL | The configured database at `host:port/database`. | A single server whose operator already runs a database service. |
+| MariaDB | Configure it through `storage.type: mysql`; there is no `mariadb` value. | A single server using a MariaDB service exposed through the MySQL-compatible connection settings. |
 
 The backend is selected at startup. Changing `storage.type` points the plugin at another store; it does not copy old rows or merge two stores.
 
+## One server per store
+
+One store serves one live server. Pointing two servers — or two plugin instances — at the same JSON file, the same SQLite file, or the same MySQL database is not supported.
+
+The backends only coordinate writes inside a single running instance. The JSON backend serializes writes with an instance-local lock and publishes through an atomic file replacement; two writers on the same file silently overwrite each other, and each instance keeps serving its own in-memory view, so balances and transaction history can diverge without an error. The SQL backend has no cross-instance fencing either: concurrent writers can interleave in ways neither instance detects. A SQLite file shared over a network mount adds the mount's own locking behaviour on top, which this plugin does not validate.
+
+> **Warning:** The plugin does not diagnose this misconfiguration at startup. Two servers pointed at one store both start normally; the damage shows up later as missing or contradictory records. Prevent it operationally: one server, one store.
+
+If you run more than one server, give each server its own store (its own file, or its own MySQL database), and move data between servers only through the managed `/aceeco backup` and `/aceeco restore` snapshot flow. Sharing one live store across servers needs its own lock and epoch or fencing design, which is not part of the current storage backends.
+
+## Lock and epoch capacity limits
+
+The instance-local locks hold no entries: they only serialize work inside one running server. What grows over time are the tracking maps next to those locks, plus the durable history. Every bounded map below shares one measured cap, `LockEpochCapacity.MAX_TRACKED_IDS` (100,000 distinct IDs).
+
+| What grows | Grows with | Bound | Past the bound |
+| --- | --- | --- | --- |
+| Session invalidation generations | Distinct UUIDs ever loaded | 100,000 | A new UUID's load fails fast with `SessionError.CAPACITY_EXCEEDED`; existing sessions keep working. Restart the server to reset tracking. |
+| Balance-cache epochs | Distinct owners ever cached | 100,000 | A new owner is served uncached (reads fall through to storage); publishes report `false`. Existing owners keep working. |
+| Flush-failure diagnostics | Distinct UUIDs with an unacknowledged flush failure | 100,000 | Recording a further failure throws `SessionError.CAPACITY_EXCEEDED` after the session is already cleaned up. Stale entries are dropped on the next login or a clean quit. |
+| SQL connection pool | Concurrent SQL users | `pool-size` (default 10) | Borrowers wait, then fail with an explicit timeout — never silently. |
+| 64-bit epoch counters | Invalidations | No cap, by design | No overflow in practice: even one million invalidations per second leaves about 292,000 years of headroom. |
+
+How the cap was set: one `UUID -> counter` holder measures about 75 bytes of heap, so 100,000 tracked IDs cost about 7.5 MB worst case — a small fraction of a server heap. 10,000 tracked session loads (accounts, snapshots, and holders together) fit in 64 MB. One consumed nonce costs about 61 JSON characters. These figures come from the automated capacity tests; rerun them before changing the cap. A restart resets all three tracking maps, which is safe because no in-flight load or stale write survives a restart.
+
+Durable growth is capped by nothing, deliberately: consumed nonces and transaction history are never deleted, because deleting a consumed key would break first-writer-wins and deleting history would destroy audit evidence. Watch the file and table sizes as part of server maintenance, and move data between servers only through the managed backup and restore flow.
+
+Not measured, not claimed: per-row storage cost inside SQLite/MySQL, behaviour of a SQLite file on a network mount, survival of a hardware power cut, and heap behaviour under live player threading. Those remain operational validation items, not guarantees in this guide.
+
 ## JSON file
 
-With `storage.type: json`, the plugin creates `data-v2.json` in its data folder when the file does not exist. Each mutation rewrites the model through a temporary file and a rename, so a write is committed as a complete file rather than as a partially written document.
+With `storage.type: json`, the plugin creates `data-v2.json` in its data folder when the file does not exist. Each mutation writes a temporary file next to the live file, forces it to storage, then replaces the live file with an atomic rename and syncs the file and its directory, so the live file is always either the previous or the new complete file, never a partially written document. A failed write attempts to clean up its temp file on a best-effort basis; if cleanup fails, or if the process is killed, one may be left behind (temp names never collide with the live file, and leftovers are ignored). The filesystem must support atomic file replacement; otherwise the write fails with an explicit error instead of a silent non-atomic fallback. If the replacement succeeded but the final durability sync could not be confirmed, the failure is reported as already committed (never as a safe retry) and the backend stops accepting writes until the server restarts and the file is verified. These automated tests simulate I/O failures only; they do not cut power and do not prove safety against arbitrary hardware power loss.
 
 The JSON model contains a schema version, accounts with their balances, and transactions. Amounts are represented as decimal strings so their stored value is not changed by floating-point formatting.
 
