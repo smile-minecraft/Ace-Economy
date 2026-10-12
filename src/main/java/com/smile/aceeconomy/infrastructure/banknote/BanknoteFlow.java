@@ -473,6 +473,82 @@ public final class BanknoteFlow {
         return refundLedger;
     }
 
+    /**
+     * Phase-1 seam for durable issuance progress. Null means the flow runs the
+     * legacy memory-only path (existing tests); production Bootstrap must bind
+     * the real backend-backed store in phase 2 so every withdraw route shares
+     * one durable issuance core instead of bypassing it. Binding alone changes
+     * no behaviour yet.
+     */
+    private volatile com.smile.aceeconomy.ports.persistence.BanknoteIssuanceStore issuanceStore;
+
+    public void bindIssuanceStore(
+            com.smile.aceeconomy.ports.persistence.BanknoteIssuanceStore store) {
+        this.issuanceStore = store;
+    }
+
+    /** Skeleton accessor for the wired issuance store; null when unconnected. */
+    public com.smile.aceeconomy.ports.persistence.BanknoteIssuanceStore issuanceStore() {
+        return issuanceStore;
+    }
+
+    /**
+     * Phase-1 seam for the atomic issuance core. Null means the flow runs the
+     * legacy {@code api.withdraw} path (existing tests); production Bootstrap
+     * must bind the SAME backend-backed instance as the core service in phase
+     * 2, so the command entry ({@link #withdraw}) and the GUI sync entry
+     * ({@link #withdrawCommit}) both deduct through
+     * {@link com.smile.aceeconomy.application.EconomyService#issueBanknote}
+     * plus {@code PREPARED} before the deduction and the delivery markers
+     * around the handover — never {@code api.withdraw} followed by a
+     * standalone mark. Binding alone changes no behaviour yet; phase 2 threads
+     * this store through the shared deduct-and-mint core.
+     */
+    private volatile com.smile.aceeconomy.ports.persistence.AtomicBanknoteIssuanceStore atomicIssuanceStore;
+
+    public void bindAtomicIssuanceStore(
+            com.smile.aceeconomy.ports.persistence.AtomicBanknoteIssuanceStore store) {
+        this.atomicIssuanceStore = store;
+    }
+
+    /** Skeleton accessor for the wired atomic issuance store; null when unconnected. */
+    public com.smile.aceeconomy.ports.persistence.AtomicBanknoteIssuanceStore atomicIssuanceStore() {
+        return atomicIssuanceStore;
+    }
+
+    /**
+     * Recovery barrier for new managed issuance. Null means the gate stays
+     * open (existing tests and unconnected flows); production Bootstrap binds
+     * the startup runner closed and it opens only when the startup recovery
+     * run finishes. Queries never consult it.
+     */
+    private volatile com.smile.aceeconomy.application.BanknoteIssuanceStartupRunner startupRecovery;
+
+    public void bindStartupRecovery(
+            com.smile.aceeconomy.application.BanknoteIssuanceStartupRunner runner) {
+        this.startupRecovery = runner;
+    }
+
+    /** Skeleton accessor for the wired recovery barrier; null when unconnected. */
+    public com.smile.aceeconomy.application.BanknoteIssuanceStartupRunner startupRecovery() {
+        return startupRecovery;
+    }
+
+    /**
+     * Refusal for new managed issuance while the startup recovery barrier is
+     * still closed. Nothing was deducted; a later retry after recovery is safe.
+     */
+    private static WithdrawOutcome recoveryBlocked() {
+        return WithdrawOutcome.refused(EconomyError.TRANSACTION_CANCELLED,
+                "banknote issuance is paused while startup recovery is incomplete;"
+                        + " please try again later");
+    }
+
+    private boolean isRecoveryBlocked() {
+        com.smile.aceeconomy.application.BanknoteIssuanceStartupRunner barrier = startupRecovery;
+        return barrier != null && !barrier.isRecoveryComplete();
+    }
+
     public boolean isAccepting() {
         return accepting.get();
     }
@@ -698,6 +774,12 @@ public final class BanknoteFlow {
                     PENDING_SHUTDOWN, "shutting down; nothing was deducted", null));
         }
         WithdrawOp op = new WithdrawOp(playerId, resolved, amount);
+        if (isRecoveryBlocked()) {
+            // New managed issuance waits on startup recovery instead of
+            // silently passing while proven deductions may still need refunds.
+            // Nothing was deducted; queries are unaffected.
+            return completeOp(op, recoveryBlocked());
+        }
         withdrawOps.add(op);
         // Three-state probe outcome: present=true has space, present=false full,
         // empty = the accepted region callback never ran (bounded wait fired).
@@ -897,7 +979,21 @@ public final class BanknoteFlow {
     /** Internal carrier for a minted note plus everything compensation needs. */
     private record MintedNote(BanknoteClaim claim, ItemStack note,
                               UUID playerId, String currencyId, Amount amount,
-                              Throwable auditError) {
+                              Throwable auditError,
+                              /**
+                               * The durable issuance nonce when the deduction
+                               * went through the atomic issuance core; null on
+                               * the legacy path. A non-null nonce means every
+                               * compensation must void+refund atomically — a
+                               * plain refund would leave the nonce redeemable
+                               * for a second payout.
+                               */
+                              UUID issuanceNonce) {
+        MintedNote(BanknoteClaim claim, ItemStack note,
+                   UUID playerId, String currencyId, Amount amount,
+                   Throwable auditError) {
+            this(claim, note, playerId, currencyId, amount, auditError, null);
+        }
     }
 
     /**
@@ -956,6 +1052,11 @@ public final class BanknoteFlow {
             @NotNull UUID playerId, @NotNull Currency currency, long value) {
         Objects.requireNonNull(playerId, "playerId");
         Objects.requireNonNull(currency, "currency");
+        if (isRecoveryBlocked()) {
+            return com.smile.aceeconomy.ports.WithdrawResult.rejected(
+                    "banknote issuance is paused while startup recovery is incomplete;"
+                            + " please try again later");
+        }
         Amount amount = Amount.of(value, currency.scale());
         MintDecision decision = deductAndMintResolved(playerId, currency, amount);
         if (decision instanceof MintDecision.Minted ok) {
@@ -990,6 +1091,11 @@ public final class BanknoteFlow {
             return new MintDecision.NoCharge(EconomyError.INVALID_AMOUNT,
                     "amount cannot be issued as a banknote");
         }
+        com.smile.aceeconomy.ports.persistence.AtomicBanknoteIssuanceStore atomic =
+                atomicIssuanceStore;
+        if (atomic != null && economy != null) {
+            return deductAndMintAtomic(playerId, currency, amount, claim, atomic);
+        }
         EconomyResult<Amount> result = api.withdraw(playerId, currency.id(), amount);
         if (result.isFailure()) {
             return new MintDecision.NoCharge(result.error(), result.message());
@@ -1016,6 +1122,92 @@ public final class BanknoteFlow {
         }
         return new MintDecision.Minted(new MintedNote(claim, note, playerId, currency.id(), amount,
                 result.auditFailure().orElse(null)));
+    }
+
+    /**
+     * Deduct and mint through the durable atomic issuance core shared with the
+     * core service: the {@code PREPARED} record plus the deduction commit in
+     * ONE storage transaction via
+     * {@link EconomyService#issueBanknote}, then minting. Runs on the calling
+     * (IO) thread, never a region thread. A mint failure voids+refunds through
+     * the same durable core; the note never existed, but its issuance record
+     * does, so a plain refund would leave the nonce redeemable.
+     *
+     * <p>Persistence failures propagate: the async pipeline maps an
+     * undecided failure to refused and an indeterminate or committed-unknown
+     * failure to pending, never a blind retry.</p>
+     */
+    private MintDecision deductAndMintAtomic(UUID playerId, Currency currency,
+                                             Amount amount, BanknoteClaim claim,
+                                             com.smile.aceeconomy.ports.persistence
+                                                     .AtomicBanknoteIssuanceStore atomic) {
+        EconomyResult<Amount> result =
+                economy.issueBanknote(playerId, currency.id(), amount, claim.nonce(), atomic);
+        if (result.isFailure()) {
+            return new MintDecision.NoCharge(result.error(), result.message());
+        }
+        ItemStack note;
+        try {
+            note = banknotes.mint(claim).orElse(null);
+        } catch (RuntimeException mintThrew) {
+            LOG.log(System.Logger.Level.WARNING,
+                    "banknote mint threw: player={0}, currency={1}, amount={2}, type={3}",
+                    new Object[]{playerId, currency.id(), amount,
+                            mintThrew.getClass().getName()});
+            return compensateAtomicMintFailure(playerId, currency.id(), amount,
+                    claim, atomic,
+                    "banknote mint failed: " + mintThrew.getClass().getSimpleName());
+        }
+        if (note == null) {
+            return compensateAtomicMintFailure(playerId, currency.id(), amount,
+                    claim, atomic, "banknote could not be created");
+        }
+        return new MintDecision.Minted(new MintedNote(claim, note, playerId, currency.id(), amount,
+                result.auditFailure().orElse(null), claim.nonce()));
+    }
+
+    /**
+     * Compensate an atomically committed deduction whose note never
+     * materialised: void the issuance nonce and refund in the SAME storage
+     * transaction through the durable core. A decided void+refund closes as
+     * compensated; anything else stays undecided with the claim for diagnosis
+     * and startup recovery — never a blind retry and never a plain refund
+     * that would leave the nonce redeemable next to the refund.
+     */
+    private MintDecision compensateAtomicMintFailure(UUID playerId, String currencyId,
+                                                     Amount amount, BanknoteClaim claim,
+                                                     com.smile.aceeconomy.ports.persistence
+                                                             .AtomicBanknoteIssuanceStore atomic,
+                                                     String failureDetail) {
+        EconomyResult<Amount> refund;
+        try {
+            refund = economy.refundIssuanceForRecovery(claim.nonce(), atomic);
+        } catch (Error error) {
+            throw error;
+        } catch (IndeterminatePersistenceException indeterminate) {
+            LOG.log(System.Logger.Level.ERROR,
+                    "withdraw compensation uncertain: player={0}, currency={1}, amount={2},"
+                            + " nonce={3}, reason={4}",
+                    new Object[]{playerId, currencyId, amount, claim.nonce(),
+                            indeterminate.getClass().getSimpleName()});
+            return new MintDecision.Undecided(claim, failureDetail, indeterminate);
+        } catch (RuntimeException refundFailure) {
+            LOG.log(System.Logger.Level.ERROR,
+                    "withdraw compensation threw: player={0}, currency={1}, amount={2},"
+                            + " nonce={3}, reason={4}",
+                    new Object[]{playerId, currencyId, amount, claim.nonce(),
+                            refundFailure.getClass().getSimpleName()});
+            return new MintDecision.Undecided(claim, failureDetail, refundFailure);
+        }
+        if (refund.isSuccess()) {
+            return new MintDecision.Compensated(failureDetail);
+        }
+        LOG.log(System.Logger.Level.ERROR,
+                "withdraw compensation failed: player={0}, currency={1}, amount={2},"
+                        + " nonce={3}, reason={4}",
+                new Object[]{playerId, currencyId, amount, claim.nonce(),
+                        refund == null ? "no result" : refund.message()});
+        return new MintDecision.Undecided(claim, failureDetail, null);
     }
 
     /**
@@ -1140,6 +1332,62 @@ public final class BanknoteFlow {
                                                        GenerationCheck stillValid, WithdrawOp op) {
         CompletableFuture<WithdrawOutcome> done = new CompletableFuture<>();
         AtomicBoolean settled = new AtomicBoolean(false);
+        if (minted.issuanceNonce() != null) {
+            // Durable handover mark before the region dispatch runs, on this
+            // IO thread (never a region thread). A crash after this mark
+            // refunds+voids atomically, so the player is never left charged
+            // without recourse.
+            com.smile.aceeconomy.ports.persistence.AtomicBanknoteIssuanceStore atomic =
+                    atomicIssuanceStore;
+            if (atomic == null) {
+                String diagnosis = "banknote delivery store unbound after an atomic"
+                        + " deduction; keeping the outcome pending for recovery";
+                LOG.log(System.Logger.Level.ERROR, diagnosis + ": player=" + playerId
+                        + ", nonce=" + minted.issuanceNonce());
+                done.complete(WithdrawOutcome.pending(minted.claim(), PENDING_DELIVERY_UNCERTAIN,
+                        diagnosis, null));
+                return done;
+            }
+            try {
+                atomic.markDeliveryStarted(minted.issuanceNonce());
+            } catch (Throwable markFailure) {
+                // The deduction stands with the note still in memory: void+refund
+                // now instead of delivering a note the recovery would kill.
+                LOG.log(System.Logger.Level.ERROR,
+                        "banknote delivery mark failed before handover: player=" + playerId
+                                + ", nonce=" + minted.issuanceNonce(),
+                        markFailure);
+                EconomyResult<Amount> refund;
+                try {
+                    refund = economy.refundIssuanceForRecovery(
+                            minted.issuanceNonce(), atomic);
+                } catch (Throwable refundFailure) {
+                    LOG.log(System.Logger.Level.ERROR,
+                            "banknote delivery compensation threw: player=" + playerId
+                                    + ", nonce=" + minted.issuanceNonce(),
+                            refundFailure);
+                    done.complete(WithdrawOutcome.pending(minted.claim(),
+                            PENDING_DELIVERY_UNCERTAIN,
+                            "the delivery mark failed and the atomic void+refund threw;"
+                                    + " nothing was refunded blindly",
+                            refundFailure instanceof Error error ? error : null));
+                    return done;
+                }
+                if (refund != null && refund.isSuccess()) {
+                    done.complete(WithdrawOutcome.refunded(EconomyError.TRANSACTION_CANCELLED,
+                            "banknote.mark-failed",
+                            "the delivery mark failed; the amount was refunded", true));
+                } else {
+                    done.complete(WithdrawOutcome.pending(minted.claim(),
+                            PENDING_DELIVERY_UNCERTAIN,
+                            "the delivery mark failed and the atomic void+refund was refused"
+                                    + " (" + (refund == null ? "no result" : refund.message()) + ");"
+                                    + " nothing was refunded blindly",
+                            null));
+                }
+                return done;
+            }
+        }
         boolean dispatched;
         try {
             dispatched = folia.runForPlayer(playerId, player -> {
@@ -1182,6 +1430,53 @@ public final class BanknoteFlow {
                         // nonce was never exposed, so a plain refund is safe.
                         plainRefundOnIo(minted, EconomyError.INVENTORY_FULL,
                                 REASON_INVENTORY_FULL, "inventory full", done);
+                        return;
+                    }
+                    if (minted.issuanceNonce() != null && atomicIssuanceStore != null) {
+                        // The note landed: mark it durable on the IO executor
+                        // (storage never runs on this region thread), then
+                        // complete. A crash before the mark refunds+voids
+                        // atomically; a mark failure is logged loud and the
+                        // delivered outcome still stands while recovery
+                        // converges it safely.
+                        UUID deliveredNonce = minted.issuanceNonce();
+                        com.smile.aceeconomy.ports.persistence.AtomicBanknoteIssuanceStore
+                                deliveredStore = atomicIssuanceStore;
+                        Runnable markDelivered = () -> {
+                            try {
+                                deliveredStore.markDelivered(deliveredNonce);
+                            } catch (Throwable markFailure) {
+                                LOG.log(System.Logger.Level.ERROR,
+                                        "banknote delivery mark failed after the note landed:"
+                                                + " player=" + playerId + ", nonce=" + deliveredNonce
+                                                + "; startup recovery converges it safely",
+                                        markFailure);
+                            }
+                        };
+                        try {
+                            CompletableFuture.runAsync(markDelivered, io).whenComplete(
+                                    (ignored, markFailure) -> {
+                                        if (markFailure != null) {
+                                            LOG.log(System.Logger.Level.ERROR,
+                                                    "banknote delivery mark failed after the note"
+                                                            + " landed: player=" + playerId
+                                                            + ", nonce=" + deliveredNonce,
+                                                    markFailure);
+                                        }
+                                        done.complete(WithdrawOutcome.delivered(minted.claim(),
+                                                minted.note(), minted.amount(),
+                                                minted.auditError()));
+                                    });
+                        } catch (Throwable submitFailure) {
+                            LOG.log(System.Logger.Level.ERROR,
+                                    "banknote delivery mark could not be scheduled after the note"
+                                            + " landed: player=" + playerId
+                                            + ", nonce=" + deliveredNonce
+                                            + "; startup recovery converges it safely",
+                                    submitFailure);
+                            done.complete(WithdrawOutcome.delivered(minted.claim(), minted.note(),
+                                    minted.amount(), minted.auditError()));
+                        }
                         return;
                     }
                     done.complete(WithdrawOutcome.delivered(minted.claim(), minted.note(),

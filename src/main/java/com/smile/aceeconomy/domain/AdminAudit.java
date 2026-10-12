@@ -23,6 +23,15 @@ public final class AdminAudit {
     /** Fixed operator name stored for console senders. */
     public static final String CONSOLE_OPERATOR_NAME = "CONSOLE";
 
+    /**
+     * Fixed operator name stored for system recovery refunds. A null id with
+     * this name means the record was written by startup recovery, never by a
+     * player or the console. It is informational only and is never derived
+     * from a command sender, so one operator cannot file a record under the
+     * system name.
+     */
+    public static final String SYSTEM_OPERATOR_NAME = "SYSTEM_RECOVERY";
+
     /** Reason stored when the operator gives none. Never null on new records. */
     public static final String DEFAULT_REASON = "unspecified";
 
@@ -80,6 +89,14 @@ public final class AdminAudit {
     /** Audit for a console sender. */
     public static AdminAudit console(String reason) {
         return new AdminAudit(null, CONSOLE_OPERATOR_NAME, validateReason(reason), true);
+    }
+
+    /**
+     * Audit for system recovery (startup void+refund). Carries a null id with
+     * the fixed system name; never built from a player or console sender.
+     */
+    public static AdminAudit system(String reason) {
+        return new AdminAudit(null, SYSTEM_OPERATOR_NAME, validateReason(reason), true);
     }
 
     /** Audit for a player sender, using the identity seen at command time. */

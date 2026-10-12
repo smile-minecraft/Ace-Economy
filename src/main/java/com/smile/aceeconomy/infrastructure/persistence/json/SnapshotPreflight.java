@@ -144,7 +144,72 @@ public final class SnapshotPreflight {
                         "Duplicate transaction id in snapshot: " + domain.id());
             }
         }
+        validateIssuances(model, seenTransactionIds);
         validateOperationAudits(model);
+    }
+
+    /**
+     * Joint preflight over the durable issuance collection. Every record is
+     * materialized through the same strict conversion the backends use at load
+     * time, so a snapshot carrying a corrupt issuance is refused before any
+     * live row moves. An absent collection (files written before issuance
+     * tracking) reads as empty and passes. Presence rules beyond the field
+     * shapes: the map key must be the record's canonical nonce, an
+     * evidence-carrying record must reference a transaction id present in the
+     * same snapshot (a committed deduction without its durable debit row is
+     * corruption, never resolved by inventing a receipt), and one debit
+     * transaction id must back at most one nonce.
+     */
+    private static void validateIssuances(JsonModel model, Set<String> seenTransactionIds)
+            throws PersistenceException {
+        Set<String> seenDebitIds = new HashSet<>();
+        for (Map.Entry<String, JsonModel.JsonIssuance> entry : model.issuances.entrySet()) {
+            String rawKey = entry.getKey();
+            UUID keyUuid = requireCanonicalUUID(rawKey, "issuance map key");
+            com.smile.aceeconomy.domain.BanknoteIssuance issuance;
+            try {
+                issuance = entry.getValue().toDomain();
+            } catch (PersistenceException e) {
+                throw e;
+            } catch (RuntimeException e) {
+                throw new PersistenceException(
+                        "Invalid issuance record in snapshot: " + rawKey
+                                + " (" + e.getMessage() + ")", e);
+            }
+            if (!keyUuid.equals(issuance.nonce())) {
+                throw new PersistenceException(
+                        "Issuance map key " + rawKey + " does not match nonce field "
+                                + issuance.nonce());
+            }
+            String debitId = issuance.debitTransactionId();
+            if (debitId != null) {
+                UUID parsedDebit;
+                try {
+                    parsedDebit = UUID.fromString(debitId);
+                } catch (IllegalArgumentException e) {
+                    throw new PersistenceException(
+                            "Invalid issuance debit reference in snapshot for nonce "
+                                    + rawKey, e);
+                }
+                if (!parsedDebit.toString().equals(debitId)) {
+                    throw new PersistenceException(
+                            "Invalid issuance debit reference in snapshot for nonce "
+                                    + rawKey + ": non-canonical UUID");
+                }
+                if (!seenTransactionIds.contains(debitId)) {
+                    throw new PersistenceException(
+                            "Issuance record in snapshot references a missing debit transaction"
+                                    + " for nonce " + rawKey
+                                    + "; a committed deduction without its durable debit row"
+                                    + " is corruption and is never resolved by inventing a receipt");
+                }
+                if (!seenDebitIds.add(debitId)) {
+                    throw new PersistenceException(
+                            "One debit transaction backs two issuance nonces in snapshot;"
+                                    + " the second binding is corruption");
+                }
+            }
+        }
     }
 
     /**
@@ -273,6 +338,177 @@ public final class SnapshotPreflight {
         }
         if (".".equals(raw) || "..".equals(raw) || !SAFE_BACKUP_ID.matcher(raw).matches()) {
             throw operationAuditError(index, "illegal " + field);
+        }
+    }
+
+    /**
+     * Restore guard over durable managed issuance progress: a restore must never
+     * leave an already-delivered or possibly-delivered managed note redeemable
+     * after the balance is rolled back, and must never invent a refund.
+     *
+     * <p>Scope is managed issuance records only. Plain consumed nonces are
+     * deliberately not covered: a restore rolls balances and plain nonces back
+     * together, so the two stay consistent. Physical notes live in player
+     * inventories outside the economy snapshot, so restoring an older snapshot
+     * can re-expose a nonce for presentation again; this guard never promises
+     * that a nonce cannot be presented twice. What it promises instead: a
+     * restore never leaves an already-delivered, possibly-delivered or
+     * refunded-voided managed note redeemable after the balance is rolled
+     * back, and no refund is ever invented by a restore. A refunded or voided
+     * note is disabled in the live state because its nonce is consumed, but
+     * the physical note may still be kept in a player inventory; restoring a
+     * snapshot without that consumption would make the kept note redeemable
+     * again next to the already-credited refund, so such records refuse the
+     * empty candidate just like delivered ones.</p>
+     *
+     * <p>Rules, checked before any live row moves (both backends call this
+     * inside their exclusive window after the safety backup):</p>
+     * <ul>
+     *   <li>A candidate without issuance progress (a snapshot written before
+     *       issuance tracking, or an explicitly empty section) may only replace
+     *       live progress when no live record could leave a redeemable note
+     *       behind. Records in {@code PREPARED}, {@code DEBIT_COMMITTED},
+     *       {@code ABORTED} or {@code REDEEMED} pass: the first never deducted,
+     *       the second never reached the handover (the delivery mark is stored
+     *       before the inventory handover runs, so a pre-handover record never
+     *       exposed a note), and the last two are terminal with no redeemable
+     *       note left. Records in {@code DELIVERY_STARTED}, {@code DELIVERED},
+     *       {@code FINAL_VOID_REFUNDED} or {@code QUARANTINED} refuse: the first
+     *       two may already have handed the note over (the delivery mark is
+     *       stored before the handover runs), the refunded-voided record was
+     *       already refunded on the ledger but its physical note may still be
+     *       kept (restoring a snapshot without the nonce consumption would make
+     *       the kept note redeemable again next to the refund), and the last
+     *       cannot be judged safe. This keeps the supported migration rollback
+     *       path for deduction-free or settled progress while refusing the
+     *       balance-revert-plus-redeem double value.</li>
+     *   <li>Otherwise every live issuance record must exist <em>identically</em> in the
+     *       candidate (domain equality: nonce, account, currency, amount,
+     *       status and debit evidence). A missing or differing record means
+     *       the candidate would drop or rewind live progress.</li>
+     *   <li>A candidate record unknown to the live state that carries debit
+     *       evidence must reference an authoritative durable debit inside the
+     *       same candidate (type, account, currency, amount, reason binding
+     *       and before/after proof). Evidence-free newcomers (bare
+     *       {@code PREPARED}) are harmless and pass.</li>
+     *   <li>Empty against empty passes, so ordinary restores without issuance
+     *       progress are unaffected.</li>
+     * </ul>
+     *
+     * <p>Diagnostics name only the rule; no amount, reason or
+     * balance text is echoed.</p>
+     *
+     * @throws PersistenceException when the candidate must not replace the live state
+     */
+    public static void checkIssuanceRestoreGuard(JsonModel live, JsonModel candidate)
+            throws PersistenceException {
+        Objects.requireNonNull(live, "live");
+        Objects.requireNonNull(candidate, "candidate");
+        // Empty candidate: only live states that cannot leave a redeemable
+        // note behind may roll back wholesale. Delivered, possibly-delivered,
+        // refunded-voided and undecidable live records refuse, so the balance
+        // cannot revert while a physical note stays or becomes redeemable
+        // again. A candidate that carries any issuance record takes the strict
+        // path below.
+        if (candidate.issuances.isEmpty()) {
+            for (Map.Entry<String, JsonModel.JsonIssuance> entry : live.issuances.entrySet()) {
+                com.smile.aceeconomy.domain.BanknoteIssuance liveIssuance;
+                try {
+                    liveIssuance = entry.getValue().toDomain();
+                } catch (PersistenceException e) {
+                    throw e;
+                } catch (RuntimeException e) {
+                    throw new PersistenceException(
+                            "Restore refused: a live issuance record cannot be compared"
+                                    + " (" + e.getMessage() + ")", e);
+                }
+                switch (liveIssuance.status()) {
+                    case PREPARED, DEBIT_COMMITTED, ABORTED, REDEEMED -> {
+                        // No redeemable note can be left behind.
+                    }
+                    case DELIVERY_STARTED, DELIVERED, FINAL_VOID_REFUNDED, QUARANTINED -> {
+                        throw new PersistenceException(
+                                "Restore refused: live managed issuance includes a delivered,"
+                                        + " possibly-delivered, refunded-voided or undecidable note;"
+                                        + " restoring a snapshot without issuance progress would return"
+                                        + " the balance while the physical note in a player inventory"
+                                        + " stays or becomes redeemable again (a refunded-voided note"
+                                        + " may still be kept by a player). Ask players to redeem or"
+                                        + " otherwise settle their managed notes before rolling back"
+                                        + " to a pre-upgrade backup.");
+                    }
+                }
+            }
+            return;
+        }
+        for (Map.Entry<String, JsonModel.JsonIssuance> entry : live.issuances.entrySet()) {
+            String key = entry.getKey();
+            JsonModel.JsonIssuance candRaw = candidate.issuances.get(key);
+            if (candRaw == null) {
+                throw new PersistenceException(
+                        "Restore refused: live issuance progress for a nonce is missing"
+                                + " from the candidate snapshot; restoring it would drop"
+                                + " durable progress");
+            }
+            com.smile.aceeconomy.domain.BanknoteIssuance liveIssuance;
+            com.smile.aceeconomy.domain.BanknoteIssuance candidateIssuance;
+            try {
+                liveIssuance = entry.getValue().toDomain();
+                candidateIssuance = candRaw.toDomain();
+            } catch (PersistenceException e) {
+                throw e;
+            } catch (RuntimeException e) {
+                throw new PersistenceException(
+                        "Restore refused: an issuance record cannot be compared"
+                                + " (" + e.getMessage() + ")", e);
+            }
+            if (!liveIssuance.equals(candidateIssuance)) {
+                throw new PersistenceException(
+                        "Restore refused: the candidate snapshot rewinds live issuance"
+                                + " progress; a settled or consumed nonce must never go back"
+                                + " to an unfinished state");
+            }
+        }
+        Map<String, Transaction> candidateTransactions = new LinkedHashMap<>();
+        for (JsonModel.JsonTransaction t : candidate.transactions) {
+            try {
+                Transaction domain = t.toDomain();
+                candidateTransactions.putIfAbsent(domain.id().toString(), domain);
+            } catch (RuntimeException e) {
+                throw new PersistenceException(
+                        "Restore refused: a candidate transaction cannot be read"
+                                + " (" + e.getMessage() + ")", e);
+            }
+        }
+        for (Map.Entry<String, JsonModel.JsonIssuance> entry : candidate.issuances.entrySet()) {
+            String key = entry.getKey();
+            if (live.issuances.containsKey(key)) {
+                continue;
+            }
+            JsonModel.JsonIssuance raw = entry.getValue();
+            if (raw.debitTransactionId == null) {
+                continue;
+            }
+            com.smile.aceeconomy.domain.BanknoteIssuance newcomer;
+            try {
+                newcomer = raw.toDomain();
+            } catch (PersistenceException e) {
+                throw e;
+            } catch (RuntimeException e) {
+                throw new PersistenceException(
+                        "Restore refused: a new candidate issuance record cannot be read"
+                                + " (" + e.getMessage() + ")", e);
+            }
+            Transaction debit = candidateTransactions.get(newcomer.debitTransactionId());
+            String authority =
+                    com.smile.aceeconomy.infrastructure.persistence.IssuanceProofChecks
+                            .checkDebitAuthority(newcomer, debit, newcomer.nonce());
+            if (authority != null) {
+                throw new PersistenceException(
+                        "Restore refused: a new candidate issuance record carries debit"
+                                + " evidence without its authoritative durable debit in the"
+                                + " same snapshot; deductions are never invented by restore");
+            }
         }
     }
 

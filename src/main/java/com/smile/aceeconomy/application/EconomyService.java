@@ -5,6 +5,8 @@ import com.smile.aceeconomy.domain.AccountSnapshot;
 import com.smile.aceeconomy.domain.AdminAudit;
 import com.smile.aceeconomy.domain.Amount;
 import com.smile.aceeconomy.domain.AmountCap;
+import com.smile.aceeconomy.domain.BanknoteIssuance;
+import com.smile.aceeconomy.domain.BanknoteIssuanceReasons;
 import com.smile.aceeconomy.domain.Currency;
 import com.smile.aceeconomy.domain.CurrencyRegistry;
 import com.smile.aceeconomy.domain.CurrencyScaleCheck;
@@ -19,12 +21,17 @@ import com.smile.aceeconomy.ports.AuditSink;
 import com.smile.aceeconomy.ports.Clock;
 import com.smile.aceeconomy.ports.TransactionEventPublisher;
 import com.smile.aceeconomy.ports.persistence.AdminMutationResult;
+import com.smile.aceeconomy.ports.persistence.AtomicBanknoteIssuanceStore;
 import com.smile.aceeconomy.ports.persistence.AtomicRedemptionStore;
 import com.smile.aceeconomy.ports.persistence.AtomicAdminMutationStore;
 import com.smile.aceeconomy.ports.persistence.AtomicTransferStore;
 import com.smile.aceeconomy.ports.persistence.CommittedAdminMutationException;
+import com.smile.aceeconomy.ports.persistence.CommittedIssuanceDebitException;
+import com.smile.aceeconomy.ports.persistence.CommittedIssuanceRefundException;
 import com.smile.aceeconomy.ports.persistence.CommittedTransferException;
 import com.smile.aceeconomy.ports.persistence.IndeterminatePersistenceException;
+import com.smile.aceeconomy.ports.persistence.IssuanceDebitResult;
+import com.smile.aceeconomy.ports.persistence.IssuanceRefundResult;
 import com.smile.aceeconomy.ports.persistence.NonceStore;
 import com.smile.aceeconomy.ports.persistence.PersistenceException;
 import com.smile.aceeconomy.ports.persistence.RedemptionResult;
@@ -1924,6 +1931,458 @@ public final class EconomyService {
         return new Transaction(prepared.id(), prepared.accountId(), prepared.counterparty(),
                 prepared.currencyId(), prepared.amount(), prepared.type(),
                 result.balanceBefore(), result.balanceAfter(), prepared.timestamp(), prepared.reason());
+    }
+
+    // ---------- durable banknote issuance (phase-1 skeleton) ----------
+
+    /**
+     * Issue one banknote deduction atomically through the durable issuance
+     * store: the {@code PREPARED} record is published before any deduction,
+     * then the deduction commits together with the
+     * {@code PREPARED -> DEBIT_COMMITTED} flip in ONE storage transaction.
+     * There is no window where the charge succeeded but the issuance still
+     * reads {@code PREPARED}, and no {@code api.withdraw} plus standalone
+     * mark ever runs. Ordinary new issuance stays behind the freeze /
+     * read-only gate; only the trusted recovery refund below is exempt, and
+     * only for durably proven deductions.
+     *
+     * <p>When the service account view does not know the account (tests and
+     * split wiring), the store stays authoritative: pre-checks that need the
+     * live balance are skipped and the commit decides. In production both
+     * views are the same backend instance, so the pre-checks and the commit
+     * always agree.</p>
+     *
+     * @param accountId the account to deduct; never {@code null}
+     * @param currencyId the currency id; never {@code null}
+     * @param amount the strictly positive amount to deduct; never {@code null}
+     * @param nonce the single-use issuance nonce; never {@code null}
+     * @param issuanceStore the durable atomic store; never {@code null}
+     * @return the deduction result
+     * @throws IndeterminatePersistenceException when the debit may or may not
+     *         have committed: never retry blindly, verify first
+     */
+    public EconomyResult<Amount> issueBanknote(UUID accountId, String currencyId, Amount amount,
+                                               UUID nonce,
+                                               AtomicBanknoteIssuanceStore issuanceStore) {
+        java.util.Objects.requireNonNull(accountId, "accountId");
+        java.util.Objects.requireNonNull(currencyId, "currencyId");
+        java.util.Objects.requireNonNull(amount, "amount");
+        java.util.Objects.requireNonNull(nonce, "nonce");
+        java.util.Objects.requireNonNull(issuanceStore, "issuanceStore");
+        EconomyResult<Void> v = validateAmountPositive(amount);
+        if (v.isFailure()) {
+            return EconomyResult.failure(v.error(), v.message());
+        }
+        if (!currencies.contains(currencyId)) {
+            return EconomyResult.failure(EconomyError.CURRENCY_NOT_FOUND, currencyId);
+        }
+        Optional<EconomyResult<Amount>> capRefusal = refuseOnRequestAmountCap(currencyId, amount);
+        if (capRefusal.isPresent()) {
+            return capRefusal.get();
+        }
+        com.smile.aceeconomy.operations.security.SecurityControlService control = securityControl;
+        com.smile.aceeconomy.operations.security.SecurityControlService.MutationPermit permit =
+                control == null ? null : control.acquireMutationPermit();
+        try {
+            if (control != null) {
+                Optional<EconomyError> refusal = control.checkInitiating(accountId);
+                if (refusal.isPresent()) {
+                    recordRefusal("issue", accountId, refusal.get());
+                    return EconomyResult.failure(refusal.get(), refusalMessage(refusal.get()));
+                }
+            }
+            ReentrantLock lock = locks.lockFor(accountId);
+            lock.lock();
+            try {
+                AccountBalanceCache.CacheStamp stamp = balanceCache.stampOf(accountId);
+                Optional<Account> acc;
+                try {
+                    acc = accounts.load(accountId);
+                } catch (PersistenceException e) {
+                    balanceCache.invalidate(accountId);
+                    LOG.log(Level.WARNING,
+                            "Issuance failed before commit; answering AUDIT_FAILURE without changing anything",
+                            e);
+                    return EconomyResult.failure(EconomyError.AUDIT_FAILURE, STORAGE_UNAVAILABLE);
+                }
+                Amount previewBefore = null;
+                Amount previewAfter = null;
+                if (acc.isPresent()) {
+                    Optional<EconomyResult<Amount>> scaleRefusal =
+                            refuseOnScaleMismatch(currencyId, acc.get().balanceOf(currencyId), amount);
+                    if (scaleRefusal.isPresent()) {
+                        return scaleRefusal.get();
+                    }
+                    Optional<EconomyResult<Amount>> storedCapRefusal =
+                            refuseOnStoredAmountCap(currencyId, acc.get().balanceOf(currencyId));
+                    if (storedCapRefusal.isPresent()) {
+                        return storedCapRefusal.get();
+                    }
+                    previewBefore = orZero(acc.get().balanceOf(currencyId), amount);
+                    try {
+                        previewAfter = previewBefore.subtract(amount);
+                    } catch (IllegalArgumentException scaleMismatch) {
+                        return EconomyResult.failure(EconomyError.CURRENCY_SCALE_MISMATCH,
+                                "currency scale mismatch for " + norm(currencyId));
+                    }
+                    Optional<EconomyResult<Amount>> resultCapRefusal =
+                            refuseOnResultAmountCap(currencyId, previewAfter);
+                    if (resultCapRefusal.isPresent()) {
+                        return resultCapRefusal.get();
+                    }
+                    if (!debtPolicy.allows(previewAfter)) {
+                        return rejectWithdraw();
+                    }
+                }
+                Amount eventBefore = previewBefore != null ? previewBefore : Amount.zero(amount.scale());
+                TransactionEvent event = new TransactionEvent(accountId, amount,
+                        TransactionType.WITHDRAW, eventBefore);
+                events.publishPreCommit(event);
+                if (event.isCancelled()) {
+                    return EconomyResult.failure(EconomyError.TRANSACTION_CANCELLED,
+                            "withdraw cancelled");
+                }
+                try {
+                    issuanceStore.prepare(BanknoteIssuance.prepared(
+                            nonce, accountId, norm(currencyId), amount, now()));
+                } catch (IndeterminatePersistenceException e) {
+                    balanceCache.invalidate(accountId);
+                    throw e;
+                } catch (PersistenceException e) {
+                    if (e.getMessage() != null && e.getMessage().contains("payload mismatch")) {
+                        return EconomyResult.failure(EconomyError.INVALID_AMOUNT,
+                                "issuance payload mismatch; nothing was changed");
+                    }
+                    balanceCache.invalidate(accountId);
+                    LOG.log(Level.WARNING,
+                            "Issuance preparation failed before commit;"
+                                    + " answering AUDIT_FAILURE without changing anything",
+                            e);
+                    return EconomyResult.failure(EconomyError.AUDIT_FAILURE, STORAGE_UNAVAILABLE);
+                }
+                Amount txBefore = previewBefore != null ? previewBefore : Amount.zero(amount.scale());
+                Amount txAfter;
+                try {
+                    txAfter = previewAfter != null ? previewAfter : txBefore.subtract(amount);
+                } catch (IllegalArgumentException scaleMismatch) {
+                    return EconomyResult.failure(EconomyError.CURRENCY_SCALE_MISMATCH,
+                            "currency scale mismatch for " + norm(currencyId));
+                }
+                Transaction prepared = new Transaction(newId(), accountId, null,
+                        norm(currencyId), amount, TransactionType.WITHDRAW, txBefore, txAfter,
+                        now(), BanknoteIssuanceReasons.issueReason(nonce));
+                IssuanceDebitResult result;
+                try {
+                    result = issuanceStore.commitDebit(nonce, prepared, debtPolicy);
+                } catch (CommittedIssuanceDebitException e) {
+                    LOG.log(Level.WARNING,
+                            "Issuance debit committed but reported a storage error afterwards", e);
+                    Transaction authoritative = new Transaction(e.debitTransactionId(),
+                            prepared.accountId(), prepared.counterparty(), prepared.currencyId(),
+                            prepared.amount(), prepared.type(), e.balanceBefore(), e.balanceAfter(),
+                            prepared.timestamp(), prepared.reason(),
+                            prepared.operatorId(), prepared.operatorName());
+                    balanceCache.putIfStamp(accountId, currencyId, e.balanceAfter(), stamp);
+                    publishPostCommit(authoritative);
+                    return EconomyResult.success(e.balanceAfter());
+                } catch (IndeterminatePersistenceException e) {
+                    balanceCache.invalidate(accountId);
+                    throw e;
+                } catch (PersistenceException e) {
+                    if (e.isCommitted()) {
+                        balanceCache.invalidate(accountId);
+                        throw e;
+                    }
+                    balanceCache.invalidate(accountId);
+                    LOG.log(Level.WARNING,
+                            "Issuance failed before commit; answering AUDIT_FAILURE without changing anything",
+                            e);
+                    return EconomyResult.failure(EconomyError.AUDIT_FAILURE, STORAGE_UNAVAILABLE);
+                }
+                if (result.isCommitted()) {
+                    Transaction authoritative = new Transaction(result.debitTransactionId(),
+                            prepared.accountId(), prepared.counterparty(), prepared.currencyId(),
+                            prepared.amount(), prepared.type(), result.balanceBefore(),
+                            result.balanceAfter(), prepared.timestamp(), prepared.reason(),
+                            prepared.operatorId(), prepared.operatorName());
+                    balanceCache.putIfStamp(accountId, currencyId, result.balanceAfter(), stamp);
+                    publishPostCommit(authoritative);
+                    return EconomyResult.success(result.balanceAfter());
+                }
+                balanceCache.invalidate(accountId);
+                if (result.isReplay()) {
+                    return EconomyResult.failure(EconomyError.REPLAY_DETECTED, "replay.detected");
+                }
+                if (result.isDebtLimitExceeded()) {
+                    return rejectWithdraw();
+                }
+                if (result.isCapExceeded()) {
+                    return EconomyResult.failure(EconomyError.AMOUNT_EXCEEDS_CAP,
+                            AmountCap.describeResult(norm(currencyId), amount));
+                }
+                if (result.isScaleMismatch()) {
+                    return EconomyResult.failure(EconomyError.CURRENCY_SCALE_MISMATCH,
+                            "currency scale mismatch for " + norm(currencyId));
+                }
+                if (result.isAccountMissing()) {
+                    return EconomyResult.failure(EconomyError.ACCOUNT_NOT_FOUND,
+                            "no account for " + accountId);
+                }
+                return EconomyResult.failure(EconomyError.INVALID_AMOUNT,
+                        "issuance debit refused; nothing was changed");
+            } finally {
+                lock.unlock();
+            }
+        } finally {
+            if (permit != null) {
+                permit.close();
+            }
+        }
+    }
+
+    /**
+     * Refund one proven pending issuance for startup recovery: the nonce is
+     * consumed, the system refund is appended and the issuance is final-marked
+     * in ONE storage transaction. Authority comes from the live stored
+     * issuance plus the durable debit transaction, never from a
+     * caller-supplied string and never from a memory ledger.
+     *
+     * <p>This trusted path takes the safety-control permit for sequencing but
+     * stays exempt from the freeze / read-only initiating gate: a durably
+     * proven charge must never strand its player. Ordinary new issuance above
+     * stays gated. No pre-commit event fires (system-initiated, so no
+     * listener can veto compensation and strand a charged player).</p>
+     *
+     * @param nonce the issuance nonce to refund; never {@code null}
+     * @param issuanceStore the durable atomic store; never {@code null}
+     * @return the refund result
+     * @throws IndeterminatePersistenceException when the void+refund may or
+     *         may not have committed: never retry blindly, verify first
+     */
+    public EconomyResult<Amount> refundIssuanceForRecovery(
+            UUID nonce,
+            AtomicBanknoteIssuanceStore issuanceStore) {
+        java.util.Objects.requireNonNull(nonce, "nonce");
+        java.util.Objects.requireNonNull(issuanceStore, "issuanceStore");
+        BanknoteIssuance stored;
+        try {
+            Optional<BanknoteIssuance> found = issuanceStore.findByNonce(nonce);
+            if (found.isEmpty()) {
+                return EconomyResult.failure(EconomyError.AUDIT_FAILURE,
+                        "no issuance record for nonce; nothing was changed");
+            }
+            stored = found.get();
+        } catch (IndeterminatePersistenceException e) {
+            throw e;
+        } catch (PersistenceException e) {
+            LOG.log(Level.WARNING,
+                    "Issuance recovery refund failed before commit;"
+                            + " answering AUDIT_FAILURE without changing anything",
+                    e);
+            return EconomyResult.failure(EconomyError.AUDIT_FAILURE, STORAGE_UNAVAILABLE);
+        }
+        UUID accountId = stored.accountId();
+        String currencyId = stored.currencyId();
+        Amount amount = stored.amount();
+        if (stored.status() == com.smile.aceeconomy.domain.BanknoteIssuanceStatus.PREPARED) {
+            try {
+                issuanceStore.markAborted(nonce,
+                        "recovery: prepared without deduction; aborting with no refund");
+            } catch (RuntimeException ignored) {
+                LOG.log(Level.WARNING,
+                        "Issuance abort mark failed for nonce {0}; refusal stands", nonce);
+            }
+            return EconomyResult.failure(EconomyError.INVALID_AMOUNT,
+                    "no deduction to refund; nothing was changed");
+        }
+        if (!stored.isRefundablePending()) {
+            if (stored.status().isUnfinished()) {
+                quarantineIssuance(issuanceStore, nonce,
+                        "recovery: undecidable issuance state with no durable debit"
+                                + " proof; quarantined with no money movement");
+            }
+            return EconomyResult.failure(EconomyError.AUDIT_FAILURE,
+                    "issuance is not refundable; nothing was changed");
+        }
+        if (!currencies.contains(currencyId)) {
+            quarantineIssuance(issuanceStore, nonce,
+                    "recovery: unknown currency; quarantined with no money movement");
+            return EconomyResult.failure(EconomyError.CURRENCY_NOT_FOUND, currencyId);
+        }
+        Optional<EconomyResult<Amount>> capRefusal = refuseOnRequestAmountCap(currencyId, amount);
+        if (capRefusal.isPresent()) {
+            quarantineIssuance(issuanceStore, nonce,
+                    "recovery: amount over cap; quarantined with no money movement");
+            return capRefusal.get();
+        }
+        com.smile.aceeconomy.operations.security.SecurityControlService control = securityControl;
+        com.smile.aceeconomy.operations.security.SecurityControlService.MutationPermit permit =
+                control == null ? null : control.acquireMutationPermit();
+        try {
+            ReentrantLock lock = locks.lockFor(accountId);
+            lock.lock();
+            try {
+                AccountBalanceCache.CacheStamp stamp = balanceCache.stampOf(accountId);
+                Optional<Account> acc;
+                try {
+                    acc = accounts.load(accountId);
+                } catch (PersistenceException e) {
+                    balanceCache.invalidate(accountId);
+                    LOG.log(Level.WARNING,
+                            "Issuance recovery refund failed before commit;"
+                                    + " answering AUDIT_FAILURE without changing anything",
+                            e);
+                    return EconomyResult.failure(EconomyError.AUDIT_FAILURE, STORAGE_UNAVAILABLE);
+                }
+                if (acc.isPresent()) {
+                    Optional<EconomyResult<Amount>> scaleRefusal =
+                            refuseOnScaleMismatch(currencyId, acc.get().balanceOf(currencyId), amount);
+                    if (scaleRefusal.isPresent()) {
+                        quarantineIssuance(issuanceStore, nonce,
+                                "recovery: scale mismatch; quarantined with no money movement");
+                        return scaleRefusal.get();
+                    }
+                    Optional<EconomyResult<Amount>> storedCapRefusal =
+                            refuseOnStoredAmountCap(currencyId, acc.get().balanceOf(currencyId));
+                    if (storedCapRefusal.isPresent()) {
+                        quarantineIssuance(issuanceStore, nonce,
+                                "recovery: stored balance over cap; quarantined with no money movement");
+                        return storedCapRefusal.get();
+                    }
+                    Amount before = orZero(acc.get().balanceOf(currencyId), amount);
+                    Amount after;
+                    try {
+                        after = before.add(amount);
+                    } catch (IllegalArgumentException scaleMismatch) {
+                        quarantineIssuance(issuanceStore, nonce,
+                                "recovery: scale mismatch; quarantined with no money movement");
+                        return EconomyResult.failure(EconomyError.CURRENCY_SCALE_MISMATCH,
+                                "currency scale mismatch for " + norm(currencyId));
+                    }
+                    Optional<EconomyResult<Amount>> resultCapRefusal =
+                            refuseOnResultAmountCap(currencyId, after);
+                    if (resultCapRefusal.isPresent()) {
+                        quarantineIssuance(issuanceStore, nonce,
+                                "recovery: resulting balance over cap; quarantined with no money movement");
+                        return resultCapRefusal.get();
+                    }
+                }
+                Transaction prepared = new Transaction(newId(), accountId, null,
+                        norm(currencyId), amount, TransactionType.DEPOSIT, null, null,
+                        now(), BanknoteIssuanceReasons.recoveryRefundReason(nonce), null,
+                        BanknoteIssuanceReasons.SYSTEM_RECOVERY_OPERATOR);
+                IssuanceRefundResult result;
+                try {
+                    result = issuanceStore.commitRecoveryRefund(nonce, prepared, debtPolicy);
+                } catch (CommittedIssuanceRefundException e) {
+                    LOG.log(Level.WARNING,
+                            "Issuance recovery refund committed but reported a storage error afterwards",
+                            e);
+                    Transaction authoritative = new Transaction(e.refundTransactionId(),
+                            prepared.accountId(), prepared.counterparty(), prepared.currencyId(),
+                            prepared.amount(), prepared.type(), e.balanceBefore(), e.balanceAfter(),
+                            prepared.timestamp(), prepared.reason(),
+                            prepared.operatorId(), prepared.operatorName());
+                    balanceCache.putIfStamp(accountId, currencyId, e.balanceAfter(), stamp);
+                    publishPostCommit(authoritative);
+                    return EconomyResult.success(e.balanceAfter());
+                } catch (IndeterminatePersistenceException e) {
+                    balanceCache.invalidate(accountId);
+                    throw e;
+                } catch (PersistenceException e) {
+                    if (e.isCommitted()) {
+                        balanceCache.invalidate(accountId);
+                        throw e;
+                    }
+                    balanceCache.invalidate(accountId);
+                    LOG.log(Level.WARNING,
+                            "Issuance recovery refund failed before commit;"
+                                    + " answering AUDIT_FAILURE without changing anything",
+                            e);
+                    return EconomyResult.failure(EconomyError.AUDIT_FAILURE, STORAGE_UNAVAILABLE);
+                }
+                if (result.isCommitted()) {
+                    Transaction authoritative = new Transaction(result.refundTransactionId(),
+                            prepared.accountId(), prepared.counterparty(), prepared.currencyId(),
+                            prepared.amount(), prepared.type(), result.balanceBefore(),
+                            result.balanceAfter(), prepared.timestamp(), prepared.reason(),
+                            prepared.operatorId(), prepared.operatorName());
+                    balanceCache.putIfStamp(accountId, currencyId, result.balanceAfter(), stamp);
+                    publishPostCommit(authoritative);
+                    return EconomyResult.success(result.balanceAfter());
+                }
+                balanceCache.invalidate(accountId);
+                if (result.isReplay()) {
+                    Optional<Account> reloaded;
+                    try {
+                        reloaded = accounts.load(accountId);
+                    } catch (PersistenceException e) {
+                        return EconomyResult.failure(EconomyError.AUDIT_FAILURE,
+                                STORAGE_UNAVAILABLE);
+                    }
+                    Amount balance = reloaded.flatMap(a -> Optional.ofNullable(a.balanceOf(currencyId)))
+                            .orElse(null);
+                    if (balance != null) {
+                        balanceCache.putIfStamp(accountId, currencyId, balance, stamp);
+                        return EconomyResult.success(balance);
+                    }
+                    return EconomyResult.failure(EconomyError.ACCOUNT_NOT_FOUND,
+                            "no account for " + accountId);
+                }
+                if (result.isAlreadyRedeemed()) {
+                    return EconomyResult.failure(EconomyError.REPLAY_DETECTED,
+                            "note already redeemed; refund refused");
+                }
+                if (result.isDebtLimitExceeded()) {
+                    if (!debtPolicy.isAllowNegative()) {
+                        return EconomyResult.failure(EconomyError.DEBT_DISABLED,
+                                "negative balance not allowed");
+                    }
+                    return EconomyResult.failure(EconomyError.DEBT_LIMIT_EXCEEDED,
+                            "debt limit exceeded");
+                }
+                if (result.isCapExceeded()) {
+                    quarantineIssuance(issuanceStore, nonce,
+                            "recovery: amount over cap; quarantined with no money movement");
+                    return EconomyResult.failure(EconomyError.AMOUNT_EXCEEDS_CAP,
+                            AmountCap.describeResult(norm(currencyId), amount));
+                }
+                if (result.isScaleMismatch()) {
+                    quarantineIssuance(issuanceStore, nonce,
+                            "recovery: scale mismatch; quarantined with no money movement");
+                    return EconomyResult.failure(EconomyError.CURRENCY_SCALE_MISMATCH,
+                            "currency scale mismatch for " + norm(currencyId));
+                }
+                if (result.isAccountMissing()) {
+                    return EconomyResult.failure(EconomyError.ACCOUNT_NOT_FOUND,
+                            "no account for " + accountId);
+                }
+                quarantineIssuance(issuanceStore, nonce,
+                        "recovery: undecidable issuance state; quarantined with no money movement");
+                return EconomyResult.failure(EconomyError.AUDIT_FAILURE,
+                        "issuance recovery refused; nothing was changed");
+            } finally {
+                lock.unlock();
+            }
+        } finally {
+            if (permit != null) {
+                permit.close();
+            }
+        }
+    }
+
+    /**
+     * Best-effort quarantine for an undecidable issuance record. Never throws:
+     * the refusal stands even when the mark itself fails.
+     */
+    private void quarantineIssuance(AtomicBanknoteIssuanceStore issuanceStore, UUID nonce,
+                                    String diagnosis) {
+        try {
+            issuanceStore.markQuarantined(nonce, diagnosis);
+        } catch (RuntimeException ignored) {
+            LOG.log(Level.WARNING,
+                    "Issuance quarantine mark failed for nonce {0}; refusal stands", nonce);
+        }
     }
 
     private String norm(String currencyId) {

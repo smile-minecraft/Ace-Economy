@@ -43,6 +43,14 @@ public final class JsonModel {
      * in-memory bytes handed to the backend carry the merged collection.
      */
     public final List<JsonOperationAudit> operationAudits = new ArrayList<>();
+    /**
+     * Durable banknote issuance progress, keyed by canonical nonce string.
+     * Optional additive section: files written before issuance tracking load
+     * with an empty map, and it is written only when non-empty so snapshots
+     * without issuance progress keep their exact shape. Old readers ignore
+     * the key; the schema version is unchanged.
+     */
+    public final Map<String, JsonIssuance> issuances = new LinkedHashMap<>();
 
     // ---------------- (de)serialization ----------------
 
@@ -139,6 +147,37 @@ public final class JsonModel {
                 model.operationAudits.add(JsonOperationAudit.fromJson(raw));
             }
         }
+        // Issuance progress is an optional additive section. Absent means the file was
+        // written before issuance tracking and loads empty. A present value must be an
+        // object of strictly valid records: a malformed record means the file was
+        // corrupted or hand-edited, so fail fast instead of silently dropping the
+        // recovery queue (an empty-looking queue would strand a deducted charge
+        // or resurrect a voided note).
+        if (obj.containsKey("issuances")) {
+            Object issuancesObj = obj.get("issuances");
+            if (!(issuancesObj instanceof Map)) {
+                throw new PersistenceException("Invalid 'issuances' section in JSON model: expected object");
+            }
+            for (Map.Entry<String, Object> e : ((Map<String, Object>) issuancesObj).entrySet()) {
+                String rawKey = e.getKey();
+                JsonIssuance record = JsonIssuance.fromJson(e.getValue());
+                UUID parsedKey;
+                try {
+                    parsedKey = UUID.fromString(rawKey);
+                } catch (IllegalArgumentException ex) {
+                    throw new PersistenceException("Invalid issuance record in JSON model: " + rawKey);
+                }
+                if (!parsedKey.toString().equals(rawKey)) {
+                    throw new PersistenceException(
+                            "Invalid issuance record in JSON model: non-canonical UUID " + rawKey);
+                }
+                if (!record.nonce.equals(rawKey)) {
+                    throw new PersistenceException(
+                            "Invalid issuance record in JSON model: map key does not match nonce field");
+                }
+                model.issuances.put(rawKey, record);
+            }
+        }
         return model;
     }
 
@@ -164,6 +203,15 @@ public final class JsonModel {
                 audits.add(a.toJsonObject());
             }
             root.put("operationAudits", audits);
+        }
+        // Written only when present, so snapshots without issuance progress keep the exact
+        // key set that older builds wrote, and old readers keep ignoring the section.
+        if (!issuances.isEmpty()) {
+            Map<String, Object> progress = new LinkedHashMap<>();
+            for (Map.Entry<String, JsonIssuance> e : issuances.entrySet()) {
+                progress.put(e.getKey(), e.getValue().toJsonObject());
+            }
+            root.put("issuances", progress);
         }
         return root;
     }
@@ -389,6 +437,193 @@ public final class JsonModel {
                     reason,
                     operatorId == null ? null : UUID.fromString(operatorId),
                     operatorName);
+        }
+    }
+
+    // ---------------- issuance progress ----------------
+
+    /**
+     * Durable progress of one banknote issuance, keyed by nonce.
+     *
+     * <p>Strict on read: the nonce, account and debit-transaction ids must be
+     * canonical UUIDs, the status must be a known
+     * {@link com.smile.aceeconomy.domain.BanknoteIssuanceStatus}, the amount
+     * must parse, the currency must be non-blank, and debit evidence must be
+     * present exactly for the states that carry a deduction. Anything else
+     * fails fast instead of loading as empty progress.</p>
+     */
+    public static final class JsonIssuance {
+        public String nonce;
+        public String accountId;
+        public String currencyId;
+        public String amount;
+        public String status;
+        public String debitTransactionId; // nullable: only states past PREPARED carry it
+        public String debitProof; // nullable: the nonce-bound debit reason, same rule
+        public String createdAt;
+        public String updatedAt;
+
+        public static JsonIssuance fromDomain(com.smile.aceeconomy.domain.BanknoteIssuance issuance) {
+            JsonIssuance json = new JsonIssuance();
+            json.nonce = issuance.nonce().toString();
+            json.accountId = issuance.accountId().toString();
+            json.currencyId = issuance.currencyId();
+            json.amount = evidenceToString(issuance.amount());
+            json.status = issuance.status().name();
+            json.debitTransactionId = issuance.debitTransactionId();
+            json.debitProof = issuance.debitProof();
+            json.createdAt = issuance.createdAt().toString();
+            json.updatedAt = issuance.updatedAt().toString();
+            return json;
+        }
+
+        @SuppressWarnings("unchecked")
+        public static JsonIssuance fromJson(Object raw) {
+            if (!(raw instanceof Map)) {
+                throw new PersistenceException("Invalid issuance record in JSON model: expected an object");
+            }
+            Map<String, Object> map = (Map<String, Object>) raw;
+            JsonIssuance record = new JsonIssuance();
+            record.nonce = issuanceString(map.get("nonce"), "nonce");
+            record.accountId = issuanceString(map.get("accountId"), "accountId");
+            record.currencyId = issuanceString(map.get("currencyId"), "currencyId");
+            record.amount = issuanceString(map.get("amount"), "amount");
+            record.status = issuanceString(map.get("status"), "status");
+            record.debitTransactionId = issuanceStringOrNull(
+                    map.get("debitTransactionId"), "debitTransactionId");
+            record.debitProof = issuanceStringOrNull(map.get("debitProof"), "debitProof");
+            record.createdAt = issuanceString(map.get("createdAt"), "createdAt");
+            record.updatedAt = issuanceString(map.get("updatedAt"), "updatedAt");
+            // The stored value is never interpolated: a corrupt field may itself
+            // carry hostile text, so refusals name only the problem.
+            UUID parsedNonce = canonicalUuid(record.nonce, "nonce");
+            canonicalUuid(record.accountId, "accountId");
+            if (record.currencyId.isBlank()) {
+                throw new PersistenceException(
+                        "Invalid issuance record in JSON model: blank currencyId");
+            }
+            try {
+                stringToAmount(record.amount);
+            } catch (RuntimeException e) {
+                throw new PersistenceException(
+                        "Invalid issuance record in JSON model: malformed amount");
+            }
+            com.smile.aceeconomy.domain.BanknoteIssuanceStatus parsedStatus;
+            try {
+                parsedStatus = com.smile.aceeconomy.domain.BanknoteIssuanceStatus
+                        .valueOf(record.status);
+            } catch (RuntimeException e) {
+                throw new PersistenceException(
+                        "Invalid issuance record in JSON model: unknown status");
+            }
+            if (!parsedNonce.toString().equals(record.nonce)) {
+                throw new PersistenceException(
+                        "Invalid issuance record in JSON model: non-canonical nonce");
+            }
+            boolean carriesDebit = record.debitTransactionId != null || record.debitProof != null;
+            boolean requiresDebit = switch (parsedStatus) {
+                case DEBIT_COMMITTED, DELIVERY_STARTED, DELIVERED,
+                        FINAL_VOID_REFUNDED, REDEEMED -> true;
+                case PREPARED, ABORTED, QUARANTINED -> false;
+            };
+            // PREPARED and ABORTED must carry no invented deduction; the
+            // deduction-carrying states must carry both the id and the proof.
+            // QUARANTINED keeps whatever evidence was present at diagnosis time.
+            if (parsedStatus == com.smile.aceeconomy.domain.BanknoteIssuanceStatus.QUARANTINED) {
+                if (record.debitTransactionId != null) {
+                    canonicalUuid(record.debitTransactionId, "debitTransactionId");
+                }
+                if (record.debitProof != null && record.debitProof.isBlank()) {
+                    throw new PersistenceException(
+                            "Invalid issuance record in JSON model: blank debitProof");
+                }
+            } else if (requiresDebit) {
+                if (record.debitTransactionId == null || record.debitProof == null
+                        || record.debitProof.isBlank()) {
+                    throw new PersistenceException(
+                            "Invalid issuance record in JSON model: state carries no debit evidence");
+                }
+                canonicalUuid(record.debitTransactionId, "debitTransactionId");
+            } else if (carriesDebit) {
+                throw new PersistenceException(
+                        "Invalid issuance record in JSON model: deduction-free state carries debit evidence");
+            }
+            try {
+                Instant.parse(record.createdAt);
+                Instant.parse(record.updatedAt);
+            } catch (RuntimeException e) {
+                throw new PersistenceException(
+                        "Invalid issuance record in JSON model: malformed timestamp");
+            }
+            return record;
+        }
+
+        private static String issuanceString(Object value, String field) {
+            if (value instanceof String s) {
+                return s;
+            }
+            throw new PersistenceException(
+                    "Invalid issuance record in JSON model: field " + field + " must be a string");
+        }
+
+        private static String issuanceStringOrNull(Object value, String field) {
+            if (value == null) {
+                return null;
+            }
+            if (value instanceof String s) {
+                return s;
+            }
+            throw new PersistenceException(
+                    "Invalid issuance record in JSON model: field " + field + " must be a string or null");
+        }
+
+        private static UUID canonicalUuid(String raw, String field) {
+            UUID parsed;
+            try {
+                parsed = UUID.fromString(raw);
+            } catch (RuntimeException e) {
+                throw new PersistenceException(
+                        "Invalid issuance record in JSON model: malformed " + field);
+            }
+            if (!parsed.toString().equals(raw)) {
+                throw new PersistenceException(
+                        "Invalid issuance record in JSON model: non-canonical " + field);
+            }
+            return parsed;
+        }
+
+        Map<String, Object> toJsonObject() {
+            Map<String, Object> map = new LinkedHashMap<>();
+            map.put("nonce", nonce);
+            map.put("accountId", accountId);
+            map.put("currencyId", currencyId);
+            map.put("amount", amount);
+            map.put("status", status);
+            map.put("debitTransactionId", debitTransactionId);
+            map.put("debitProof", debitProof);
+            map.put("createdAt", createdAt);
+            map.put("updatedAt", updatedAt);
+            return map;
+        }
+
+        public com.smile.aceeconomy.domain.BanknoteIssuance toDomain() {
+            // fromJson already validated every field; a direct map read (for
+            // example from a hand-built model) re-validates through the same
+            // strict path instead of trusting raw strings.
+            return fromJson(toJsonObject()).toDomainValidated();
+        }
+
+        private com.smile.aceeconomy.domain.BanknoteIssuance toDomainValidated() {
+            return new com.smile.aceeconomy.domain.BanknoteIssuance(
+                    UUID.fromString(nonce),
+                    UUID.fromString(accountId),
+                    currencyId,
+                    stringToAmount(amount),
+                    com.smile.aceeconomy.domain.BanknoteIssuanceStatus.valueOf(status),
+                    debitTransactionId,
+                    debitProof,
+                    Instant.parse(createdAt),
+                    Instant.parse(updatedAt));
         }
     }
 

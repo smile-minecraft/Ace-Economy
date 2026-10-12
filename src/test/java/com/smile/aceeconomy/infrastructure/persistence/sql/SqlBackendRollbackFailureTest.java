@@ -10,6 +10,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.Map;
@@ -46,8 +48,12 @@ class SqlBackendRollbackFailureTest {
         Connection connection = mock(Connection.class);
         Statement statement = mock(Statement.class);
         when(connection.createStatement()).thenReturn(statement);
+        PreparedStatement guardPs = mock(PreparedStatement.class);
+        ResultSet emptyRs = mock(ResultSet.class);
+        when(emptyRs.next()).thenReturn(false);
+        when(guardPs.executeQuery()).thenReturn(emptyRs);
         when(connection.prepareStatement(org.mockito.ArgumentMatchers.anyString()))
-                .thenReturn(mock(java.sql.PreparedStatement.class));
+                .thenReturn(guardPs);
 
         SqlBackend backend = new SqlBackend(new SqlConnectionProvider(connection), new SqliteDialect());
         backend.setInitializedForTest(true);
@@ -85,6 +91,12 @@ class SqlBackendRollbackFailureTest {
         Connection connection = mock(Connection.class);
         Statement statement = mock(Statement.class);
         when(connection.createStatement()).thenReturn(statement);
+        PreparedStatement guardPs = mock(PreparedStatement.class);
+        ResultSet emptyRs = mock(ResultSet.class);
+        when(emptyRs.next()).thenReturn(false);
+        when(guardPs.executeQuery()).thenReturn(emptyRs);
+        when(connection.prepareStatement(org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn(guardPs);
         // The DML fails mid-transaction...
         when(statement.executeUpdate(org.mockito.ArgumentMatchers.anyString()))
                 .thenThrow(new SQLException("dml-boom"));
@@ -119,6 +131,12 @@ class SqlBackendRollbackFailureTest {
         Connection connection = mock(Connection.class);
         Statement statement = mock(Statement.class);
         when(connection.createStatement()).thenReturn(statement);
+        PreparedStatement guardPs = mock(PreparedStatement.class);
+        ResultSet emptyRs = mock(ResultSet.class);
+        when(emptyRs.next()).thenReturn(false);
+        when(guardPs.executeQuery()).thenReturn(emptyRs);
+        when(connection.prepareStatement(org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn(guardPs);
         when(statement.executeUpdate(org.mockito.ArgumentMatchers.anyString()))
                 .thenThrow(new SQLException("dml-boom"));
         // Rollback succeeds this time.

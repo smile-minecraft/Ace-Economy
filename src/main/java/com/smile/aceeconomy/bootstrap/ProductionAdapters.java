@@ -399,6 +399,22 @@ final class ProductionAdapters {
         private final AtomicRedemptionStore redemptions;
         private final com.smile.aceeconomy.infrastructure.banknote.BanknoteFlow flow;
         private volatile com.smile.aceeconomy.operations.internal.TrustedRefundLedger refundLedger;
+        /**
+         * Phase-1 seam for the durable atomic issuance core. Null means the
+         * GUI entry runs the legacy inline path (existing tests); production
+         * Bootstrap binds the SAME backend-backed atomic instance as the core
+         * service and the banknote flow in phase 2, so the GUI entry deducts
+         * through the same durable core as the command entry with no UI
+         * change. Binding alone changes no behaviour yet.
+         */
+        private volatile com.smile.aceeconomy.ports.persistence.AtomicBanknoteIssuanceStore atomicIssuanceStore;
+        /**
+         * Recovery barrier for new managed redemption. Null means the gate stays
+         * open (existing tests and unconnected flows); production binds the
+         * startup runner closed and it opens only when the startup recovery
+         * run finishes. Legacy v2 notes with no issuance row stay allowed.
+         */
+        private volatile com.smile.aceeconomy.application.BanknoteIssuanceStartupRunner startupRecovery;
         BankUseCase(EconomyApi api, EconomyService economy, CurrencyRegistry currencies,
                     BanknoteFactory banknotes, BanknoteValidator validator,
                     AtomicRedemptionStore redemptions,
@@ -432,6 +448,37 @@ final class ProductionAdapters {
         void bindRefundLedger(
                 com.smile.aceeconomy.operations.internal.TrustedRefundLedger ledger) {
             this.refundLedger = ledger;
+        }
+
+        /**
+         * Bind the durable atomic issuance store shared with the core service
+         * and the banknote flow. Phase-1 seam only: binding alone changes no
+         * behaviour; phase 2 routes the GUI deduct through the same atomic
+         * core as the command entry.
+         */
+        void bindAtomicIssuanceStore(
+                com.smile.aceeconomy.ports.persistence.AtomicBanknoteIssuanceStore store) {
+            this.atomicIssuanceStore = store;
+        }
+
+        /** Skeleton accessor for the wired atomic store; null when unconnected. */
+        com.smile.aceeconomy.ports.persistence.AtomicBanknoteIssuanceStore atomicIssuanceStore() {
+            return atomicIssuanceStore;
+        }
+
+        /**
+         * Bind the startup recovery barrier. While the barrier is closed, managed
+         * redemptions (notes with a durable issuance row) wait instead of racing
+         * recovery; legacy v2 notes with no row stay allowed.
+         */
+        void bindStartupRecovery(
+                com.smile.aceeconomy.application.BanknoteIssuanceStartupRunner runner) {
+            this.startupRecovery = runner;
+        }
+
+        /** Skeleton accessor for the wired recovery barrier; null when unconnected. */
+        com.smile.aceeconomy.application.BanknoteIssuanceStartupRunner startupRecovery() {
+            return startupRecovery;
         }
         public WithdrawResult withdraw(UUID id, long value) {
             return withdraw(id, value, null);
@@ -538,10 +585,13 @@ final class ProductionAdapters {
         /**
          * Redeem the held item: decode → structural validation → currency check → durable
          * atomic redemption via the application service (lock, pre-commit event, debt policy
-         * and all-or-none balance/audit/nonce). Every rejection leaves the physical item
-         * untouched; only a committed redemption lets the caller remove it. Storage failures
-         * are mapped to the stable {@code credit.failed} reason instead of throwing into the
-         * scheduler dispatch, where they would surface as an indistinguishable accepted click.
+         * and all-or-none balance/audit/nonce), then observe the managed issuance as redeemed
+         * when the note carries one. Every rejection leaves the physical item untouched; only
+         * a committed redemption lets the caller remove it. Storage failures are mapped to the
+         * stable {@code credit.failed} reason instead of throwing into the scheduler dispatch,
+         * where they would surface as an indistinguishable accepted click. The redeem observation
+         * never overturns a committed credit; an observation failure is logged loudly and the
+         * record staying delivered keeps refusing an empty-candidate rollback.
          */
         public DepositResult deposit(UUID id, ItemStack heldItem) {
             Optional<BanknoteClaim> decoded = banknotes.decode(heldItem);
@@ -563,11 +613,30 @@ final class ProductionAdapters {
             } catch (IllegalArgumentException e) {
                 return DepositResult.rejected("value.nonpositive");
             }
+            com.smile.aceeconomy.application.BanknoteIssuanceStartupRunner barrier = startupRecovery;
+            if (barrier != null && !barrier.isRecoveryComplete()) {
+                com.smile.aceeconomy.ports.persistence.AtomicBanknoteIssuanceStore atomic =
+                        atomicIssuanceStore;
+                if (atomic != null) {
+                    boolean managed;
+                    try {
+                        managed = atomic.findByNonce(claim.nonce()).isPresent();
+                    } catch (Exception lookupFailure) {
+                        return DepositResult.rejected("credit.failed");
+                    }
+                    if (managed) {
+                        return DepositResult.rejected(
+                                "banknote issuance is paused while startup recovery is incomplete;"
+                                        + " please try again later");
+                    }
+                }
+            }
             // Production path preserves the full EconomyService contract (lock, pre-commit,
             // debt, audit semantics) and delegates durability to the prepared atomic store.
             if (economy != null) {
                 EconomyResult<Amount> r = economy.redeemBanknote(claim.nonce(), id, c.id(), amount, redemptions);
                 if (r.isSuccess()) {
+                    observeIssuanceRedeemed(claim.nonce());
                     return DepositResult.success(claim.value(), c.id());
                 }
                 EconomyError err = r.error();
@@ -601,6 +670,7 @@ final class ProductionAdapters {
             try {
                 RedemptionResult r = redemptions.redeem(claim.nonce(), id, c.id(), amount);
                 if (r.isCommitted()) {
+                    observeIssuanceRedeemed(claim.nonce());
                     return DepositResult.success(claim.value(), c.id());
                 }
                 if (r.isReplay()) {
@@ -609,6 +679,54 @@ final class ProductionAdapters {
                 return DepositResult.rejected("credit.account-missing");
             } catch (com.smile.aceeconomy.ports.persistence.PersistenceException e) {
                 return DepositResult.rejected("credit.failed");
+            }
+        }
+
+        /**
+         * Observe a committed redemption on the managed issuance, when one exists.
+         *
+         * <p>A note without a managed record (issued before issuance tracking) redeems
+         * exactly as before. When a record exists, the committed credit flips it to
+         * redeemed so a later empty-candidate rollback is no longer blocked by it.
+         * The observation never overturns the committed credit: a lookup or mark
+         * failure is logged loudly, the nonce is already consumed so the note cannot
+         * be reused, and a record staying delivered keeps refusing an empty-candidate
+         * rollback (conservative).</p>
+         */
+        private void observeIssuanceRedeemed(java.util.UUID nonce) {
+            com.smile.aceeconomy.ports.persistence.AtomicBanknoteIssuanceStore atomic =
+                    atomicIssuanceStore;
+            if (atomic == null) {
+                return;
+            }
+            java.util.Optional<com.smile.aceeconomy.domain.BanknoteIssuance> existing;
+            try {
+                existing = atomic.findByNonce(nonce);
+            } catch (Throwable lookupFailure) {
+                LOGGER.log(System.Logger.Level.ERROR,
+                        "banknote redeem observation failed for nonce {0}: {1}; credit stays"
+                                + " committed, the nonce is already consumed so the note cannot be"
+                                + " reused, and a delivered record keeps refusing an empty-candidate"
+                                + " rollback",
+                        new Object[]{nonce, lookupFailure.getClass().getSimpleName()});
+                return;
+            }
+            if (existing.isEmpty()) {
+                return;
+            }
+            if (existing.get().status()
+                    == com.smile.aceeconomy.domain.BanknoteIssuanceStatus.REDEEMED) {
+                return;
+            }
+            try {
+                atomic.markRedeemed(nonce);
+            } catch (Throwable markFailure) {
+                LOGGER.log(System.Logger.Level.ERROR,
+                        "banknote redeem observation failed for nonce {0}: {1}; credit stays"
+                                + " committed, the nonce is already consumed so the note cannot be"
+                                + " reused, and a delivered record keeps refusing an empty-candidate"
+                                + " rollback",
+                        new Object[]{nonce, markFailure.getClass().getSimpleName()});
             }
         }
     }

@@ -45,6 +45,17 @@ public final class V2Schema {
      * it harmlessly.
      */
     public static final String OPERATION_AUDITS_TABLE = "ace_v2_operation_audits";
+    /**
+     * Durable banknote issuance progress, keyed by canonical nonce. Additive
+     * like the nonce and audit tables: databases initialized by older builds
+     * gain it on the next start without a version bump, initialization stays
+     * repeatable, and old builds never query this table so they ignore it
+     * harmlessly. One debit transaction id backs at most one nonce; that
+     * invariant is enforced in code (single-transaction checks), not by a
+     * database constraint, so a corrupt snapshot can still be diagnosed
+     * instead of failing at the SQL layer.
+     */
+    public static final String ISSUANCES_TABLE = "ace_v2_issuances";
 
     /** Reason width for the MySQL transactions table: policy max plus machine prefix. */
     public static final int MYSQL_REASON_WIDTH = 512;
@@ -112,6 +123,19 @@ public final class V2Schema {
                         safety_backup_id VARCHAR(128) NOT NULL
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                     """.formatted(OPERATION_AUDITS_TABLE));
+            stmts.add("""
+                    CREATE TABLE IF NOT EXISTS %s (
+                        nonce VARCHAR(36) PRIMARY KEY,
+                        account_id VARCHAR(36) NOT NULL,
+                        currency_id VARCHAR(32) NOT NULL,
+                        amount VARCHAR(64) NOT NULL,
+                        status VARCHAR(32) NOT NULL,
+                        debit_tx_id VARCHAR(36),
+                        debit_proof VARCHAR(512),
+                        created_at VARCHAR(64) NOT NULL,
+                        updated_at VARCHAR(64) NOT NULL
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                    """.formatted(ISSUANCES_TABLE));
         } else {
             stmts.add("""
                     CREATE TABLE IF NOT EXISTS %s (
@@ -168,6 +192,19 @@ public final class V2Schema {
                         safety_backup_id TEXT NOT NULL
                     )
                     """.formatted(OPERATION_AUDITS_TABLE));
+            stmts.add("""
+                    CREATE TABLE IF NOT EXISTS %s (
+                        nonce TEXT PRIMARY KEY,
+                        account_id TEXT NOT NULL,
+                        currency_id TEXT NOT NULL,
+                        amount TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        debit_tx_id TEXT,
+                        debit_proof TEXT,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    )
+                    """.formatted(ISSUANCES_TABLE));
         }
         return stmts;
     }
@@ -207,5 +244,9 @@ public final class V2Schema {
 
     public static String operationAuditsTable() {
         return OPERATION_AUDITS_TABLE;
+    }
+
+    public static String issuancesTable() {
+        return ISSUANCES_TABLE;
     }
 }

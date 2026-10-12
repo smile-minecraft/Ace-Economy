@@ -14,6 +14,7 @@ import com.smile.aceeconomy.ports.AccountRepository;
 import com.smile.aceeconomy.ports.operations.LeaderboardRepository;
 import com.smile.aceeconomy.ports.operations.LeaderboardRow;
 import com.smile.aceeconomy.ports.persistence.AtomicImportStore;
+import com.smile.aceeconomy.ports.persistence.AtomicBanknoteIssuanceStore;
 import com.smile.aceeconomy.ports.persistence.AtomicRedemptionStore;
 import com.smile.aceeconomy.ports.persistence.AtomicReversalStore;
 import com.smile.aceeconomy.ports.persistence.AtomicTransferStore;
@@ -24,6 +25,8 @@ import com.smile.aceeconomy.ports.persistence.NonceStore;
 import com.smile.aceeconomy.ports.persistence.PersistenceException;
 import com.smile.aceeconomy.ports.persistence.PersistenceLifecycle;
 import com.smile.aceeconomy.ports.persistence.ImportCommitResult;
+import com.smile.aceeconomy.ports.persistence.IssuanceDebitResult;
+import com.smile.aceeconomy.ports.persistence.IssuanceRefundResult;
 import com.smile.aceeconomy.ports.persistence.RedemptionResult;
 import com.smile.aceeconomy.ports.persistence.TransactionRepository;
 
@@ -127,6 +130,7 @@ public final class SqlBackend
         implements AccountRepository, TransactionRepository, PersistenceLifecycle,
         AtomicReversalStore, AtomicRedemptionStore, AtomicTransferStore, AtomicImportStore,
         com.smile.aceeconomy.ports.persistence.AtomicAdminMutationStore,
+        AtomicBanknoteIssuanceStore,
         NonceStore, LeaderboardRepository,
         com.smile.aceeconomy.ports.operations.OperationAuditStore {
 
@@ -489,7 +493,8 @@ public final class SqlBackend
                         return tableExists(V2Schema.accountsTable(), conn)
                                 || tableExists(V2Schema.balancesTable(), conn)
                                 || tableExists(V2Schema.transactionsTable(), conn)
-                                || tableExists(V2Schema.noncesTable(), conn);
+                                || tableExists(V2Schema.noncesTable(), conn)
+                                || tableExists(V2Schema.issuancesTable(), conn);
                     }
                     List<Integer> versions = readAllSchemaVersions(conn);
                     if (versions.isEmpty()) {
@@ -583,6 +588,20 @@ public final class SqlBackend
                     try {
                         conn.setAutoCommit(false);
                         entered = true;
+                        // Restore guard inside the exclusive window: the live
+                        // model is read before any row is deleted. Live issuance
+                        // progress must survive the swap identically, except a
+                        // pre-upgrade candidate without issuance progress, which
+                        // may only replace live progress that cannot leave a
+                        // redeemable note behind (deduction-free, redeemed or
+                        // aborted records). A live delivered, possibly-delivered,
+                        // refunded-voided or undecidable record refuses the
+                        // empty candidate so the balance cannot revert while a
+                        // physical note stays or becomes redeemable again. A
+                        // resurrecting or
+                        // rewinding candidate rolls back with live bytes unchanged.
+                        JsonModel live = loadAllIntoModel(conn);
+                        SnapshotPreflight.checkIssuanceRestoreGuard(live, candidate);
                         try (Statement st = conn.createStatement()) {
                             st.executeUpdate("DELETE FROM " + V2Schema.transactionsTable());
                             st.executeUpdate("DELETE FROM " + V2Schema.balancesTable());
@@ -590,6 +609,9 @@ public final class SqlBackend
                             st.executeUpdate("DELETE FROM " + V2Schema.noncesTable());
                             if (tableExists(V2Schema.operationAuditsTable(), conn)) {
                                 st.executeUpdate("DELETE FROM " + V2Schema.operationAuditsTable());
+                            }
+                            if (tableExists(V2Schema.issuancesTable(), conn)) {
+                                st.executeUpdate("DELETE FROM " + V2Schema.issuancesTable());
                             }
                         }
                         for (JsonModel.JsonAccount a : candidate.accounts.values()) {
@@ -600,6 +622,7 @@ public final class SqlBackend
                         }
                         insertNonces(candidate, conn);
                         insertOperationAudits(candidate, conn);
+                        insertIssuances(candidate, conn);
                         commitOrIndeterminate(conn, "Restore");
                     } catch (Throwable e) {
                         // A failed restore may leave part of the transaction applied. The cleanup
@@ -2305,8 +2328,7 @@ public final class SqlBackend
      * remains unsafe so release cannot return it to the pool. The caller must not attempt a
      * second rollback after this method fails.
      */
-    private void cleanupReplay(BorrowedConnection borrowed, Connection conn) throws SQLException {
-        try {
+    private void cleanupReplay(BorrowedConnection borrowed, Connection conn) throws SQLException {        try {
             conn.rollback();
         } catch (Throwable rollbackFailure) {
             borrowed.markUnsafe();
@@ -2336,6 +2358,940 @@ public final class SqlBackend
             }
             throw new RuntimeException(autoCommitFailure);
         }
+    }
+
+    // ---------------- durable issuance (phase-1 transient stub) ----------------
+
+    /**
+     * Durable issuance progress in the additive {@code ace_v2_issuances}
+     * table (created with {@code IF NOT EXISTS}, no version bump).
+     * {@code prepare} is first-writer-wins per nonce: an identical replay
+     * returns the existing record, a payload mismatch throws. Every marker
+     * enforces its legal-state compare-and-swap inside one JDBC transaction.
+     * Money-bearing states are reached only through {@link #commitDebit} and
+     * {@link #commitRecoveryRefund}, never through the markers below.
+     */
+    @Override
+    public com.smile.aceeconomy.domain.BanknoteIssuance prepare(
+            com.smile.aceeconomy.domain.BanknoteIssuance issuance) throws PersistenceException {
+        java.util.Objects.requireNonNull(issuance, "issuance");
+        java.util.concurrent.locks.Lock access = accessLock();
+        access.lock();
+        try {
+            ensureInitialized();
+            if (issuance.status() != com.smile.aceeconomy.domain.BanknoteIssuanceStatus.PREPARED) {
+                throw new PersistenceException("prepare requires PREPARED status, got " + issuance.status());
+            }
+            if (issuance.debitTransactionId() != null || issuance.debitProof() != null) {
+                throw new PersistenceException("prepare must carry no debit evidence");
+            }
+            try {
+                return withBorrowed((borrowed, conn) -> {
+                    boolean entered = false;
+                    try {
+                        conn.setAutoCommit(false);
+                        entered = true;
+                        com.smile.aceeconomy.domain.BanknoteIssuance existing =
+                                loadIssuanceRow(issuance.nonce(), conn, false);
+                        if (existing != null) {
+                            if (!existing.accountId().equals(issuance.accountId())
+                                    || !existing.currencyId().equals(issuance.currencyId())
+                                    || !existing.amount().equals(issuance.amount())) {
+                                throw new PersistenceException(
+                                        "issuance payload mismatch on replay for nonce " + issuance.nonce());
+                            }
+                            cleanupMissingAccount(borrowed, conn);
+                            return existing;
+                        }
+                        insertIssuanceRowIgnore(issuance, conn);
+                        com.smile.aceeconomy.domain.BanknoteIssuance stored =
+                                loadIssuanceRow(issuance.nonce(), conn, false);
+                        if (stored == null) {
+                            throw new PersistenceException(
+                                    "Failed to persist issuance preparation " + issuance.nonce());
+                        }
+                        if (!stored.accountId().equals(issuance.accountId())
+                                || !stored.currencyId().equals(issuance.currencyId())
+                                || !stored.amount().equals(issuance.amount())) {
+                            throw new PersistenceException(
+                                    "issuance payload mismatch on replay for nonce " + issuance.nonce());
+                        }
+                        commitOrIndeterminate(conn, "Prepare issuance");
+                    } catch (Throwable e) {
+                        rollbackForFailure(borrowed, conn, e, entered);
+                        if (e instanceof SQLException sql) {
+                            throw sql;
+                        }
+                        if (e instanceof RuntimeException re) {
+                            throw re;
+                        }
+                        if (e instanceof Error err) {
+                            throw err;
+                        }
+                        throw new RuntimeException(e);
+                    }
+                    restoreAutoCommitAfterCommit(borrowed, conn, "Prepare issuance");
+                    return issuance;
+                });
+            } catch (SQLException e) {
+                throw new PersistenceException("Failed to persist issuance preparation " + issuance.nonce(), e);
+            }
+        } finally {
+            access.unlock();
+        }
+    }
+
+    @Override
+    public com.smile.aceeconomy.domain.BanknoteIssuance markDeliveryStarted(java.util.UUID nonce)
+            throws PersistenceException {
+        return issuanceTransition(nonce,
+                com.smile.aceeconomy.domain.BanknoteIssuanceStatus.DELIVERY_STARTED);
+    }
+
+    @Override
+    public com.smile.aceeconomy.domain.BanknoteIssuance markDelivered(java.util.UUID nonce)
+            throws PersistenceException {
+        return issuanceTransition(nonce,
+                com.smile.aceeconomy.domain.BanknoteIssuanceStatus.DELIVERED);
+    }
+
+    @Override
+    public com.smile.aceeconomy.domain.BanknoteIssuance markRedeemed(java.util.UUID nonce)
+            throws PersistenceException {
+        return issuanceTransition(nonce,
+                com.smile.aceeconomy.domain.BanknoteIssuanceStatus.REDEEMED);
+    }
+
+    @Override
+    public com.smile.aceeconomy.domain.BanknoteIssuance markAborted(java.util.UUID nonce, String reason)
+            throws PersistenceException {
+        if (reason == null || reason.isBlank()) {
+            throw new PersistenceException("abort reason missing");
+        }
+        return issuanceTransition(nonce,
+                com.smile.aceeconomy.domain.BanknoteIssuanceStatus.ABORTED);
+    }
+
+    @Override
+    public com.smile.aceeconomy.domain.BanknoteIssuance markQuarantined(java.util.UUID nonce, String diagnosis)
+            throws PersistenceException {
+        if (diagnosis == null || diagnosis.isBlank()) {
+            throw new PersistenceException("quarantine diagnosis missing");
+        }
+        return issuanceTransition(nonce,
+                com.smile.aceeconomy.domain.BanknoteIssuanceStatus.QUARANTINED);
+    }
+
+    @Override
+    public java.util.Optional<com.smile.aceeconomy.domain.BanknoteIssuance> findByNonce(java.util.UUID nonce)
+            throws PersistenceException {
+        java.util.Objects.requireNonNull(nonce, "nonce");
+        java.util.concurrent.locks.Lock access = accessLock();
+        access.lock();
+        try {
+            ensureInitialized();
+            try {
+                return withBorrowed((borrowed, conn) ->
+                        java.util.Optional.ofNullable(loadIssuanceRow(nonce, conn, false)));
+            } catch (SQLException e) {
+                throw new PersistenceException("Failed to read issuance " + nonce, e);
+            }
+        } finally {
+            access.unlock();
+        }
+    }
+
+    @Override
+    public java.util.List<com.smile.aceeconomy.domain.BanknoteIssuance> listUnfinished()
+            throws PersistenceException {
+        java.util.concurrent.locks.Lock access = accessLock();
+        access.lock();
+        try {
+            ensureInitialized();
+            try {
+                return withBorrowed((borrowed, conn) -> {
+                    java.util.List<com.smile.aceeconomy.domain.BanknoteIssuance> out =
+                            new java.util.ArrayList<>();
+                    for (com.smile.aceeconomy.domain.BanknoteIssuance issuance :
+                            loadAllIssuanceRows(conn)) {
+                        if (issuance.status().isUnfinished()) {
+                            out.add(issuance);
+                        }
+                    }
+                    return out;
+                });
+            } catch (SQLException e) {
+                throw new PersistenceException("Failed to list unfinished issuances", e);
+            }
+        } finally {
+            access.unlock();
+        }
+    }
+
+    /**
+     * Single JDBC transaction: the live issuance row plus the live account
+     * row are locked, the deduction is derived from the live balance, and
+     * the balance update, the debit audit record and the
+     * {@code PREPARED -> DEBIT_COMMITTED} flip commit together. An identical
+     * replay observes {@code REPLAY} with no second charge.
+     */
+    @Override
+    public IssuanceDebitResult commitDebit(java.util.UUID nonce, Transaction preparedWithdrawal,
+                                           DebtPolicy debtPolicy) throws PersistenceException {
+        java.util.Objects.requireNonNull(nonce, "nonce");
+        java.util.Objects.requireNonNull(preparedWithdrawal, "preparedWithdrawal");
+        java.util.Objects.requireNonNull(debtPolicy, "debtPolicy");
+        java.util.concurrent.locks.Lock access = accessLock();
+        access.lock();
+        java.util.concurrent.atomic.AtomicBoolean committedFlag = new java.util.concurrent.atomic.AtomicBoolean(false);
+        java.util.concurrent.atomic.AtomicReference<Amount> beforeRef = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<Amount> afterRef = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<com.smile.aceeconomy.domain.BanknoteIssuance> issuanceRef =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        try {
+            ensureInitialized();
+            try {
+                return withBorrowed((borrowed, conn) -> {
+                    boolean entered = false;
+                    boolean decided = false;
+                    boolean committed = false;
+                    try {
+                        conn.setAutoCommit(false);
+                        entered = true;
+                        com.smile.aceeconomy.domain.BanknoteIssuance stored =
+                                loadIssuanceRow(nonce, conn, true);
+                        if (stored == null) {
+                            cleanupMissingAccount(borrowed, conn);
+                            decided = true;
+                            return IssuanceDebitResult.inconsistentProof();
+                        }
+                        if (stored.status()
+                                != com.smile.aceeconomy.domain.BanknoteIssuanceStatus.PREPARED) {
+                            String replayBinding =
+                                    com.smile.aceeconomy.infrastructure.persistence.IssuanceProofChecks
+                                            .checkDebitBinding(stored, preparedWithdrawal, nonce);
+                            if (replayBinding == null
+                                    && stored.debitTransactionId() != null
+                                    && stored.debitTransactionId()
+                                            .equals(preparedWithdrawal.id().toString())) {
+                                cleanupMissingAccount(borrowed, conn);
+                                decided = true;
+                                return IssuanceDebitResult.replay(stored);
+                            }
+                            cleanupMissingAccount(borrowed, conn);
+                            decided = true;
+                            return IssuanceDebitResult.inconsistentProof();
+                        }
+                        String bindingError =
+                                com.smile.aceeconomy.infrastructure.persistence.IssuanceProofChecks
+                                        .checkDebitBinding(stored, preparedWithdrawal, nonce);
+                        if (bindingError != null) {
+                            cleanupMissingAccount(borrowed, conn);
+                            decided = true;
+                            return IssuanceDebitResult.inconsistentProof();
+                        }
+                        if (debitIdBoundToOtherNonce(
+                                preparedWithdrawal.id().toString(), nonce, conn)
+                                || transactionIdExists(
+                                        preparedWithdrawal.id().toString(), conn)) {
+                            cleanupMissingAccount(borrowed, conn);
+                            decided = true;
+                            return IssuanceDebitResult.inconsistentProof();
+                        }
+                        java.util.Optional<Account> existing = loadForUpdateWithConnection(
+                                preparedWithdrawal.accountId(), conn);
+                        if (existing.isEmpty()) {
+                            cleanupMissingAccount(borrowed, conn);
+                            decided = true;
+                            return IssuanceDebitResult.accountMissing();
+                        }
+                        Account live = existing.get();
+                        String cid = Currency.normalizeId(preparedWithdrawal.currencyId());
+                        Amount current = live.balanceOf(cid);
+                        Amount before = current == null
+                                ? Amount.zero(preparedWithdrawal.amount().scale()) : current;
+                        if (!com.smile.aceeconomy.infrastructure.persistence.IssuanceProofChecks
+                                .scalesAgree(stored.amount(), preparedWithdrawal.amount(), before)) {
+                            cleanupMissingAccount(borrowed, conn);
+                            decided = true;
+                            return IssuanceDebitResult.scaleMismatch();
+                        }
+                        Amount preview;
+                        try {
+                            preview = before.subtract(preparedWithdrawal.amount());
+                        } catch (IllegalArgumentException scaleMismatch) {
+                            cleanupMissingAccount(borrowed, conn);
+                            decided = true;
+                            return IssuanceDebitResult.scaleMismatch();
+                        }
+                        if (com.smile.aceeconomy.infrastructure.persistence.IssuanceProofChecks
+                                .capExceeded(stored.amount(), preparedWithdrawal.amount(),
+                                        before, preview)) {
+                            cleanupMissingAccount(borrowed, conn);
+                            decided = true;
+                            return IssuanceDebitResult.capExceeded();
+                        }
+                        if (!debtPolicy.allows(preview)) {
+                            cleanupMissingAccount(borrowed, conn);
+                            decided = true;
+                            return IssuanceDebitResult.debtLimitExceeded();
+                        }
+                        Account updated;
+                        try {
+                            updated = live.withdraw(cid, preparedWithdrawal.amount());
+                        } catch (IllegalArgumentException scaleMismatch) {
+                            cleanupMissingAccount(borrowed, conn);
+                            decided = true;
+                            return IssuanceDebitResult.scaleMismatch();
+                        }
+                        Amount after = updated.balanceOf(cid);
+                        if (!debtPolicy.allows(after)) {
+                            cleanupMissingAccount(borrowed, conn);
+                            decided = true;
+                            return IssuanceDebitResult.debtLimitExceeded();
+                        }
+                        Transaction authoritative = new Transaction(preparedWithdrawal.id(),
+                                preparedWithdrawal.accountId(), preparedWithdrawal.counterparty(), cid,
+                                preparedWithdrawal.amount(), TransactionType.WITHDRAW, before, after,
+                                preparedWithdrawal.timestamp(), preparedWithdrawal.reason(),
+                                preparedWithdrawal.operatorId(), preparedWithdrawal.operatorName());
+                        com.smile.aceeconomy.domain.BanknoteIssuance updatedIssuance =
+                                stored.withStatus(
+                                        com.smile.aceeconomy.domain.BanknoteIssuanceStatus
+                                                .DEBIT_COMMITTED,
+                                        preparedWithdrawal.id().toString(),
+                                        com.smile.aceeconomy.domain.BanknoteIssuanceReasons
+                                                .issueReason(nonce),
+                                        java.time.Instant.now());
+                        beforeRef.set(before);
+                        afterRef.set(after);
+                        issuanceRef.set(updatedIssuance);
+                        saveAccountRows(updated, conn);
+                        insertTransactionRow(authoritative, false, conn);
+                        upsertIssuanceRow(updatedIssuance, conn);
+                        commitOrIndeterminate(conn, "Issuance debit");
+                        committed = true;
+                        committedFlag.set(true);
+                    } catch (Throwable e) {
+                        if (!decided && !committed) {
+                            rollbackForFailure(borrowed, conn, e, entered);
+                        }
+                        if (e instanceof SQLException sql) {
+                            throw sql;
+                        }
+                        if (e instanceof RuntimeException re) {
+                            throw re;
+                        }
+                        if (e instanceof Error err) {
+                            throw err;
+                        }
+                        throw new RuntimeException(e);
+                    }
+                    try {
+                        restoreAutoCommitAfterCommit(borrowed, conn, "Issuance debit");
+                    } catch (PersistenceException e) {
+                        throw new com.smile.aceeconomy.ports.persistence.CommittedIssuanceDebitException(
+                                e.getMessage(), e.getCause() != null ? e.getCause() : e,
+                                beforeRef.get(), afterRef.get(),
+                                preparedWithdrawal.id(), issuanceRef.get());
+                    }
+                    return IssuanceDebitResult.committed(
+                            beforeRef.get(), afterRef.get(), preparedWithdrawal.id(), issuanceRef.get());
+                });
+            } catch (com.smile.aceeconomy.ports.persistence.CommittedIssuanceDebitException e) {
+                throw e;
+            } catch (PersistenceException e) {
+                if (e.isCommitted() || committedFlag.get()) {
+                    Amount before = beforeRef.get();
+                    Amount after = afterRef.get();
+                    com.smile.aceeconomy.domain.BanknoteIssuance storedIssuance = issuanceRef.get();
+                    if (before != null && after != null && storedIssuance != null) {
+                        throw new com.smile.aceeconomy.ports.persistence.CommittedIssuanceDebitException(
+                                e.getMessage(), e.getCause() != null ? e.getCause() : e,
+                                before, after, preparedWithdrawal.id(), storedIssuance);
+                    }
+                    if (!e.isCommitted()) {
+                        throw new PersistenceException(e.getMessage(),
+                                e.getCause() != null ? e.getCause() : e, true);
+                    }
+                    throw e;
+                }
+                throw e;
+            } catch (SQLException e) {
+                if (committedFlag.get() && beforeRef.get() != null) {
+                    throw new com.smile.aceeconomy.ports.persistence.CommittedIssuanceDebitException(
+                            "Issuance debit committed successfully, but post-commit"
+                                    + " cleanup failed; the data is committed — do not treat this"
+                                    + " as a rollback.",
+                            e, beforeRef.get(), afterRef.get(),
+                            preparedWithdrawal.id(), issuanceRef.get());
+                }
+                throw new PersistenceException("Failed to commit issuance debit " + nonce, e);
+            } catch (RuntimeException | Error e) {
+                if (committedFlag.get() && beforeRef.get() != null) {
+                    if (e instanceof PersistenceException pe && pe.isCommitted()) {
+                        throw pe;
+                    }
+                    Throwable cause = e.getCause();
+                    Throwable committedCause = cause != null ? cause : e;
+                    throw new PersistenceException(
+                            "Issuance debit committed successfully, but post-commit"
+                                    + " cleanup failed; the data is committed — do not treat this"
+                                    + " as a rollback.",
+                            committedCause, true);
+                }
+                throw e;
+            }
+        } finally {
+            access.unlock();
+        }
+    }
+
+    /**
+     * Single JDBC transaction: the nonce consumption, the refund audit
+     * record and the final mark commit together. An already redeemed nonce
+     * stabilises to {@code REDEEMED} with no money write.
+     */
+    @Override
+    public IssuanceRefundResult commitRecoveryRefund(java.util.UUID nonce, Transaction preparedRefund,
+                                                     DebtPolicy debtPolicy) throws PersistenceException {
+        java.util.Objects.requireNonNull(nonce, "nonce");
+        java.util.Objects.requireNonNull(preparedRefund, "preparedRefund");
+        java.util.Objects.requireNonNull(debtPolicy, "debtPolicy");
+        java.util.concurrent.locks.Lock access = accessLock();
+        access.lock();
+        java.util.concurrent.atomic.AtomicBoolean committedFlag = new java.util.concurrent.atomic.AtomicBoolean(false);
+        java.util.concurrent.atomic.AtomicReference<Amount> beforeRef = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<Amount> afterRef = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<com.smile.aceeconomy.domain.BanknoteIssuance> issuanceRef =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        try {
+            ensureInitialized();
+            try {
+                return withBorrowed((borrowed, conn) -> {
+                    boolean entered = false;
+                    boolean decided = false;
+                    boolean committed = false;
+                    try {
+                        conn.setAutoCommit(false);
+                        entered = true;
+                        com.smile.aceeconomy.domain.BanknoteIssuance stored =
+                                loadIssuanceRow(nonce, conn, true);
+                        if (stored == null) {
+                            cleanupMissingAccount(borrowed, conn);
+                            decided = true;
+                            return IssuanceRefundResult.inconsistentProof();
+                        }
+                        if (stored.status()
+                                == com.smile.aceeconomy.domain.BanknoteIssuanceStatus
+                                        .FINAL_VOID_REFUNDED) {
+                            cleanupMissingAccount(borrowed, conn);
+                            decided = true;
+                            return IssuanceRefundResult.replay(stored);
+                        }
+                        if (stored.status()
+                                == com.smile.aceeconomy.domain.BanknoteIssuanceStatus.REDEEMED) {
+                            cleanupMissingAccount(borrowed, conn);
+                            decided = true;
+                            return IssuanceRefundResult.alreadyRedeemed(stored, null);
+                        }
+                        if (stored.status()
+                                        != com.smile.aceeconomy.domain.BanknoteIssuanceStatus
+                                                .DEBIT_COMMITTED
+                                && stored.status()
+                                        != com.smile.aceeconomy.domain.BanknoteIssuanceStatus
+                                                .DELIVERY_STARTED) {
+                            cleanupMissingAccount(borrowed, conn);
+                            decided = true;
+                            return IssuanceRefundResult.inconsistentProof();
+                        }
+                        if (isNonceConsumedRow(nonce, conn)) {
+                            com.smile.aceeconomy.domain.BanknoteIssuance redeemed =
+                                    stored.withStatus(
+                                            com.smile.aceeconomy.domain.BanknoteIssuanceStatus.REDEEMED,
+                                            java.time.Instant.now());
+                            issuanceRef.set(redeemed);
+                            upsertIssuanceRow(redeemed, conn);
+                            commitOrIndeterminate(conn, "Stabilise redeemed issuance");
+                            committed = true;
+                            committedFlag.set(true);
+                            try {
+                                restoreAutoCommitAfterCommit(
+                                        borrowed, conn, "Stabilise redeemed issuance");
+                            } catch (PersistenceException e) {
+                                return IssuanceRefundResult.alreadyRedeemed(redeemed, null);
+                            }
+                            return IssuanceRefundResult.alreadyRedeemed(redeemed, null);
+                        }
+                        String refundBinding =
+                                com.smile.aceeconomy.infrastructure.persistence.IssuanceProofChecks
+                                        .checkRefundBinding(stored, preparedRefund, nonce);
+                        if (refundBinding != null) {
+                            cleanupMissingAccount(borrowed, conn);
+                            decided = true;
+                            return IssuanceRefundResult.inconsistentProof();
+                        }
+                        Transaction debit = stored.debitTransactionId() == null ? null
+                                : loadTransactionById(stored.debitTransactionId(), conn);
+                        String authority =
+                                com.smile.aceeconomy.infrastructure.persistence.IssuanceProofChecks
+                                        .checkDebitAuthority(stored, debit, nonce);
+                        if (authority != null) {
+                            cleanupMissingAccount(borrowed, conn);
+                            decided = true;
+                            return IssuanceRefundResult.inconsistentProof();
+                        }
+                        if (transactionIdExists(preparedRefund.id().toString(), conn)) {
+                            cleanupMissingAccount(borrowed, conn);
+                            decided = true;
+                            return IssuanceRefundResult.inconsistentProof();
+                        }
+                        java.util.Optional<Account> existing = loadForUpdateWithConnection(
+                                preparedRefund.accountId(), conn);
+                        if (existing.isEmpty()) {
+                            cleanupMissingAccount(borrowed, conn);
+                            decided = true;
+                            return IssuanceRefundResult.accountMissing();
+                        }
+                        Account live = existing.get();
+                        String cid = Currency.normalizeId(preparedRefund.currencyId());
+                        Amount current = live.balanceOf(cid);
+                        Amount before = current == null
+                                ? Amount.zero(preparedRefund.amount().scale()) : current;
+                        if (!com.smile.aceeconomy.infrastructure.persistence.IssuanceProofChecks
+                                .scalesAgree(stored.amount(), preparedRefund.amount(), before)) {
+                            cleanupMissingAccount(borrowed, conn);
+                            decided = true;
+                            return IssuanceRefundResult.scaleMismatch();
+                        }
+                        Amount preview;
+                        try {
+                            preview = before.add(preparedRefund.amount());
+                        } catch (IllegalArgumentException scaleMismatch) {
+                            cleanupMissingAccount(borrowed, conn);
+                            decided = true;
+                            return IssuanceRefundResult.scaleMismatch();
+                        }
+                        if (com.smile.aceeconomy.infrastructure.persistence.IssuanceProofChecks
+                                .capExceeded(stored.amount(), preparedRefund.amount(),
+                                        before, preview)) {
+                            cleanupMissingAccount(borrowed, conn);
+                            decided = true;
+                            return IssuanceRefundResult.capExceeded();
+                        }
+                        if (!debtPolicy.allows(preview)) {
+                            cleanupMissingAccount(borrowed, conn);
+                            decided = true;
+                            return IssuanceRefundResult.debtLimitExceeded();
+                        }
+                        Account updated;
+                        try {
+                            updated = live.deposit(cid, preparedRefund.amount());
+                        } catch (IllegalArgumentException scaleMismatch) {
+                            cleanupMissingAccount(borrowed, conn);
+                            decided = true;
+                            return IssuanceRefundResult.scaleMismatch();
+                        }
+                        Amount after = updated.balanceOf(cid);
+                        if (!debtPolicy.allows(after)) {
+                            cleanupMissingAccount(borrowed, conn);
+                            decided = true;
+                            return IssuanceRefundResult.debtLimitExceeded();
+                        }
+                        Transaction authoritative = new Transaction(preparedRefund.id(),
+                                preparedRefund.accountId(), preparedRefund.counterparty(), cid,
+                                preparedRefund.amount(), TransactionType.DEPOSIT, before, after,
+                                preparedRefund.timestamp(), preparedRefund.reason(),
+                                preparedRefund.operatorId(), preparedRefund.operatorName());
+                        com.smile.aceeconomy.domain.BanknoteIssuance finalIssuance =
+                                stored.withStatus(
+                                        com.smile.aceeconomy.domain.BanknoteIssuanceStatus
+                                                .FINAL_VOID_REFUNDED,
+                                        java.time.Instant.now());
+                        beforeRef.set(before);
+                        afterRef.set(after);
+                        issuanceRef.set(finalIssuance);
+                        saveAccountRows(updated, conn);
+                        insertTransactionRow(authoritative, false, conn);
+                        try (PreparedStatement ps = conn.prepareStatement(
+                                V2Schema.nonceInsertSql(dialect))) {
+                            ps.setString(1, nonce.toString());
+                            ps.setString(2, java.time.Instant.now().toString());
+                            if (ps.executeUpdate() != 1) {
+                                try {
+                                    conn.rollback();
+                                } catch (Throwable rollbackFailure) {
+                                    borrowed.markUnsafe();
+                                    if (rollbackFailure instanceof SQLException sql) {
+                                        throw sql;
+                                    }
+                                    if (rollbackFailure instanceof RuntimeException re) {
+                                        throw re;
+                                    }
+                                    if (rollbackFailure instanceof Error err) {
+                                        throw err;
+                                    }
+                                    throw new RuntimeException(rollbackFailure);
+                                }
+                                com.smile.aceeconomy.domain.BanknoteIssuance redeemed =
+                                        stored.withStatus(
+                                                com.smile.aceeconomy.domain.BanknoteIssuanceStatus
+                                                        .REDEEMED,
+                                                java.time.Instant.now());
+                                issuanceRef.set(redeemed);
+                                upsertIssuanceRow(redeemed, conn);
+                                commitOrIndeterminate(conn, "Stabilise redeemed issuance");
+                                committed = true;
+                                committedFlag.set(true);
+                                try {
+                                    restoreAutoCommitAfterCommit(
+                                            borrowed, conn, "Stabilise redeemed issuance");
+                                } catch (PersistenceException e) {
+                                    return IssuanceRefundResult.alreadyRedeemed(redeemed, null);
+                                }
+                                return IssuanceRefundResult.alreadyRedeemed(redeemed, null);
+                            }
+                        }
+                        upsertIssuanceRow(finalIssuance, conn);
+                        commitOrIndeterminate(conn, "Issuance recovery refund");
+                        committed = true;
+                        committedFlag.set(true);
+                    } catch (Throwable e) {
+                        if (!decided && !committed) {
+                            rollbackForFailure(borrowed, conn, e, entered);
+                        }
+                        if (e instanceof SQLException sql) {
+                            throw sql;
+                        }
+                        if (e instanceof RuntimeException re) {
+                            throw re;
+                        }
+                        if (e instanceof Error err) {
+                            throw err;
+                        }
+                        throw new RuntimeException(e);
+                    }
+                    try {
+                        restoreAutoCommitAfterCommit(borrowed, conn, "Issuance recovery refund");
+                    } catch (PersistenceException e) {
+                        throw new com.smile.aceeconomy.ports.persistence.CommittedIssuanceRefundException(
+                                e.getMessage(), e.getCause() != null ? e.getCause() : e,
+                                beforeRef.get(), afterRef.get(),
+                                preparedRefund.id(), issuanceRef.get());
+                    }
+                    if (issuanceRef.get() != null
+                            && issuanceRef.get().status()
+                                    == com.smile.aceeconomy.domain.BanknoteIssuanceStatus.REDEEMED) {
+                        return IssuanceRefundResult.alreadyRedeemed(issuanceRef.get(), null);
+                    }
+                    return IssuanceRefundResult.committed(
+                            beforeRef.get(), afterRef.get(), preparedRefund.id(), issuanceRef.get());
+                });
+            } catch (com.smile.aceeconomy.ports.persistence.CommittedIssuanceRefundException e) {
+                throw e;
+            } catch (PersistenceException e) {
+                if (e.isCommitted() || committedFlag.get()) {
+                    Amount before = beforeRef.get();
+                    Amount after = afterRef.get();
+                    com.smile.aceeconomy.domain.BanknoteIssuance storedIssuance = issuanceRef.get();
+                    if (before != null && after != null && storedIssuance != null
+                            && storedIssuance.status()
+                                    == com.smile.aceeconomy.domain.BanknoteIssuanceStatus
+                                            .FINAL_VOID_REFUNDED) {
+                        throw new com.smile.aceeconomy.ports.persistence.CommittedIssuanceRefundException(
+                                e.getMessage(), e.getCause() != null ? e.getCause() : e,
+                                before, after, preparedRefund.id(), storedIssuance);
+                    }
+                    if (!e.isCommitted()) {
+                        throw new PersistenceException(e.getMessage(),
+                                e.getCause() != null ? e.getCause() : e, true);
+                    }
+                    throw e;
+                }
+                throw e;
+            } catch (SQLException e) {
+                if (committedFlag.get() && beforeRef.get() != null) {
+                    throw new PersistenceException(
+                            "Issuance recovery refund committed successfully, but post-commit"
+                                    + " cleanup failed; the data is committed — do not treat this"
+                                    + " as a rollback.",
+                            e, true);
+                }
+                throw new PersistenceException("Failed to commit issuance recovery refund " + nonce, e);
+            } catch (RuntimeException | Error e) {
+                if (committedFlag.get() && beforeRef.get() != null) {
+                    if (e instanceof PersistenceException pe && pe.isCommitted()) {
+                        throw pe;
+                    }
+                    Throwable cause = e.getCause();
+                    Throwable committedCause = cause != null ? cause : e;
+                    throw new PersistenceException(
+                            "Issuance recovery refund committed successfully, but post-commit"
+                                    + " cleanup failed; the data is committed — do not treat this"
+                                    + " as a rollback.",
+                            committedCause, true);
+                }
+                throw e;
+            }
+        } finally {
+            access.unlock();
+        }
+    }
+
+    private com.smile.aceeconomy.domain.BanknoteIssuance issuanceTransition(
+            java.util.UUID nonce, com.smile.aceeconomy.domain.BanknoteIssuanceStatus next)
+            throws PersistenceException {
+        java.util.Objects.requireNonNull(nonce, "nonce");
+        java.util.concurrent.locks.Lock access = accessLock();
+        access.lock();
+        try {
+            ensureInitialized();
+            try {
+                return withBorrowed((borrowed, conn) -> {
+                    boolean entered = false;
+                    try {
+                        conn.setAutoCommit(false);
+                        entered = true;
+                        com.smile.aceeconomy.domain.BanknoteIssuance current =
+                                loadIssuanceRow(nonce, conn, true);
+                        if (current == null) {
+                            throw new PersistenceException("unknown issuance nonce " + nonce);
+                        }
+                        if (current.status().isTerminal()
+                                && !(current.status()
+                                        == com.smile.aceeconomy.domain.BanknoteIssuanceStatus.DELIVERED
+                                        && next
+                                                == com.smile.aceeconomy.domain.BanknoteIssuanceStatus
+                                                        .REDEEMED)) {
+                            throw new PersistenceException("issuance " + nonce
+                                    + " already terminal (" + current.status() + ")");
+                        }
+                        if (!issuanceAllows(current.status(), next)) {
+                            throw new PersistenceException("illegal issuance transition "
+                                    + current.status() + " -> " + next + " for nonce " + nonce);
+                        }
+                        com.smile.aceeconomy.domain.BanknoteIssuance updated =
+                                current.withStatus(next, java.time.Instant.now());
+                        upsertIssuanceRow(updated, conn);
+                        commitOrIndeterminate(conn, "Issuance transition");
+                    } catch (Throwable e) {
+                        rollbackForFailure(borrowed, conn, e, entered);
+                        if (e instanceof SQLException sql) {
+                            throw sql;
+                        }
+                        if (e instanceof RuntimeException re) {
+                            throw re;
+                        }
+                        if (e instanceof Error err) {
+                            throw err;
+                        }
+                        throw new RuntimeException(e);
+                    }
+                    restoreAutoCommitAfterCommit(borrowed, conn, "Issuance transition");
+                    com.smile.aceeconomy.domain.BanknoteIssuance result =
+                            loadIssuanceRowQuiet(nonce);
+                    if (result == null) {
+                        throw new PersistenceException(
+                                "Issuance transition committed but the record could not be re-read: "
+                                        + nonce);
+                    }
+                    return result;
+                });
+            } catch (SQLException e) {
+                throw new PersistenceException("Failed to persist issuance transition " + nonce, e);
+            }
+        } finally {
+            access.unlock();
+        }
+    }
+
+    /**
+     * Re-read one issuance outside the committing transaction for the
+     * transition receipt. The row was just committed, so a missing row here
+     * is a storage failure, never a replay.
+     */
+    private com.smile.aceeconomy.domain.BanknoteIssuance loadIssuanceRowQuiet(
+            java.util.UUID nonce) throws PersistenceException {
+        try {
+            return withBorrowed((borrowed, conn) -> loadIssuanceRow(nonce, conn, false));
+        } catch (SQLException e) {
+            throw new PersistenceException("Failed to re-read issuance " + nonce, e);
+        }
+    }
+
+    /**
+     * Read one issuance row, optionally locking it for an open-transaction
+     * update. A corrupt row fails fast instead of loading as empty progress.
+     *
+     * @return the issuance, or null when no record was ever prepared
+     */
+    private com.smile.aceeconomy.domain.BanknoteIssuance loadIssuanceRow(
+            java.util.UUID nonce, Connection conn, boolean forUpdate) throws SQLException {
+        String forUpdateClause = forUpdate ? dialect.forUpdateClause() : "";
+        try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT nonce, account_id, currency_id, amount, status,"
+                        + " debit_tx_id, debit_proof, created_at, updated_at FROM "
+                        + V2Schema.issuancesTable() + " WHERE nonce = ?" + forUpdateClause)) {
+            ps.setString(1, nonce.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    return null;
+                }
+                return issuanceFromRow(rs);
+            }
+        }
+    }
+
+    private java.util.List<com.smile.aceeconomy.domain.BanknoteIssuance> loadAllIssuanceRows(
+            Connection conn) throws SQLException {
+        java.util.List<com.smile.aceeconomy.domain.BanknoteIssuance> out = new java.util.ArrayList<>();
+        try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT nonce, account_id, currency_id, amount, status,"
+                        + " debit_tx_id, debit_proof, created_at, updated_at FROM "
+                        + V2Schema.issuancesTable());
+             ResultSet rs = ps.executeQuery()) {
+            while (rs.next()) {
+                out.add(issuanceFromRow(rs));
+            }
+        }
+        return out;
+    }
+
+    private com.smile.aceeconomy.domain.BanknoteIssuance issuanceFromRow(ResultSet rs)
+            throws SQLException {
+        JsonModel.JsonIssuance record = new JsonModel.JsonIssuance();
+        record.nonce = rs.getString("nonce");
+        record.accountId = rs.getString("account_id");
+        record.currencyId = rs.getString("currency_id");
+        record.amount = rs.getString("amount");
+        record.status = rs.getString("status");
+        record.debitTransactionId = rs.getString("debit_tx_id");
+        record.debitProof = rs.getString("debit_proof");
+        record.createdAt = rs.getString("created_at");
+        record.updatedAt = rs.getString("updated_at");
+        Map<String, Object> raw = new LinkedHashMap<>();
+        raw.put("nonce", record.nonce);
+        raw.put("accountId", record.accountId);
+        raw.put("currencyId", record.currencyId);
+        raw.put("amount", record.amount);
+        raw.put("status", record.status);
+        raw.put("debitTransactionId", record.debitTransactionId);
+        raw.put("debitProof", record.debitProof);
+        raw.put("createdAt", record.createdAt);
+        raw.put("updatedAt", record.updatedAt);
+        try {
+            return JsonModel.JsonIssuance.fromJson(raw).toDomain();
+        } catch (PersistenceException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            throw new PersistenceException(
+                    "Invalid issuance record in database for nonce " + record.nonce
+                            + " (" + e.getMessage() + ")", e);
+        }
+    }
+
+    private void upsertIssuanceRow(
+            com.smile.aceeconomy.domain.BanknoteIssuance issuance, Connection conn)
+            throws SQLException {
+        JsonModel.JsonIssuance record = JsonModel.JsonIssuance.fromDomain(issuance);
+        try (PreparedStatement ps = conn.prepareStatement(
+                "REPLACE INTO " + V2Schema.issuancesTable()
+                        + " (nonce, account_id, currency_id, amount, status,"
+                        + " debit_tx_id, debit_proof, created_at, updated_at)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+            ps.setString(1, record.nonce);
+            ps.setString(2, record.accountId);
+            ps.setString(3, record.currencyId);
+            ps.setString(4, record.amount);
+            ps.setString(5, record.status);
+            ps.setString(6, record.debitTransactionId);
+            ps.setString(7, record.debitProof);
+            ps.setString(8, record.createdAt);
+            ps.setString(9, record.updatedAt);
+            ps.executeUpdate();
+        }
+    }
+
+    private void insertIssuanceRowIgnore(
+            com.smile.aceeconomy.domain.BanknoteIssuance issuance, Connection conn)
+            throws SQLException {
+        JsonModel.JsonIssuance record = JsonModel.JsonIssuance.fromDomain(issuance);
+        try (PreparedStatement ps = conn.prepareStatement(
+                dialect.insertIgnore() + " INTO " + V2Schema.issuancesTable()
+                        + " (nonce, account_id, currency_id, amount, status,"
+                        + " debit_tx_id, debit_proof, created_at, updated_at)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+            ps.setString(1, record.nonce);
+            ps.setString(2, record.accountId);
+            ps.setString(3, record.currencyId);
+            ps.setString(4, record.amount);
+            ps.setString(5, record.status);
+            ps.setString(6, record.debitTransactionId);
+            ps.setString(7, record.debitProof);
+            ps.setString(8, record.createdAt);
+            ps.setString(9, record.updatedAt);
+            ps.executeUpdate();
+        }
+    }
+
+    private boolean transactionIdExists(String transactionId, Connection conn) throws SQLException {
+        try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT 1 FROM " + V2Schema.transactionsTable() + " WHERE id = ?")) {
+            ps.setString(1, transactionId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        }
+    }
+
+    private Transaction loadTransactionById(String transactionId, Connection conn)
+            throws SQLException {
+        try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT * FROM " + V2Schema.transactionsTable() + " WHERE id = ?")) {
+            ps.setString(1, transactionId);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<Transaction> rows = readTransactions(rs);
+                return rows.isEmpty() ? null : rows.get(0);
+            }
+        }
+    }
+
+    private boolean debitIdBoundToOtherNonce(
+            String debitTransactionId, java.util.UUID self, Connection conn) throws SQLException {
+        try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT 1 FROM " + V2Schema.issuancesTable()
+                        + " WHERE debit_tx_id = ? AND nonce <> ?")) {
+            ps.setString(1, debitTransactionId);
+            ps.setString(2, self.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        }
+    }
+
+    private boolean isNonceConsumedRow(java.util.UUID nonce, Connection conn) throws SQLException {
+        try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT nonce FROM " + V2Schema.noncesTable() + " WHERE nonce = ?")) {
+            ps.setString(1, nonce.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        }
+    }
+
+    private static boolean issuanceAllows(
+            com.smile.aceeconomy.domain.BanknoteIssuanceStatus from,
+            com.smile.aceeconomy.domain.BanknoteIssuanceStatus to) {
+        return switch (to) {
+            case DELIVERY_STARTED -> from == com.smile.aceeconomy.domain.BanknoteIssuanceStatus.DEBIT_COMMITTED;
+            case DELIVERED -> from == com.smile.aceeconomy.domain.BanknoteIssuanceStatus.DELIVERY_STARTED;
+            case REDEEMED -> from == com.smile.aceeconomy.domain.BanknoteIssuanceStatus.DEBIT_COMMITTED
+                    || from == com.smile.aceeconomy.domain.BanknoteIssuanceStatus.DELIVERY_STARTED
+                    || from == com.smile.aceeconomy.domain.BanknoteIssuanceStatus.DELIVERED;
+            case ABORTED -> from == com.smile.aceeconomy.domain.BanknoteIssuanceStatus.PREPARED;
+            case QUARANTINED -> from.isUnfinished();
+            default -> false;
+        };
     }
 
     // ---------------- internals ----------------
@@ -2508,6 +3464,7 @@ public final class SqlBackend
                 st.executeUpdate("DROP TABLE IF EXISTS " + V2Schema.accountsTable());
                 st.executeUpdate("DROP TABLE IF EXISTS " + V2Schema.noncesTable());
                 st.executeUpdate("DROP TABLE IF EXISTS " + V2Schema.operationAuditsTable());
+                st.executeUpdate("DROP TABLE IF EXISTS " + V2Schema.issuancesTable());
                 st.executeUpdate("DROP TABLE IF EXISTS " + V2Schema.schemaTable());
             }
             conn.commit();
@@ -2764,6 +3721,35 @@ public final class SqlBackend
                 throw new PersistenceException("Failed to read operation audits for backup", e);
             }
         }
+        boolean hasIssuancesTable;
+        try {
+            hasIssuancesTable = tableExists(V2Schema.issuancesTable(), conn);
+        } catch (SQLException e) {
+            throw new PersistenceException("Failed to read issuances for backup", e);
+        }
+        if (hasIssuancesTable) {
+            try (PreparedStatement ips = conn.prepareStatement(
+                    "SELECT nonce, account_id, currency_id, amount, status,"
+                            + " debit_tx_id, debit_proof, created_at, updated_at FROM "
+                            + V2Schema.issuancesTable());
+                 ResultSet irs = ips.executeQuery()) {
+                while (irs.next()) {
+                    JsonModel.JsonIssuance record = new JsonModel.JsonIssuance();
+                    record.nonce = irs.getString("nonce");
+                    record.accountId = irs.getString("account_id");
+                    record.currencyId = irs.getString("currency_id");
+                    record.amount = irs.getString("amount");
+                    record.status = irs.getString("status");
+                    record.debitTransactionId = irs.getString("debit_tx_id");
+                    record.debitProof = irs.getString("debit_proof");
+                    record.createdAt = irs.getString("created_at");
+                    record.updatedAt = irs.getString("updated_at");
+                    model.issuances.put(record.nonce, record);
+                }
+            } catch (SQLException e) {
+                throw new PersistenceException("Failed to read issuances for backup", e);
+            }
+        }
         return model;
     }
 
@@ -2818,6 +3804,41 @@ public final class SqlBackend
                 ps.setString(6, audit.timestamp);
                 ps.setString(7, audit.sourceBackupId);
                 ps.setString(8, audit.safetyBackupId);
+                ps.addBatch();
+            }
+            ps.executeBatch();
+        }
+    }
+
+    /**
+     * Writes the candidate's issuance progress inside an OPEN transaction (no
+     * commit / no autocommit handling), so progress is replaced together with
+     * the world it describes. A candidate that carries no progress writes
+     * nothing, which also covers a database whose table has not been created
+     * yet. Called by the restore path after the matching delete of the table.
+     */
+    private void insertIssuances(JsonModel candidate, Connection conn) throws SQLException {
+        if (candidate.issuances.isEmpty()) {
+            return;
+        }
+        if (!tableExists(V2Schema.issuancesTable(), conn)) {
+            return;
+        }
+        try (PreparedStatement ps = conn.prepareStatement(
+                "INSERT INTO " + V2Schema.issuancesTable()
+                        + " (nonce, account_id, currency_id, amount, status,"
+                        + " debit_tx_id, debit_proof, created_at, updated_at)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+            for (JsonModel.JsonIssuance record : candidate.issuances.values()) {
+                ps.setString(1, record.nonce);
+                ps.setString(2, record.accountId);
+                ps.setString(3, record.currencyId);
+                ps.setString(4, record.amount);
+                ps.setString(5, record.status);
+                ps.setString(6, record.debitTransactionId);
+                ps.setString(7, record.debitProof);
+                ps.setString(8, record.createdAt);
+                ps.setString(9, record.updatedAt);
                 ps.addBatch();
             }
             ps.executeBatch();

@@ -133,6 +133,9 @@ class SqlBackendRuntimeCleanupTest {
         when(connection.createStatement()).thenReturn(statement);
         PreparedStatement ps = mock(PreparedStatement.class);
         when(connection.prepareStatement(anyString())).thenReturn(ps);
+        ResultSet emptyRs = mock(ResultSet.class);
+        when(emptyRs.next()).thenReturn(false);
+        when(ps.executeQuery()).thenReturn(emptyRs);
         doThrow(new RuntimeException("restore-boom")).when(ps).executeUpdate();
 
         SqlBackend backend = new SqlBackend(new SqlConnectionProvider(connection), new SqliteDialect());
@@ -405,6 +408,9 @@ class SqlBackendRuntimeCleanupTest {
         when(connection.createStatement()).thenReturn(statement);
         PreparedStatement ps = mock(PreparedStatement.class);
         when(connection.prepareStatement(anyString())).thenReturn(ps);
+        ResultSet emptyRs = mock(ResultSet.class);
+        when(emptyRs.next()).thenReturn(false);
+        when(ps.executeQuery()).thenReturn(emptyRs);
         when(ps.executeUpdate()).thenReturn(1);
         when(ps.executeBatch()).thenReturn(new int[]{1});
 
@@ -438,6 +444,9 @@ class SqlBackendRuntimeCleanupTest {
         when(connection.createStatement()).thenReturn(statement);
         PreparedStatement ps = mock(PreparedStatement.class);
         when(connection.prepareStatement(anyString())).thenReturn(ps);
+        ResultSet emptyRs = mock(ResultSet.class);
+        when(emptyRs.next()).thenReturn(false);
+        when(ps.executeQuery()).thenReturn(emptyRs);
         when(ps.executeUpdate()).thenReturn(1);
         when(ps.executeBatch()).thenReturn(new int[]{1});
 
@@ -504,6 +513,9 @@ class SqlBackendRuntimeCleanupTest {
         when(connection.createStatement()).thenReturn(statement);
         PreparedStatement ps = mock(PreparedStatement.class);
         when(connection.prepareStatement(anyString())).thenReturn(ps);
+        ResultSet emptyRs = mock(ResultSet.class);
+        when(emptyRs.next()).thenReturn(false);
+        when(ps.executeQuery()).thenReturn(emptyRs);
         doThrow(new AssertionError("restore-error")).when(ps).executeUpdate();
 
         SqlBackend backend = new SqlBackend(new SqlConnectionProvider(connection), new SqliteDialect());

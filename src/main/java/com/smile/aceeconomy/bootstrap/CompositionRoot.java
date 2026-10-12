@@ -135,6 +135,7 @@ public final class CompositionRoot {
     // service or its AceLib-owned listener.
     private GuiScope bankGuiScope;
     private com.smile.aceeconomy.infrastructure.banknote.BanknoteFlow banknoteFlow;
+    private com.smile.aceeconomy.application.BanknoteIssuanceStartupRunner issuanceRecoveryRunner;
     private CommandRegistry commandRegistry;
     // Bound to the transaction publisher and dropped on presentation stop. Every committed
     // balance mutation invalidates the shared leaderboard snapshot, so /baltop (and the PAPI
@@ -424,6 +425,43 @@ public final class CompositionRoot {
         ProductionAdapters.BankUseCase bankUseCase =
                 new ProductionAdapters.BankUseCase(api, economy, currencies, banknotes,
                         banknoteValidator, redemptions, banknoteFlow);
+        // Durable atomic issuance core: the SAME backend-backed instance owns
+        // accounts, transactions, nonces and issuances, so the command entry
+        // (BanknoteFlow.withdraw) and the GUI entry (withdrawCommit via the same
+        // flow) both deduct through EconomyService.issueBanknote plus PREPARED
+        // and the delivery markers — never api.withdraw plus a standalone mark.
+        // Startup recovery runs once on the existing dispatch watchdog
+        // scheduler (no new pool); a failure keeps the plugin enabled with a
+        // loud diagnosis while the barrier stays closed for new managed
+        // issuance and managed redemption. Queries and legacy v2 notes stay
+        // allowed.
+        if (accounts instanceof com.smile.aceeconomy.ports.persistence.AtomicBanknoteIssuanceStore atomic) {
+            banknoteFlow.bindAtomicIssuanceStore(atomic);
+            bankUseCase.bindAtomicIssuanceStore(atomic);
+            com.smile.aceeconomy.application.BanknoteIssuanceRecovery recovery =
+                    new com.smile.aceeconomy.application.BanknoteIssuanceRecovery(atomic);
+            com.smile.aceeconomy.application.BanknoteIssuanceStartupRunner runner =
+                    new com.smile.aceeconomy.application.BanknoteIssuanceStartupRunner(recovery);
+            issuanceRecoveryRunner = runner;
+            banknoteFlow.bindStartupRecovery(runner);
+            bankUseCase.bindStartupRecovery(runner);
+            try {
+                boolean finished = runner.scheduleOnce(dispatchWatchdogs);
+                if (!finished) {
+                    plugin.getLogger().severe("Banknote issuance startup recovery did not complete;"
+                            + " pending rows retained, new managed issuance and managed redemption"
+                            + " stay blocked: " + runner.lastReport().diagnoses());
+                } else if (!runner.lastReport().diagnoses().isEmpty()) {
+                    plugin.getLogger().warning("Banknote issuance startup recovery finished with diagnoses: "
+                            + runner.lastReport().diagnoses());
+                }
+            } catch (Throwable recoveryFailure) {
+                plugin.getLogger().severe("Banknote issuance startup recovery threw ("
+                        + recoveryFailure.getClass().getSimpleName()
+                        + "); pending rows retained, new managed issuance and managed redemption"
+                        + " stay blocked");
+            }
+        }
         // The bank GUI layout is operator-owned: the whole section is parsed and
         // validated before any session or listener is built, so a malformed
         // bank-gui block aborts the presentation slice instead of leaving a

@@ -19,7 +19,7 @@ final class V2SchemaContractTest {
     @Test
     void sqliteDdlUsesTextStorageAndNoEngineClause() {
         List<String> ddl = V2Schema.ddlStatements(new SqliteDialect());
-        assertEquals(6, ddl.size());
+        assertEquals(7, ddl.size());
         for (String stmt : ddl) {
             assertTrue(stmt.contains("CREATE TABLE IF NOT EXISTS"),
                     "SQLite DDL must be idempotent (IF NOT EXISTS): " + stmt);
@@ -38,12 +38,19 @@ final class V2SchemaContractTest {
                 "SQLite DDL must create the independent operation audit table: " + operationTable);
         assertTrue(operationTable.contains("operation TEXT NOT NULL"),
                 "SQLite operation audit table records the operation: " + operationTable);
+        String issuanceTable = ddl.get(6);
+        assertTrue(issuanceTable.contains(V2Schema.issuancesTable()),
+                "SQLite DDL must create the durable issuance table: " + issuanceTable);
+        assertTrue(issuanceTable.contains("nonce TEXT PRIMARY KEY"),
+                "SQLite issuance table keys on the nonce itself: " + issuanceTable);
+        assertTrue(issuanceTable.contains("status TEXT NOT NULL"),
+                "SQLite issuance table records the status: " + issuanceTable);
     }
 
     @Test
     void mysqlDdlUsesInnoDBAndVarcharBoolean() {
         List<String> ddl = V2Schema.ddlStatements(new MySqlDialect());
-        assertEquals(6, ddl.size());
+        assertEquals(7, ddl.size());
         for (String stmt : ddl) {
             assertTrue(stmt.contains("CREATE TABLE IF NOT EXISTS"),
                     "MySQL DDL must be idempotent (IF NOT EXISTS): " + stmt);
@@ -64,6 +71,13 @@ final class V2SchemaContractTest {
                 "MySQL DDL must create the independent operation audit table: " + operationTable);
         assertTrue(operationTable.contains("operation VARCHAR(32) NOT NULL"),
                 "MySQL operation audit table records the operation: " + operationTable);
+        String issuanceTable = ddl.get(6);
+        assertTrue(issuanceTable.contains(V2Schema.issuancesTable()),
+                "MySQL DDL must create the durable issuance table: " + issuanceTable);
+        assertTrue(issuanceTable.contains("nonce VARCHAR(36) PRIMARY KEY"),
+                "MySQL issuance table keys on the nonce itself: " + issuanceTable);
+        assertTrue(issuanceTable.contains("status VARCHAR(32) NOT NULL"),
+                "MySQL issuance table records the status: " + issuanceTable);
     }
 
     @Test

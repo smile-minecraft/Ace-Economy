@@ -12,12 +12,15 @@ import com.smile.aceeconomy.ports.AccountRepository;
 import com.smile.aceeconomy.ports.operations.LeaderboardRepository;
 import com.smile.aceeconomy.ports.operations.LeaderboardRow;
 import com.smile.aceeconomy.ports.persistence.AdminMutationResult;
+import com.smile.aceeconomy.ports.persistence.AtomicBanknoteIssuanceStore;
 import com.smile.aceeconomy.ports.persistence.AtomicImportStore;
 import com.smile.aceeconomy.ports.persistence.AtomicRedemptionStore;
 import com.smile.aceeconomy.ports.persistence.AtomicReversalStore;
 import com.smile.aceeconomy.ports.persistence.AtomicTransferStore;
 import com.smile.aceeconomy.ports.persistence.CommittedImportException;
 import com.smile.aceeconomy.ports.persistence.CommittedTransferException;
+import com.smile.aceeconomy.ports.persistence.IssuanceDebitResult;
+import com.smile.aceeconomy.ports.persistence.IssuanceRefundResult;
 import com.smile.aceeconomy.ports.persistence.NonceStore;
 import com.smile.aceeconomy.ports.persistence.PersistenceException;
 import com.smile.aceeconomy.ports.persistence.PersistenceLifecycle;
@@ -87,12 +90,18 @@ public final class JsonPersistenceBackend
         implements AccountRepository, TransactionRepository, PersistenceLifecycle,
         AtomicReversalStore, AtomicRedemptionStore, AtomicTransferStore, AtomicImportStore,
         com.smile.aceeconomy.ports.persistence.AtomicAdminMutationStore,
+        AtomicBanknoteIssuanceStore,
         NonceStore, LeaderboardRepository,
         com.smile.aceeconomy.ports.operations.OperationAuditStore {
 
     private final Path dataFile;
     /** Instance-local only: not a file lock, not cross-process. See class javadoc. */
     private final ReentrantLock lock = new ReentrantLock();
+    /**
+     * Durable issuance progress, kept in the additive {@code issuances} model
+     * section and published with the same single-publish commit as balances
+     * and audit rows. Guarded by {@link #lock}.
+     */
     private JsonModel model = new JsonModel();
     private volatile boolean initialized = false;
     private final JsonFilePublisher publisher;
@@ -307,6 +316,18 @@ public final class JsonPersistenceBackend
         try {
             ensureInitialized();
             ensureWritable();
+            // Restore guard inside the exclusive window after the safety
+            // backup: live issuance progress must survive the swap identically,
+            // except a pre-upgrade candidate without issuance progress, which
+            // may only replace live progress that cannot leave a redeemable
+            // note behind (deduction-free, redeemed or aborted records). A live
+            // delivered, possibly-delivered, refunded-voided or undecidable record
+            // refuses the empty candidate so the balance cannot revert while a
+            // physical note stays or becomes redeemable again.
+            // Candidate newcomers with debit evidence must carry their
+            // authoritative debit. A violation throws before the live model
+            // moves, so live bytes are unchanged.
+            SnapshotPreflight.checkIssuanceRestoreGuard(model, candidate);
             JsonModel previous = model;
             try {
                 model = candidate;
@@ -1004,6 +1025,464 @@ public final class JsonPersistenceBackend
         }
     }
 
+    // ---------------- durable issuance ----------------
+
+    /**
+     * Durable issuance progress in the additive {@code issuances} model
+     * section. {@code prepare} publishes the {@code PREPARED} record before
+     * any deduction; {@link #commitDebit} and {@link #commitRecoveryRefund}
+     * commit the money movement together with the progress flip in ONE
+     * publish, so a deduction can never succeed while the issuance still
+     * reads {@code PREPARED}. Every marker enforces its legal-state
+     * compare-and-swap in code. Money-bearing states are reached only
+     * through the two atomic commits, never through the markers below.
+     */
+    @Override
+    public com.smile.aceeconomy.domain.BanknoteIssuance prepare(
+            com.smile.aceeconomy.domain.BanknoteIssuance issuance) throws PersistenceException {
+        java.util.Objects.requireNonNull(issuance, "issuance");
+        lock.lock();
+        try {
+            ensureInitialized();
+            ensureWritable();
+            if (issuance.status() != com.smile.aceeconomy.domain.BanknoteIssuanceStatus.PREPARED) {
+                throw new PersistenceException("prepare requires PREPARED status, got " + issuance.status());
+            }
+            if (issuance.debitTransactionId() != null || issuance.debitProof() != null) {
+                throw new PersistenceException("prepare must carry no debit evidence");
+            }
+            JsonModel.JsonIssuance existing = model.issuances.get(issuance.nonce().toString());
+            if (existing != null) {
+                com.smile.aceeconomy.domain.BanknoteIssuance stored = existing.toDomain();
+                if (!stored.accountId().equals(issuance.accountId())
+                        || !stored.currencyId().equals(issuance.currencyId())
+                        || !stored.amount().equals(issuance.amount())) {
+                    throw new PersistenceException(
+                            "issuance payload mismatch on replay for nonce " + issuance.nonce());
+                }
+                return stored;
+            }
+            JsonModel previous = model;
+            JsonModel next = shallowCopy(previous);
+            next.issuances.put(issuance.nonce().toString(), JsonModel.JsonIssuance.fromDomain(issuance));
+            commit(previous, next, "Failed to persist issuance preparation " + issuance.nonce());
+            return issuance;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    @Override
+    public com.smile.aceeconomy.domain.BanknoteIssuance markDeliveryStarted(UUID nonce)
+            throws PersistenceException {
+        return issuanceTransition(nonce,
+                com.smile.aceeconomy.domain.BanknoteIssuanceStatus.DELIVERY_STARTED);
+    }
+
+    @Override
+    public com.smile.aceeconomy.domain.BanknoteIssuance markDelivered(UUID nonce)
+            throws PersistenceException {
+        return issuanceTransition(nonce,
+                com.smile.aceeconomy.domain.BanknoteIssuanceStatus.DELIVERED);
+    }
+
+    @Override
+    public com.smile.aceeconomy.domain.BanknoteIssuance markRedeemed(UUID nonce)
+            throws PersistenceException {
+        return issuanceTransition(nonce,
+                com.smile.aceeconomy.domain.BanknoteIssuanceStatus.REDEEMED);
+    }
+
+    @Override
+    public com.smile.aceeconomy.domain.BanknoteIssuance markAborted(UUID nonce, String reason)
+            throws PersistenceException {
+        if (reason == null || reason.isBlank()) {
+            throw new PersistenceException("abort reason missing");
+        }
+        return issuanceTransition(nonce,
+                com.smile.aceeconomy.domain.BanknoteIssuanceStatus.ABORTED);
+    }
+
+    @Override
+    public com.smile.aceeconomy.domain.BanknoteIssuance markQuarantined(UUID nonce, String diagnosis)
+            throws PersistenceException {
+        if (diagnosis == null || diagnosis.isBlank()) {
+            throw new PersistenceException("quarantine diagnosis missing");
+        }
+        return issuanceTransition(nonce,
+                com.smile.aceeconomy.domain.BanknoteIssuanceStatus.QUARANTINED);
+    }
+
+    @Override
+    public Optional<com.smile.aceeconomy.domain.BanknoteIssuance> findByNonce(UUID nonce)
+            throws PersistenceException {
+        java.util.Objects.requireNonNull(nonce, "nonce");
+        lock.lock();
+        try {
+            ensureInitialized();
+            JsonModel.JsonIssuance stored = model.issuances.get(nonce.toString());
+            if (stored == null) {
+                return Optional.empty();
+            }
+            return Optional.of(stored.toDomain());
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    @Override
+    public List<com.smile.aceeconomy.domain.BanknoteIssuance> listUnfinished()
+            throws PersistenceException {
+        lock.lock();
+        try {
+            ensureInitialized();
+            List<com.smile.aceeconomy.domain.BanknoteIssuance> out = new ArrayList<>();
+            for (JsonModel.JsonIssuance stored : model.issuances.values()) {
+                com.smile.aceeconomy.domain.BanknoteIssuance issuance = stored.toDomain();
+                if (issuance.status().isUnfinished()) {
+                    out.add(issuance);
+                }
+            }
+            return out;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * Atomically deduct plus flip {@code PREPARED -> DEBIT_COMMITTED} in ONE
+     * publish with full proof verification. First-writer-wins per nonce: an
+     * identical replay observes {@code REPLAY} with no second charge.
+     */
+    @Override
+    public IssuanceDebitResult commitDebit(UUID nonce, Transaction preparedWithdrawal,
+                                           DebtPolicy debtPolicy) throws PersistenceException {
+        java.util.Objects.requireNonNull(nonce, "nonce");
+        java.util.Objects.requireNonNull(preparedWithdrawal, "preparedWithdrawal");
+        java.util.Objects.requireNonNull(debtPolicy, "debtPolicy");
+        lock.lock();
+        try {
+            ensureInitialized();
+            ensureWritable();
+            JsonModel.JsonIssuance raw = model.issuances.get(nonce.toString());
+            if (raw == null) {
+                return IssuanceDebitResult.inconsistentProof();
+            }
+            com.smile.aceeconomy.domain.BanknoteIssuance stored = raw.toDomain();
+            if (stored.status() != com.smile.aceeconomy.domain.BanknoteIssuanceStatus.PREPARED) {
+                String replayBinding =
+                        com.smile.aceeconomy.infrastructure.persistence.IssuanceProofChecks
+                                .checkDebitBinding(stored, preparedWithdrawal, nonce);
+                if (replayBinding == null
+                        && stored.debitTransactionId() != null
+                        && stored.debitTransactionId().equals(preparedWithdrawal.id().toString())) {
+                    return IssuanceDebitResult.replay(stored);
+                }
+                return IssuanceDebitResult.inconsistentProof();
+            }
+            String bindingError =
+                    com.smile.aceeconomy.infrastructure.persistence.IssuanceProofChecks
+                            .checkDebitBinding(stored, preparedWithdrawal, nonce);
+            if (bindingError != null) {
+                return IssuanceDebitResult.inconsistentProof();
+            }
+            String newDebitId = preparedWithdrawal.id().toString();
+            for (JsonModel.JsonIssuance other : model.issuances.values()) {
+                com.smile.aceeconomy.domain.BanknoteIssuance o = other.toDomain();
+                if (!o.nonce().equals(nonce)
+                        && newDebitId.equals(o.debitTransactionId())) {
+                    return IssuanceDebitResult.inconsistentProof();
+                }
+            }
+            for (JsonModel.JsonTransaction t : model.transactions) {
+                if (t.id.equals(newDebitId)) {
+                    return IssuanceDebitResult.inconsistentProof();
+                }
+            }
+            JsonModel.JsonAccount storedAcc =
+                    model.accounts.get(preparedWithdrawal.accountId().toString());
+            if (storedAcc == null) {
+                return IssuanceDebitResult.accountMissing();
+            }
+            com.smile.aceeconomy.domain.Account live = toAccount(storedAcc);
+            String cid = Currency.normalizeId(preparedWithdrawal.currencyId());
+            com.smile.aceeconomy.domain.Amount before = live.balanceOf(cid);
+            if (before == null) {
+                before = Amount.zero(preparedWithdrawal.amount().scale());
+            }
+            if (!com.smile.aceeconomy.infrastructure.persistence.IssuanceProofChecks
+                    .scalesAgree(stored.amount(), preparedWithdrawal.amount(), before)) {
+                return IssuanceDebitResult.scaleMismatch();
+            }
+            com.smile.aceeconomy.domain.Amount after;
+            try {
+                after = before.subtract(preparedWithdrawal.amount());
+            } catch (IllegalArgumentException scaleMismatch) {
+                return IssuanceDebitResult.scaleMismatch();
+            }
+            if (com.smile.aceeconomy.infrastructure.persistence.IssuanceProofChecks
+                    .capExceeded(stored.amount(), preparedWithdrawal.amount(), before, after)) {
+                return IssuanceDebitResult.capExceeded();
+            }
+            if (!debtPolicy.allows(after)) {
+                return IssuanceDebitResult.debtLimitExceeded();
+            }
+            com.smile.aceeconomy.domain.Account updated;
+            try {
+                updated = live.withdraw(cid, preparedWithdrawal.amount());
+            } catch (IllegalArgumentException scaleMismatch) {
+                return IssuanceDebitResult.scaleMismatch();
+            }
+            after = updated.balanceOf(cid);
+            if (!debtPolicy.allows(after)) {
+                return IssuanceDebitResult.debtLimitExceeded();
+            }
+            Transaction authoritative = new Transaction(preparedWithdrawal.id(),
+                    preparedWithdrawal.accountId(), preparedWithdrawal.counterparty(), cid,
+                    preparedWithdrawal.amount(), TransactionType.WITHDRAW, before, after,
+                    preparedWithdrawal.timestamp(), preparedWithdrawal.reason(),
+                    preparedWithdrawal.operatorId(), preparedWithdrawal.operatorName());
+            com.smile.aceeconomy.domain.BanknoteIssuance updatedIssuance = stored.withStatus(
+                    com.smile.aceeconomy.domain.BanknoteIssuanceStatus.DEBIT_COMMITTED,
+                    preparedWithdrawal.id().toString(),
+                    com.smile.aceeconomy.domain.BanknoteIssuanceReasons.issueReason(nonce),
+                    java.time.Instant.now());
+            JsonModel previous = model;
+            JsonModel next = shallowCopy(previous);
+            next.accounts.put(updated.owner().toString(), toJsonAccount(updated));
+            insertInto(next, authoritative);
+            next.issuances.put(nonce.toString(),
+                    JsonModel.JsonIssuance.fromDomain(updatedIssuance));
+            try {
+                commit(previous, next, "Failed to persist issuance debit " + nonce);
+            } catch (PersistenceException e) {
+                if (e.isCommitted()) {
+                    throw new com.smile.aceeconomy.ports.persistence.CommittedIssuanceDebitException(
+                            e.getMessage(), e.getCause() != null ? e.getCause() : e,
+                            before, after, preparedWithdrawal.id(), updatedIssuance);
+                }
+                throw e;
+            }
+            return IssuanceDebitResult.committed(before, after,
+                    preparedWithdrawal.id(), updatedIssuance);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * Atomically consume the nonce plus refund plus final-mark in ONE publish
+     * with full proof verification. An already redeemed nonce stabilises to
+     * {@code REDEEMED} with no money write.
+     */
+    @Override
+    public IssuanceRefundResult commitRecoveryRefund(UUID nonce, Transaction preparedRefund,
+                                                     DebtPolicy debtPolicy) throws PersistenceException {
+        java.util.Objects.requireNonNull(nonce, "nonce");
+        java.util.Objects.requireNonNull(preparedRefund, "preparedRefund");
+        java.util.Objects.requireNonNull(debtPolicy, "debtPolicy");
+        lock.lock();
+        try {
+            ensureInitialized();
+            ensureWritable();
+            JsonModel.JsonIssuance raw = model.issuances.get(nonce.toString());
+            if (raw == null) {
+                return IssuanceRefundResult.inconsistentProof();
+            }
+            com.smile.aceeconomy.domain.BanknoteIssuance stored = raw.toDomain();
+            if (stored.status()
+                    == com.smile.aceeconomy.domain.BanknoteIssuanceStatus.FINAL_VOID_REFUNDED) {
+                return IssuanceRefundResult.replay(stored);
+            }
+            if (stored.status()
+                    == com.smile.aceeconomy.domain.BanknoteIssuanceStatus.REDEEMED) {
+                return IssuanceRefundResult.alreadyRedeemed(stored, null);
+            }
+            if (stored.status()
+                            != com.smile.aceeconomy.domain.BanknoteIssuanceStatus.DEBIT_COMMITTED
+                    && stored.status()
+                            != com.smile.aceeconomy.domain.BanknoteIssuanceStatus.DELIVERY_STARTED) {
+                return IssuanceRefundResult.inconsistentProof();
+            }
+            boolean nonceConsumed = model.nonces.containsKey(nonce.toString());
+            if (nonceConsumed) {
+                com.smile.aceeconomy.domain.BanknoteIssuance redeemed =
+                        stored.withStatus(
+                                com.smile.aceeconomy.domain.BanknoteIssuanceStatus.REDEEMED,
+                                java.time.Instant.now());
+                JsonModel previous = model;
+                JsonModel next = shallowCopy(previous);
+                next.issuances.put(nonce.toString(),
+                        JsonModel.JsonIssuance.fromDomain(redeemed));
+                try {
+                    commit(previous, next,
+                            "Failed to stabilise redeemed issuance " + nonce);
+                } catch (PersistenceException e) {
+                    if (e.isCommitted()) {
+                        com.smile.aceeconomy.domain.BanknoteIssuance committedView = redeemed;
+                        try {
+                            JsonModel.JsonIssuance reloaded =
+                                    model.issuances.get(nonce.toString());
+                            if (reloaded != null) {
+                                committedView = reloaded.toDomain();
+                            }
+                        } catch (RuntimeException ignored) {
+                            // Keep the locally built view when re-read fails.
+                        }
+                        return IssuanceRefundResult.alreadyRedeemed(committedView, null);
+                    }
+                    throw e;
+                }
+                return IssuanceRefundResult.alreadyRedeemed(redeemed, null);
+            }
+            String refundBinding =
+                    com.smile.aceeconomy.infrastructure.persistence.IssuanceProofChecks
+                            .checkRefundBinding(stored, preparedRefund, nonce);
+            if (refundBinding != null) {
+                return IssuanceRefundResult.inconsistentProof();
+            }
+            Transaction debit = null;
+            if (stored.debitTransactionId() != null) {
+                for (JsonModel.JsonTransaction t : model.transactions) {
+                    if (t.id.equals(stored.debitTransactionId())) {
+                        debit = t.toDomain();
+                        break;
+                    }
+                }
+            }
+            String authority =
+                    com.smile.aceeconomy.infrastructure.persistence.IssuanceProofChecks
+                            .checkDebitAuthority(stored, debit, nonce);
+            if (authority != null) {
+                return IssuanceRefundResult.inconsistentProof();
+            }
+            for (JsonModel.JsonTransaction t : model.transactions) {
+                if (t.id.equals(preparedRefund.id().toString())) {
+                    return IssuanceRefundResult.inconsistentProof();
+                }
+            }
+            JsonModel.JsonAccount storedAcc =
+                    model.accounts.get(preparedRefund.accountId().toString());
+            if (storedAcc == null) {
+                return IssuanceRefundResult.accountMissing();
+            }
+            com.smile.aceeconomy.domain.Account live = toAccount(storedAcc);
+            String cid = Currency.normalizeId(preparedRefund.currencyId());
+            com.smile.aceeconomy.domain.Amount before = live.balanceOf(cid);
+            if (before == null) {
+                before = Amount.zero(preparedRefund.amount().scale());
+            }
+            if (!com.smile.aceeconomy.infrastructure.persistence.IssuanceProofChecks
+                    .scalesAgree(stored.amount(), preparedRefund.amount(), before)) {
+                return IssuanceRefundResult.scaleMismatch();
+            }
+            com.smile.aceeconomy.domain.Amount after;
+            try {
+                after = before.add(preparedRefund.amount());
+            } catch (IllegalArgumentException scaleMismatch) {
+                return IssuanceRefundResult.scaleMismatch();
+            }
+            if (com.smile.aceeconomy.infrastructure.persistence.IssuanceProofChecks
+                    .capExceeded(stored.amount(), preparedRefund.amount(), before, after)) {
+                return IssuanceRefundResult.capExceeded();
+            }
+            if (!debtPolicy.allows(after)) {
+                return IssuanceRefundResult.debtLimitExceeded();
+            }
+            com.smile.aceeconomy.domain.Account updated;
+            try {
+                updated = live.deposit(cid, preparedRefund.amount());
+            } catch (IllegalArgumentException scaleMismatch) {
+                return IssuanceRefundResult.scaleMismatch();
+            }
+            after = updated.balanceOf(cid);
+            if (!debtPolicy.allows(after)) {
+                return IssuanceRefundResult.debtLimitExceeded();
+            }
+            Transaction authoritative = new Transaction(preparedRefund.id(),
+                    preparedRefund.accountId(), preparedRefund.counterparty(), cid,
+                    preparedRefund.amount(), TransactionType.DEPOSIT, before, after,
+                    preparedRefund.timestamp(), preparedRefund.reason(),
+                    preparedRefund.operatorId(), preparedRefund.operatorName());
+            com.smile.aceeconomy.domain.BanknoteIssuance finalIssuance = stored.withStatus(
+                    com.smile.aceeconomy.domain.BanknoteIssuanceStatus.FINAL_VOID_REFUNDED,
+                    java.time.Instant.now());
+            JsonModel previous = model;
+            JsonModel next = shallowCopy(previous);
+            next.accounts.put(updated.owner().toString(), toJsonAccount(updated));
+            insertInto(next, authoritative);
+            next.nonces.put(nonce.toString(), java.time.Instant.now().toString());
+            next.issuances.put(nonce.toString(),
+                    JsonModel.JsonIssuance.fromDomain(finalIssuance));
+            try {
+                commit(previous, next, "Failed to persist issuance recovery refund " + nonce);
+            } catch (PersistenceException e) {
+                if (e.isCommitted()) {
+                    throw new com.smile.aceeconomy.ports.persistence.CommittedIssuanceRefundException(
+                            e.getMessage(), e.getCause() != null ? e.getCause() : e,
+                            before, after, preparedRefund.id(), finalIssuance);
+                }
+                throw e;
+            }
+            return IssuanceRefundResult.committed(before, after,
+                    preparedRefund.id(), finalIssuance);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private com.smile.aceeconomy.domain.BanknoteIssuance issuanceTransition(
+            UUID nonce, com.smile.aceeconomy.domain.BanknoteIssuanceStatus next)
+            throws PersistenceException {
+        java.util.Objects.requireNonNull(nonce, "nonce");
+        lock.lock();
+        try {
+            ensureInitialized();
+            ensureWritable();
+            JsonModel.JsonIssuance stored = model.issuances.get(nonce.toString());
+            if (stored == null) {
+                throw new PersistenceException("unknown issuance nonce " + nonce);
+            }
+            com.smile.aceeconomy.domain.BanknoteIssuance current = stored.toDomain();
+            if (current.status().isTerminal()
+                    && !(current.status()
+                            == com.smile.aceeconomy.domain.BanknoteIssuanceStatus.DELIVERED
+                            && next
+                                    == com.smile.aceeconomy.domain.BanknoteIssuanceStatus.REDEEMED)) {
+                throw new PersistenceException("issuance " + nonce
+                        + " already terminal (" + current.status() + ")");
+            }
+            if (!issuanceAllows(current.status(), next)) {
+                throw new PersistenceException("illegal issuance transition "
+                        + current.status() + " -> " + next + " for nonce " + nonce);
+            }
+            com.smile.aceeconomy.domain.BanknoteIssuance updated =
+                    current.withStatus(next, java.time.Instant.now());
+            JsonModel previous = model;
+            JsonModel nextModel = shallowCopy(previous);
+            nextModel.issuances.put(nonce.toString(), JsonModel.JsonIssuance.fromDomain(updated));
+            commit(previous, nextModel, "Failed to persist issuance transition " + nonce);
+            return updated;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private static boolean issuanceAllows(
+            com.smile.aceeconomy.domain.BanknoteIssuanceStatus from,
+            com.smile.aceeconomy.domain.BanknoteIssuanceStatus to) {
+        return switch (to) {
+            case DELIVERY_STARTED -> from == com.smile.aceeconomy.domain.BanknoteIssuanceStatus.DEBIT_COMMITTED;
+            case DELIVERED -> from == com.smile.aceeconomy.domain.BanknoteIssuanceStatus.DELIVERY_STARTED;
+            case REDEEMED -> from == com.smile.aceeconomy.domain.BanknoteIssuanceStatus.DEBIT_COMMITTED
+                    || from == com.smile.aceeconomy.domain.BanknoteIssuanceStatus.DELIVERY_STARTED
+                    || from == com.smile.aceeconomy.domain.BanknoteIssuanceStatus.DELIVERED;
+            case ABORTED -> from == com.smile.aceeconomy.domain.BanknoteIssuanceStatus.PREPARED;
+            case QUARANTINED -> from.isUnfinished();
+            default -> false;
+        };
+    }
+
     // ---------------- internals ----------------
 
     private static PersistenceException optimisticConflict(UUID owner) {
@@ -1082,6 +1561,7 @@ public final class JsonPersistenceBackend
         next.transactions.addAll(source.transactions);
         next.nonces.putAll(source.nonces);
         next.operationAudits.addAll(source.operationAudits);
+        next.issuances.putAll(source.issuances);
         return next;
     }
 
