@@ -17,7 +17,10 @@ For first-time setup, see the [admin installation runbook](docs/admin-install-ru
 
 Paper/Folia 26.1.2 is the officially supported server line. Folia 26.2 has been validated only on specific builds (VERIFIED-BETA); other 26.2 builds are unverified.
 
-> **Developer note (unreleased source tree):** the current source in this repo — not yet published as a release — builds against AceLib v1.5.0 (SHA-256 `346be2a8ecee247bf67fef71e804f829bdb8cc4f5be8980adc0b2b594facca9b`, [AceLib v1.5.0 Release](https://github.com/smile-minecraft/AceLib/releases/tag/v1.5.0)). Do not pair the published `AceEconomy-2.2.0.jar` attachment with AceLib 1.5.0: that published JAR still calls the removed `GuiService#shutdown()` and logs `NoSuchMethodError` on disable. Use AceLib 1.2.1 with the published attachment (above); use AceLib 1.5.0 only when building this source tree.
+> **Developer note (unreleased source tree):**
+> The current source in this repo — not yet published as a release — builds against AceLib v1.5.0 (SHA-256 `346be2a8ecee247bf67fef71e804f829bdb8cc4f5be8980adc0b2b594facca9b`, [AceLib v1.5.0 Release](https://github.com/smile-minecraft/AceLib/releases/tag/v1.5.0)).
+> Do not pair the published `AceEconomy-2.2.0.jar` attachment with AceLib 1.5.0: that published JAR still calls the removed `GuiService#shutdown()` and logs `NoSuchMethodError` on disable.
+> Use AceLib 1.2.1 with the published attachment (above); use AceLib 1.5.0 only when building this source tree.
 
 ## Quick start
 

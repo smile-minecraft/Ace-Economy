@@ -17,7 +17,10 @@ AceEconomy 为 Paper 和 Folia 服务器提供游戏内经济系统。玩家可�
 
 Paper/Folia 26.1.2 是正式支持的服务器线。Folia 26.2 仅在特定 build 上通过验证（VERIFIED-BETA），其余 26.2 build 未验证。
 
-> **开发者说明（尚未发布的源码）：**本仓库当前源码（尚未发布为 Release）需要以 AceLib v1.5.0 构建（SHA-256 `346be2a8ecee247bf67fef71e804f829bdb8cc4f5be8980adc0b2b594facca9b`，[AceLib v1.5.0 Release](https://github.com/smile-minecraft/AceLib/releases/tag/v1.5.0)）。请勿将已发布的 `AceEconomy-2.2.0.jar` 附件与 AceLib 1.5.0 搭配使用：该附件仍会调用已被移除的 `GuiService#shutdown()`，停用时会记录 `NoSuchMethodError`。已发布附件请用上文的 AceLib 1.2.1；只有自行构建本仓库源码时才用 AceLib 1.5.0。
+> **开发者说明（尚未发布的源码）：**
+> 本仓库当前源码（尚未发布为 Release）需要以 AceLib v1.5.0 构建（SHA-256 `346be2a8ecee247bf67fef71e804f829bdb8cc4f5be8980adc0b2b594facca9b`，[AceLib v1.5.0 Release](https://github.com/smile-minecraft/AceLib/releases/tag/v1.5.0)）。
+> 请勿将已发布的 `AceEconomy-2.2.0.jar` 附件与 AceLib 1.5.0 搭配使用：该附件仍会调用已被移除的 `GuiService#shutdown()`，停用时会记录 `NoSuchMethodError`。
+> 已发布附件请用上文的 AceLib 1.2.1；只有自行构建本仓库源码时才用 AceLib 1.5.0。
 
 ## 快速开始
 
