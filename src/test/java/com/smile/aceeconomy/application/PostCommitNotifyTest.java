@@ -50,7 +50,7 @@ import static org.junit.jupiter.api.Assertions.fail;
  * Post-commit notification red-phase: leaderboard stale refill + pre-commit listener failure.
  * Uses only the pre-fix public surface so both tests run before the fix.
  */
-class W03PostCommitNotifyTest {
+class PostCommitNotifyTest {
 
     private static final String CUR = "coin";
 
@@ -205,7 +205,7 @@ class W03PostCommitNotifyTest {
      */
     @Test
     void realBackendTransferNotifiesPostCommitWithoutDuplicatingAudit(@TempDir Path dir) throws Exception {
-        Path db = dir.resolve("w03-notify.db");
+        Path db = dir.resolve("post-commit-notify.db");
         Connection conn = DriverManager.getConnection("jdbc:sqlite:" + db);
         SqlBackend backend = new SqlBackend(new SqlConnectionProvider(conn), new SqliteDialect());
         backend.initialize();

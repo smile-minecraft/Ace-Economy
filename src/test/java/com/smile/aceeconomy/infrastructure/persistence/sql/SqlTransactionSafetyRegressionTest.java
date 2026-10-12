@@ -33,7 +33,7 @@ import static org.mockito.Mockito.*;
  *    transaction-before-read + SELECT ... FOR UPDATE.
  * 2) Hikari unsafe eviction failure must not return poisoned connection to pool via ordinary close().
  */
-final class SqlT06BlockerRegressionTest {
+final class SqlTransactionSafetyRegressionTest {
 
     static {
         try { Class.forName("org.sqlite.JDBC"); } catch (Exception e) { throw new RuntimeException(e); }
