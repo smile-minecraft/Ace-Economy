@@ -7,6 +7,7 @@ import com.smile.aceeconomy.domain.Currency;
 import com.smile.aceeconomy.domain.CurrencyDisplayHolder;
 import com.smile.aceeconomy.domain.EconomyError;
 import com.smile.aceeconomy.domain.EconomyResult;
+import com.smile.aceeconomy.operations.internal.FailedMintRefund;
 import com.smile.aceeconomy.ports.BanknoteClaim;
 import com.smile.aceeconomy.ports.BanknoteFactory;
 import com.smile.aceeconomy.ports.DepositResult;
@@ -424,6 +425,17 @@ public final class BanknoteFlow {
     private final AtomicBoolean accepting = new AtomicBoolean(true);
     private final Set<CompletableFuture<?>> inFlight = ConcurrentHashMap.newKeySet();
 
+    /**
+     * Trusted-refund ledger holding the single-use issuance rights. Null means
+     * no issuance rights (legacy tests and unconnected flows use the ordinary
+     * deposit fallback or the gate-checked direct void); production Bootstrap
+     * binds the same ledger instance as the core service so only a real
+     * committed deduction can authorize a single-use refund: an observably
+     * failed mint for the plain path, an uncertain handover for the atomic
+     * void+refund path.
+     */
+    private volatile com.smile.aceeconomy.operations.internal.TrustedRefundLedger refundLedger;
+
     public BanknoteFlow(@NotNull EconomyApi api,
                         @NotNull EconomyService economy,
                         @NotNull AtomicRedemptionStore redemptions,
@@ -442,6 +454,23 @@ public final class BanknoteFlow {
         this.io = Objects.requireNonNull(io, "io");
         this.watchdogs = Objects.requireNonNull(watchdogs, "watchdogs");
         this.dispatchTimeout = Objects.requireNonNull(dispatchTimeout, "dispatchTimeout");
+    }
+
+    /**
+     * Bind the trusted-refund issuance rights. The failed-mint,
+     * proven-undelivered, and uncertain-handover paths authorize through this
+     * ledger and refund through the core's single-use trusted path; without
+     * it they fall back to the ordinary deposit or the gate-checked direct
+     * void.
+     */
+    public void bindRefundLedger(
+            com.smile.aceeconomy.operations.internal.TrustedRefundLedger ledger) {
+        this.refundLedger = ledger;
+    }
+
+    /** Skeleton accessor for the wired ledger; null when unconnected. */
+    public com.smile.aceeconomy.operations.internal.TrustedRefundLedger refundLedger() {
+        return refundLedger;
     }
 
     public boolean isAccepting() {
@@ -996,10 +1025,59 @@ public final class BanknoteFlow {
      * needed. A decided refund closes as compensated; a failed or uncertain
      * refund stays undecided with the claim for manual reconciliation and is
      * never retried here.
+     *
+     * <p>When a trusted-refund ledger is bound, the refund travels the
+     * single-use trusted path: this method authorizes exactly this committed
+     * deduction (a real commit receipt only the pipeline holds, never a
+     * caller-supplied flag), then the core credits it exempt from the freeze
+     * and read-only gate. Mint success, already-redeemed notes, and tampered
+     * parameters can never authorize here because this method only runs for
+     * an observably failed mint whose note never left memory. Without a
+     * bound ledger the legacy ordinary deposit is used.
      */
     private MintDecision compensateFailedMint(UUID playerId, String currencyId,
                                                Amount amount, BanknoteClaim claim,
                                                String failureDetail) {
+        com.smile.aceeconomy.operations.internal.TrustedRefundLedger ledger = refundLedger;
+        if (ledger != null) {
+            try {
+                ledger.authorize(claim.nonce(), playerId, currencyId, amount, com.smile.aceeconomy.operations.internal.TrustedRefundLedger.RefundPurpose.FAILED_MINT);
+            } catch (Throwable authorizeFailure) {
+                if (authorizeFailure instanceof Error error) {
+                    throw error;
+                }
+                LOG.log(System.Logger.Level.ERROR,
+                        "withdraw compensation threw: player={0}, currency={1}, amount={2},"
+                                + " nonce={3}, reason={4}",
+                        new Object[]{playerId, currencyId, amount, claim.nonce(),
+                                authorizeFailure.getClass().getSimpleName()});
+                return new MintDecision.Undecided(claim, failureDetail, authorizeFailure);
+            }
+            EconomyResult<Amount> refund;
+            try {
+                refund = economy.refundFailedMint(
+                        FailedMintRefund.proven(playerId, currencyId, amount, claim.nonce()));
+            } catch (Throwable refundFailure) {
+                if (refundFailure instanceof Error error) {
+                    throw error;
+                }
+                LOG.log(System.Logger.Level.ERROR,
+                        "withdraw compensation threw: player={0}, currency={1}, amount={2},"
+                                + " nonce={3}, reason={4}",
+                        new Object[]{playerId, currencyId, amount, claim.nonce(),
+                                refundFailure.getClass().getSimpleName()});
+                return new MintDecision.Undecided(claim, failureDetail, refundFailure);
+            }
+            if (refund.isSuccess()) {
+                return new MintDecision.Compensated(failureDetail);
+            }
+            LOG.log(System.Logger.Level.ERROR,
+                    "withdraw compensation failed: player={0}, currency={1}, amount={2},"
+                            + " nonce={3}, reason={4}",
+                    new Object[]{playerId, currencyId, amount, claim.nonce(),
+                            refund == null ? "no result" : refund.message()});
+            return new MintDecision.Undecided(claim, failureDetail, null);
+        }
         EconomyResult<Amount> refund;
         try {
             refund = api.deposit(playerId, currencyId, amount);
@@ -1162,12 +1240,39 @@ public final class BanknoteFlow {
      * complete with the typed outcome. The refund runs on the IO executor; its
      * own failure is logged with the nonce for manual reconciliation — it is
      * surfaced, never swallowed, and never retried.
+     *
+     * <p>Every caller proves the note never left memory (stale generation,
+     * full inventory, rejected or timed-out dispatch), so when a
+     * trusted-refund ledger is bound the refund travels the single-use
+     * trusted path exempt from the freeze and read-only gate instead of
+     * stranding a charged player. Without a bound ledger the legacy ordinary
+     * deposit is used.
      */
     private void plainRefundOnIo(MintedNote minted, EconomyError error, String reason,
                                  String message,
                                  CompletableFuture<WithdrawOutcome> done) {
         CompletableFuture.supplyAsync(() -> {
             try {
+                com.smile.aceeconomy.operations.internal.TrustedRefundLedger ledger = refundLedger;
+                if (ledger != null) {
+                    try {
+                        ledger.authorize(minted.claim().nonce(), minted.playerId(),
+                                minted.currencyId(), minted.amount(),
+                                com.smile.aceeconomy.operations.internal.TrustedRefundLedger
+                                        .RefundPurpose.FAILED_MINT);
+                    } catch (Throwable authorizeFailure) {
+                        LOG.log(System.Logger.Level.ERROR,
+                                "withdraw compensation threw: player=" + minted.playerId()
+                                        + ", currency=" + minted.currencyId()
+                                        + ", amount=" + minted.amount()
+                                        + ", nonce=" + minted.claim().nonce(),
+                                authorizeFailure);
+                        return null;
+                    }
+                    return economy.refundFailedMint(FailedMintRefund.proven(
+                            minted.playerId(), minted.currencyId(), minted.amount(),
+                            minted.claim().nonce()));
+                }
                 return api.deposit(minted.playerId(), minted.currencyId(), minted.amount());
             } catch (Throwable refundFailure) {
                 LOG.log(System.Logger.Level.ERROR,
@@ -1199,12 +1304,40 @@ public final class BanknoteFlow {
      * the nonce and refund in the SAME storage transaction. When that atomic
      * step cannot be decided, the outcome stays pending with diagnostics —
      * never a blind refund that could sit next to a redeemable note.
+     *
+     * <p>When a trusted-refund ledger is bound, this method first authorizes
+     * exactly this committed deduction (a real commit receipt only the
+     * pipeline holds, never a caller-supplied flag) and the core voids and
+     * refunds through its single-use trusted path exempt from the freeze and
+     * read-only gate instead of stranding a charged player. Without a bound
+     * ledger the legacy direct call is used, which stays gate-checked.</p>
      */
     private void uncertainRefundOnIo(MintedNote minted, Throwable deliveryFailure,
                                      CompletableFuture<WithdrawOutcome> done) {
-        CompletableFuture.supplyAsync(() -> economy.compensateUndeliveredNote(
-                minted.claim().nonce(), minted.playerId(), minted.currencyId(), minted.amount(),
-                redemptions, "withdraw-compensation"), io).whenComplete((refund, failure) -> {
+        CompletableFuture.supplyAsync(() -> {
+            com.smile.aceeconomy.operations.internal.TrustedRefundLedger ledger = refundLedger;
+            if (ledger == null) {
+                return economy.compensateUndeliveredNote(
+                        minted.claim().nonce(), minted.playerId(), minted.currencyId(),
+                        minted.amount(), redemptions, "withdraw-compensation");
+            }
+            try {
+                ledger.authorize(minted.claim().nonce(), minted.playerId(),
+                        minted.currencyId(), minted.amount(),
+                        com.smile.aceeconomy.operations.internal.TrustedRefundLedger
+                                .RefundPurpose.DELIVERY_UNCERTAIN);
+            } catch (Throwable authorizeFailure) {
+                if (authorizeFailure instanceof Error error) {
+                    throw error;
+                }
+                throw new java.util.concurrent.CompletionException(authorizeFailure);
+            }
+            return economy.compensateUndeliveredNote(
+                    com.smile.aceeconomy.operations.internal.UncertainDeliveryCompensation.proven(
+                            minted.playerId(), minted.currencyId(), minted.amount(),
+                            minted.claim().nonce()),
+                    redemptions, "withdraw-compensation");
+        }, io).whenComplete((refund, failure) -> {
             if (failure == null && refund != null && refund.isSuccess()) {
                 done.complete(WithdrawOutcome.voidRefunded(minted.claim()));
                 return;

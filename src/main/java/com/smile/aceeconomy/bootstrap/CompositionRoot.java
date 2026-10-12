@@ -148,6 +148,15 @@ public final class CompositionRoot {
     private V2BanknoteFactory banknotes;
     private RollbackService rollbacks;
     private BanknoteValidator banknoteValidator;
+    /**
+     * Server-local safety control (freeze plus global read-only) with its
+     * durable file store, and the single-use trusted-refund ledger shared by
+     * the core service and the banknote flow. Created with the application
+     * slice before any command surface can use them; a failed control load
+     * fails closed and is logged loudly at startup.
+     */
+    private com.smile.aceeconomy.operations.security.SecurityControlService securityControl;
+    private com.smile.aceeconomy.operations.internal.TrustedRefundLedger refundLedger;
     // Shared with the PlaceholderAPI resolver so /baltop and PAPI rank/top placeholders
     // always read the same cached ranking (same instance, same TTL).
     private LeaderboardCache leaderboardCache;
@@ -321,6 +330,39 @@ public final class CompositionRoot {
                         // would drive a balance negative.
                         debt));
         banknoteValidator = new BanknoteValidator(new PersistentIdempotencyGuard(nonces));
+
+        // Server-local safety control (freeze plus global read-only) with its
+        // durable file store outside the economy snapshot, plus the single-use
+        // trusted-refund ledger shared by the core service and the banknote
+        // flow. A failed control load fails closed to read-only and is logged
+        // loudly; the file is never overwritten or deleted by the load path.
+        // Reload never touches this control, and restore never replaces it.
+        java.nio.file.Path controlFile =
+                plugin.getDataFolder().toPath().resolve(
+                        com.smile.aceeconomy.infrastructure.persistence.security
+                                .FileSecurityControlStore.CONTROL_FILE_NAME);
+        com.smile.aceeconomy.infrastructure.persistence.security.FileSecurityControlStore
+                controlStore = new com.smile.aceeconomy.infrastructure.persistence.security
+                        .FileSecurityControlStore(controlFile);
+        securityControl = new com.smile.aceeconomy.operations.security.SecurityControlService(
+                controlStore);
+        if (securityControl.isLoadFailed()) {
+            plugin.getLogger().severe("Safety control failed to load; all balance-changing"
+                    + " operations are refused until an operator repairs the control file"
+                    + " and restarts: " + securityControl.loadDiagnosis());
+        }
+        refundLedger = new com.smile.aceeconomy.operations.internal.InMemoryTrustedRefundLedger();
+        economy.bindSecurityControl(securityControl);
+        economy.bindRefundLedger(refundLedger);
+        rollbacks.bindSecurityControl(securityControl);
+        java.nio.file.Path journalFile =
+                plugin.getDataFolder().toPath().resolve(
+                        com.smile.aceeconomy.infrastructure.persistence.security
+                                .FileBlockedAttemptJournal.JOURNAL_FILE_NAME);
+        securityControl.bindAttemptJournal(
+                new com.smile.aceeconomy.infrastructure.persistence.security.FileBlockedAttemptJournal(
+                        journalFile),
+                ioExecutor);
     }
 
     private void startSessions(ResourceOwner resources) {
@@ -369,6 +411,13 @@ public final class CompositionRoot {
         banknoteFlow = new com.smile.aceeconomy.infrastructure.banknote.BanknoteFlow(
                 api, economy, redemptions, banknotes, displayHolder, folia, ioExecutor,
                 dispatchWatchdogs, withdrawDispatchTimeout);
+        // The trusted-refund ledger is the same single-use instance bound to
+        // the core service: proven-undelivered and failed-mint refunds travel
+        // the trusted path exempt from the freeze gate instead of stranding a
+        // charged player behind an ordinary deposit refusal.
+        if (refundLedger != null) {
+            banknoteFlow.bindRefundLedger(refundLedger);
+        }
         // The bank GUI use case binds to the SAME durable validator / redemption store and the
         // application economy service (lock, pre-commit, debt policy) so every redeem goes
         // through the prepared atomic path; no in-memory guard appears in this graph.
@@ -499,9 +548,23 @@ public final class CompositionRoot {
                 plugin.getDataFolder().toPath(), currencies);
         ProductionAdapters.Import importCommands =
                 new ProductionAdapters.Import(importRunner, ioExecutor);
+        // Bypass paths consult the same safety gate as the core service: an
+        // import or rollback touching a frozen account, or any of them while
+        // the server is read-only, is refused before any balance moves. The
+        // control lives outside the economy snapshot, so backups never contain
+        // it and restores never replace it. Back the control up separately
+        // while stopped, or through a controlled snapshot export.
+        if (securityControl != null) {
+            importService.bindSecurityControl(securityControl);
+            backupRestoreService.bindSecurityControl(securityControl);
+        }
+        if (refundLedger != null) {
+            bankUseCase.bindRefundLedger(refundLedger);
+        }
         CommandServices services = new CommandServices(economyCommands,
                 new ProductionAdapters.Players(ioExecutor), withdrawalCommands, leaderboards, bankCommands,
-                adminCommands, historyCommands, rollbackCommands, backupCommands, importCommands, config);
+                adminCommands, historyCommands, rollbackCommands, backupCommands, importCommands, config,
+                securityControl, ioExecutor);
         // Command-surface flags are startup-only wiring: the leaderboard toggle decides whether
         // an executable baltop spec exists at all, and the main-command alias is validated
         // against every label plugin.yml declares plus the sibling v2 specs. Bukkit only routes

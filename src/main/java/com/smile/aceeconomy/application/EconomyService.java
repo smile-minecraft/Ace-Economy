@@ -25,6 +25,7 @@ import com.smile.aceeconomy.ports.persistence.AtomicTransferStore;
 import com.smile.aceeconomy.ports.persistence.CommittedAdminMutationException;
 import com.smile.aceeconomy.ports.persistence.CommittedTransferException;
 import com.smile.aceeconomy.ports.persistence.IndeterminatePersistenceException;
+import com.smile.aceeconomy.ports.persistence.NonceStore;
 import com.smile.aceeconomy.ports.persistence.PersistenceException;
 import com.smile.aceeconomy.ports.persistence.RedemptionResult;
 
@@ -79,6 +80,17 @@ public final class EconomyService {
     private final AtomicAdminMutationStore adminStore;
     private final LockRegistry locks = new LockRegistry();
     /**
+     * Safety-control gate. Null means the legacy open gate used only by tests
+     * that never connect a control; production Bootstrap always binds a real
+     * control and ledger so no initiating path can miss the gate. Every
+     * initiating path below takes a {@code MutationPermit} from this control
+     * before any per-account lock and refuses on {@link #gateRefusal} before
+     * any debit; reads and previews never consult it.
+     */
+    private volatile com.smile.aceeconomy.operations.security.SecurityControlService securityControl;
+    /** Trusted-refund ledger seam; same lifecycle rule as the control above. */
+    private volatile com.smile.aceeconomy.operations.internal.TrustedRefundLedger refundLedger;
+    /**
      * Read-only balance acceleration. Populated only from successful persistence
      * reads/writes and dropped on offline, write failure or reload — never a source of truth.
      */
@@ -123,6 +135,90 @@ public final class EconomyService {
                 : (accounts instanceof AtomicTransferStore ats ? ats : null);
         this.adminStore = adminStore != null ? adminStore
                 : (accounts instanceof AtomicAdminMutationStore aams ? aams : null);
+    }
+
+    /**
+     * Bind the safety-control gate. Every initiating path consults the bound
+     * control under a {@code MutationPermit} taken before any per-account
+     * lock; reads and previews never consult it. A null control keeps the
+     * legacy open gate for tests that predate the freeze.
+     */
+    public void bindSecurityControl(
+            com.smile.aceeconomy.operations.security.SecurityControlService control) {
+        this.securityControl = control;
+    }
+
+    /**
+     * Bind the trusted-refund ledger. The refund path claims a ledger entry
+     * for every presented proof; without a bound ledger the refund fails
+     * closed with no money movement. Production always binds the same ledger
+     * instance as the banknote flow.
+     */
+    public void bindRefundLedger(
+            com.smile.aceeconomy.operations.internal.TrustedRefundLedger ledger) {
+        this.refundLedger = ledger;
+    }
+
+    /**
+     * Early gate diagnosis for initiating mutations. Empty when no control is
+     * bound (legacy open gate) or when the control allows the mutation.
+     */
+    private Optional<com.smile.aceeconomy.domain.EconomyError> gateRefusal(UUID... accountIds) {
+        com.smile.aceeconomy.operations.security.SecurityControlService control = securityControl;
+        if (control == null) {
+            return Optional.empty();
+        }
+        return control.checkInitiating(accountIds);
+    }
+
+    /**
+     * Keep one minimal blocked-attempt record per refusal. Best-effort and
+     * never throwing: the refusal stands even when recording fails.
+     */
+    private void recordRefusal(String operation, UUID target,
+                               com.smile.aceeconomy.domain.EconomyError error) {
+        com.smile.aceeconomy.operations.security.SecurityControlService control = securityControl;
+        if (control == null) {
+            return;
+        }
+        String category = switch (error) {
+            case ACCOUNT_FROZEN ->
+                    com.smile.aceeconomy.domain.BlockedControlAttempt.CATEGORY_FROZEN;
+            case GLOBAL_READ_ONLY ->
+                    com.smile.aceeconomy.domain.BlockedControlAttempt.CATEGORY_READONLY;
+            case CONTROL_UNAVAILABLE ->
+                    com.smile.aceeconomy.domain.BlockedControlAttempt.CATEGORY_UNAVAILABLE;
+            default -> null;
+        };
+        if (category == null) {
+            return;
+        }
+        try {
+            control.recordBlockedAttempt(
+                    com.smile.aceeconomy.domain.BlockedControlAttempt.of(operation, target,
+                            category, control.controlVersion(), null, null, now()));
+        } catch (RuntimeException ignored) {
+            // The refusal stands; the evidence record is best-effort here.
+        }
+    }
+
+    private String refusalMessage(com.smile.aceeconomy.domain.EconomyError error) {
+        return switch (error) {
+            case ACCOUNT_FROZEN ->
+                    "account is frozen; transaction refused, nothing changed";
+            case GLOBAL_READ_ONLY ->
+                    "server is read-only; transaction refused, nothing changed";
+            case CONTROL_UNAVAILABLE -> {
+                com.smile.aceeconomy.operations.security.SecurityControlService control =
+                        securityControl;
+                String diagnosis = control == null ? "" : control.loadDiagnosis();
+                yield diagnosis.isBlank()
+                        ? "safety control unavailable; transaction refused, nothing changed"
+                        : "safety control unavailable; transaction refused, nothing changed: "
+                                + diagnosis;
+            }
+            default -> "transaction refused";
+        };
     }
 
     // ---------- account lifecycle ----------
@@ -290,9 +386,20 @@ public final class EconomyService {
         if (capRefusal.isPresent()) {
             return capRefusal.get();
         }
-        ReentrantLock lock = locks.lockFor(uuid);
-        lock.lock();
+        com.smile.aceeconomy.operations.security.SecurityControlService control = securityControl;
+        com.smile.aceeconomy.operations.security.SecurityControlService.MutationPermit permit =
+                control == null ? null : control.acquireMutationPermit();
         try {
+            if (control != null) {
+                Optional<EconomyError> refusal = control.checkInitiating(uuid);
+                if (refusal.isPresent()) {
+                    recordRefusal("deposit", uuid, refusal.get());
+                    return EconomyResult.failure(refusal.get(), refusalMessage(refusal.get()));
+                }
+            }
+            ReentrantLock lock = locks.lockFor(uuid);
+            lock.lock();
+            try {
             AccountBalanceCache.CacheStamp stamp = balanceCache.stampOf(uuid);
             Optional<Account> acc = accounts.load(uuid);
             if (acc.isEmpty()) {
@@ -334,8 +441,13 @@ public final class EconomyService {
             EconomyResult<Amount> result = commitAudit(tx, after);
             publishPostCommit(tx);
             return result;
+            } finally {
+                lock.unlock();
+            }
         } finally {
-            lock.unlock();
+            if (permit != null) {
+                permit.close();
+            }
         }
     }
 
@@ -367,9 +479,20 @@ public final class EconomyService {
         if (capRefusal.isPresent()) {
             return capRefusal.get();
         }
-        ReentrantLock lock = locks.lockFor(accountId);
-        lock.lock();
+        com.smile.aceeconomy.operations.security.SecurityControlService control = securityControl;
+        com.smile.aceeconomy.operations.security.SecurityControlService.MutationPermit permit =
+                control == null ? null : control.acquireMutationPermit();
         try {
+            if (control != null) {
+                Optional<EconomyError> refusal = control.checkInitiating(accountId);
+                if (refusal.isPresent()) {
+                    recordRefusal("redeem", accountId, refusal.get());
+                    return EconomyResult.failure(refusal.get(), refusalMessage(refusal.get()));
+                }
+            }
+            ReentrantLock lock = locks.lockFor(accountId);
+            lock.lock();
+            try {
             AccountBalanceCache.CacheStamp stamp = balanceCache.stampOf(accountId);
             Optional<Account> acc = accounts.load(accountId);
             if (acc.isEmpty()) {
@@ -451,8 +574,13 @@ public final class EconomyService {
                         e);
                 return EconomyResult.failure(EconomyError.AUDIT_FAILURE, STORAGE_UNAVAILABLE);
             }
+            } finally {
+                lock.unlock();
+            }
         } finally {
-            lock.unlock();
+            if (permit != null) {
+                permit.close();
+            }
         }
     }
 
@@ -466,10 +594,16 @@ public final class EconomyService {
      * together, or the outcome stays undecided and nothing is refunded blindly.
      *
      * <p>Unlike a player-initiated deposit this is system-initiated, so no
-     * pre-commit event fires: no listener can veto compensation and strand a
+      * pre-commit event fires: no listener can veto compensation and strand a
      * charged player without a note. Locking, balance-cache handling,
      * post-commit notification and the committed/indeterminate/uncommitted
      * failure split mirror {@link #redeemBanknote}.</p>
+     *
+     * <p>This direct overload stays behind the initiating gate: a frozen
+     * account or a read-only server refuses it before anything moves. The
+     * banknote pipeline's uncertain handover instead uses the trusted
+     * overload, which consumes a single-use ledger authorization and is
+     * exempt from the gate so a committed charge is never stranded.</p>
      *
      * @param nonce the minted note's nonce to void
      * @param accountId the account that was deducted and is refunded here
@@ -506,9 +640,20 @@ public final class EconomyService {
         if (capRefusal.isPresent()) {
             return capRefusal.get();
         }
-        ReentrantLock lock = locks.lockFor(accountId);
-        lock.lock();
+        com.smile.aceeconomy.operations.security.SecurityControlService control = securityControl;
+        com.smile.aceeconomy.operations.security.SecurityControlService.MutationPermit permit =
+                control == null ? null : control.acquireMutationPermit();
         try {
+            if (control != null) {
+                Optional<EconomyError> refusal = control.checkInitiating(accountId);
+                if (refusal.isPresent()) {
+                    recordRefusal("compensate", accountId, refusal.get());
+                    return EconomyResult.failure(refusal.get(), refusalMessage(refusal.get()));
+                }
+            }
+            ReentrantLock lock = locks.lockFor(accountId);
+            lock.lock();
+            try {
             AccountBalanceCache.CacheStamp stamp = balanceCache.stampOf(accountId);
             Optional<Account> acc = accounts.load(accountId);
             if (acc.isEmpty()) {
@@ -591,8 +736,229 @@ public final class EconomyService {
                         e);
                 return EconomyResult.failure(EconomyError.AUDIT_FAILURE, STORAGE_UNAVAILABLE);
             }
+            } finally {
+                lock.unlock();
+            }
         } finally {
-            lock.unlock();
+            if (permit != null) {
+                permit.close();
+            }
+        }
+    }
+
+    /**
+     * Void a minted banknote nonce and refund its value in ONE storage
+     * transaction for a pipeline-authorized uncertain handover, exempt from
+     * the freeze and read-only gate. The bound
+     * {@link com.smile.aceeconomy.operations.internal.TrustedRefundLedger}
+     * must hold an exact unused entry (nonce, account, currency, amount)
+     * recorded by the banknote pipeline after its deduction committed and its
+     * handover threw at an unknown placement. Unknown, undeducted, tampered,
+     * replayed, spent, or already-settled proofs are refused with no money
+     * movement, and so is every proof when no ledger is bound: an unbound
+     * compensation fails closed instead of trusting the presented proof.
+     *
+     * <p>Unlike a player-initiated deposit this is system-initiated, so no
+     * pre-commit event fires: no listener can veto compensation and strand a
+     * charged player without a note. A {@code MutationPermit} is still taken
+     * before any per-account lock so a concurrent freeze can never overtake
+     * the commit; the initiating gate itself is never consulted, exactly like
+     * {@link #refundFailedMint}. The legacy direct overload stays
+     * gate-checked for ordinary initiators.</p>
+     *
+     * <p>Claim lifecycle: the entry is claimed up front and settles exactly
+     * once. A committed void+refund (even one whose audit record carries a
+     * failure) settles it as refunded and never releases it. A replay, an
+     * indeterminate outcome, or an already-committed outcome settles it as
+     * uncertain — retained, never re-authorized for consumption, so a voided
+     * note can never be redeemed and no second refund can land. Only a
+     * definitely-uncommitted outcome (missing account, debt refusal, or
+     * uncommitted storage failure, all leaving the nonce unconsumed) releases
+     * the same claim so a later retry with the exact same fields can
+     * proceed.</p>
+     *
+     * @param compensation the pipeline's four-field proof; authorizes nothing
+     *                     by itself
+     * @param redemptionStore the durable atomic store, never {@code null}
+     * @param reason the audit reason recorded for the refund
+     * @return the refund result; replay means the nonce is already gone (the
+     *         note was redeemed or already voided) so no second refund happens
+     * @throws IndeterminatePersistenceException when the void+refund may or may
+     *         not have committed: never retry blindly, keep it pending instead
+     */
+    public EconomyResult<Amount> compensateUndeliveredNote(
+            com.smile.aceeconomy.operations.internal.UncertainDeliveryCompensation compensation,
+            AtomicRedemptionStore redemptionStore, String reason) {
+        if (compensation == null) {
+            return EconomyResult.failure(EconomyError.INVALID_AMOUNT, "proof null");
+        }
+        UUID nonce = compensation.nonce();
+        UUID accountId = compensation.accountId();
+        String currencyId = compensation.currencyId();
+        Amount amount = compensation.amount();
+        if (nonce == null) {
+            return EconomyResult.failure(EconomyError.INVALID_AMOUNT, "nonce null");
+        }
+        if (redemptionStore == null) {
+            return EconomyResult.failure(EconomyError.AUDIT_FAILURE, "redemption store missing");
+        }
+        if (reason == null || reason.isBlank()) {
+            return EconomyResult.failure(EconomyError.INVALID_AMOUNT, "reason missing");
+        }
+        EconomyResult<Void> v = validateAmountPositive(amount);
+        if (v.isFailure()) {
+            return EconomyResult.failure(v.error(), v.message());
+        }
+        if (!currencies.contains(currencyId)) {
+            return EconomyResult.failure(EconomyError.CURRENCY_NOT_FOUND, currencyId);
+        }
+        Optional<EconomyResult<Amount>> capRefusal = refuseOnRequestAmountCap(currencyId, amount);
+        if (capRefusal.isPresent()) {
+            return capRefusal.get();
+        }
+        com.smile.aceeconomy.operations.security.SecurityControlService control = securityControl;
+        com.smile.aceeconomy.operations.security.SecurityControlService.MutationPermit permit =
+                control == null ? null : control.acquireMutationPermit();
+        try {
+            if (accounts instanceof com.smile.aceeconomy.ports.persistence.NonceStore nonces) {
+                boolean consumed;
+                try {
+                    consumed = nonces.isConsumed(nonce);
+                } catch (PersistenceException e) {
+                    balanceCache.invalidate(accountId);
+                    throw e;
+                }
+                if (consumed) {
+                    return EconomyResult.failure(EconomyError.REPLAY_DETECTED,
+                            "note already redeemed; refund refused");
+                }
+            }
+            com.smile.aceeconomy.operations.internal.TrustedRefundLedger ledger = refundLedger;
+            if (ledger == null) {
+                return EconomyResult.failure(EconomyError.AUDIT_FAILURE,
+                        "refund ledger is not bound; refund refused with no money movement");
+            }
+            if (!ledger.tryConsume(nonce, accountId, currencyId, amount, com.smile.aceeconomy.operations.internal.TrustedRefundLedger.RefundPurpose.DELIVERY_UNCERTAIN)) {
+                return EconomyResult.failure(EconomyError.INVALID_AMOUNT,
+                        "no matching refund authorization; refund refused");
+            }
+            ReentrantLock lock = locks.lockFor(accountId);
+            lock.lock();
+            try {
+            AccountBalanceCache.CacheStamp stamp = balanceCache.stampOf(accountId);
+            Optional<Account> acc = accounts.load(accountId);
+            if (acc.isEmpty()) {
+                // Leave the nonce unconsumed: the physical note stays redeemable
+                // once the account exists, and no refund is fabricated.
+                releaseForRetry(ledger, nonce, accountId, currencyId, amount, com.smile.aceeconomy.operations.internal.TrustedRefundLedger.RefundPurpose.DELIVERY_UNCERTAIN);
+                return EconomyResult.failure(EconomyError.ACCOUNT_NOT_FOUND,
+                        "no account for " + accountId);
+            }
+            Optional<EconomyResult<Amount>> scaleRefusal =
+                    refuseOnScaleMismatch(currencyId, acc.get().balanceOf(currencyId), amount);
+            if (scaleRefusal.isPresent()) {
+                releaseForRetry(ledger, nonce, accountId, currencyId, amount, com.smile.aceeconomy.operations.internal.TrustedRefundLedger.RefundPurpose.DELIVERY_UNCERTAIN);
+                return scaleRefusal.get();
+            }
+            Optional<EconomyResult<Amount>> storedCapRefusal =
+                    refuseOnStoredAmountCap(currencyId, acc.get().balanceOf(currencyId));
+            if (storedCapRefusal.isPresent()) {
+                releaseForRetry(ledger, nonce, accountId, currencyId, amount, com.smile.aceeconomy.operations.internal.TrustedRefundLedger.RefundPurpose.DELIVERY_UNCERTAIN);
+                return storedCapRefusal.get();
+            }
+            Amount before = orZero(acc.get().balanceOf(currencyId), amount);
+            Amount after = before.add(amount);
+            Optional<EconomyResult<Amount>> resultCapRefusal =
+                    refuseOnResultAmountCap(currencyId, after);
+            if (resultCapRefusal.isPresent()) {
+                releaseForRetry(ledger, nonce, accountId, currencyId, amount, com.smile.aceeconomy.operations.internal.TrustedRefundLedger.RefundPurpose.DELIVERY_UNCERTAIN);
+                return resultCapRefusal.get();
+            }
+            Account updated = acc.get().deposit(currencyId, amount);
+            // Same value previewed and cap-checked above; re-reading is unnecessary.
+            Transaction tx = new Transaction(newId(), accountId, null, norm(currencyId), amount,
+                    TransactionType.DEPOSIT, before, after, now(), reason);
+            try {
+                RedemptionResult r = redemptionStore.redeemPrepared(nonce, updated, tx, debtPolicy);
+                if (r.isCommitted()) {
+                    balanceCache.putIfStamp(accountId, currencyId, r.balanceAfter(), stamp);
+                    settleRefunded(ledger, nonce);
+                    publishPostCommit(authoritativeRedeem(tx, r));
+                    return EconomyResult.success(r.balanceAfter());
+                }
+                if (r.isReplay()) {
+                    // The nonce is already gone: redeemed or voided before.
+                    // Nothing moved here, so settle terminally and refuse any
+                    // second refund instead of releasing for a retry.
+                    settleUncertain(ledger, nonce);
+                    return EconomyResult.failure(EconomyError.REPLAY_DETECTED, "replay.detected");
+                }
+                if (r.isAccountMissing()) {
+                    // The store left the nonce unconsumed: definitely
+                    // uncommitted, so the same claim may be retried later.
+                    releaseForRetry(ledger, nonce, accountId, currencyId, amount, com.smile.aceeconomy.operations.internal.TrustedRefundLedger.RefundPurpose.DELIVERY_UNCERTAIN);
+                    return EconomyResult.failure(EconomyError.ACCOUNT_NOT_FOUND,
+                            "account missing at commit");
+                }
+                if (r.isDebtLimitExceeded()) {
+                    // Refused inside the commit without consuming the nonce:
+                    // definitely uncommitted, so the same claim may be retried.
+                    releaseForRetry(ledger, nonce, accountId, currencyId, amount, com.smile.aceeconomy.operations.internal.TrustedRefundLedger.RefundPurpose.DELIVERY_UNCERTAIN);
+                    if (!debtPolicy.isAllowNegative()) {
+                        return EconomyResult.failure(EconomyError.DEBT_DISABLED,
+                                "negative balance not allowed");
+                    }
+                    return EconomyResult.failure(EconomyError.DEBT_LIMIT_EXCEEDED,
+                            "debt limit exceeded");
+                }
+                releaseForRetry(ledger, nonce, accountId, currencyId, amount, com.smile.aceeconomy.operations.internal.TrustedRefundLedger.RefundPurpose.DELIVERY_UNCERTAIN);
+                return EconomyResult.failure(EconomyError.ACCOUNT_NOT_FOUND, "account missing at commit");
+            } catch (PersistenceException e) {
+                if (e instanceof IndeterminatePersistenceException indeterminate) {
+                    // Uncertain outcome: neither proven committed nor proven rolled
+                    // back. Settle the claim terminally so it is retained, never
+                    // re-authorized, and propagate so the flow keeps it pending
+                    // instead of refunding blindly or retrying.
+                    settleUncertain(ledger, nonce);
+                    balanceCache.invalidate(accountId);
+                    throw indeterminate;
+                }
+                if (e.isCommitted()) {
+                    // Void+refund durable, cleanup failed afterwards: settle as
+                    // refunded and report the refund as done without
+                    // fabricating anything.
+                    settleRefunded(ledger, nonce);
+                    try {
+                        Optional<Account> committedAcc = accounts.load(accountId);
+                        if (committedAcc.isPresent()) {
+                            Amount bal = committedAcc.get().balanceOf(currencyId);
+                            if (bal != null) {
+                                balanceCache.putIfStamp(accountId, currencyId, bal, stamp);
+                                publishPostCommit(tx);
+                                return EconomyResult.success(bal);
+                            }
+                        }
+                    } catch (PersistenceException ignored) {
+                        // Provider may have been abandoned after post-commit failure.
+                    }
+                    balanceCache.putIfStamp(accountId, currencyId, after, stamp);
+                    publishPostCommit(tx);
+                    return EconomyResult.success(after);
+                }
+                balanceCache.invalidate(accountId);
+                releaseForRetry(ledger, nonce, accountId, currencyId, amount, com.smile.aceeconomy.operations.internal.TrustedRefundLedger.RefundPurpose.DELIVERY_UNCERTAIN);
+                LOG.log(Level.WARNING,
+                        "Compensation failed before commit; answering AUDIT_FAILURE without changing anything",
+                        e);
+                return EconomyResult.failure(EconomyError.AUDIT_FAILURE, STORAGE_UNAVAILABLE);
+            }
+            } finally {
+                lock.unlock();
+            }
+        } finally {
+            if (permit != null) {
+                permit.close();
+            }
         }
     }
 
@@ -610,9 +976,20 @@ public final class EconomyService {
         if (capRefusal.isPresent()) {
             return capRefusal.get();
         }
-        ReentrantLock lock = locks.lockFor(uuid);
-        lock.lock();
+        com.smile.aceeconomy.operations.security.SecurityControlService control = securityControl;
+        com.smile.aceeconomy.operations.security.SecurityControlService.MutationPermit permit =
+                control == null ? null : control.acquireMutationPermit();
         try {
+            if (control != null) {
+                Optional<EconomyError> refusal = control.checkInitiating(uuid);
+                if (refusal.isPresent()) {
+                    recordRefusal("withdraw", uuid, refusal.get());
+                    return EconomyResult.failure(refusal.get(), refusalMessage(refusal.get()));
+                }
+            }
+            ReentrantLock lock = locks.lockFor(uuid);
+            lock.lock();
+            try {
             AccountBalanceCache.CacheStamp stamp = balanceCache.stampOf(uuid);
             Optional<Account> acc = accounts.load(uuid);
             if (acc.isEmpty()) {
@@ -660,8 +1037,13 @@ public final class EconomyService {
             EconomyResult<Amount> result = commitAudit(tx, after);
             publishPostCommit(tx);
             return result;
+            } finally {
+                lock.unlock();
+            }
         } finally {
-            lock.unlock();
+            if (permit != null) {
+                permit.close();
+            }
         }
     }
 
@@ -680,9 +1062,20 @@ public final class EconomyService {
         if (capRefusal.isPresent()) {
             return capRefusal.get();
         }
-        ReentrantLock lock = locks.lockFor(uuid);
-        lock.lock();
+        com.smile.aceeconomy.operations.security.SecurityControlService control = securityControl;
+        com.smile.aceeconomy.operations.security.SecurityControlService.MutationPermit permit =
+                control == null ? null : control.acquireMutationPermit();
         try {
+            if (control != null) {
+                Optional<EconomyError> refusal = control.checkInitiating(uuid);
+                if (refusal.isPresent()) {
+                    recordRefusal("set", uuid, refusal.get());
+                    return EconomyResult.failure(refusal.get(), refusalMessage(refusal.get()));
+                }
+            }
+            ReentrantLock lock = locks.lockFor(uuid);
+            lock.lock();
+            try {
             AccountBalanceCache.CacheStamp stamp = balanceCache.stampOf(uuid);
             Optional<Account> acc = accounts.load(uuid);
             if (acc.isEmpty()) {
@@ -723,8 +1116,13 @@ public final class EconomyService {
             EconomyResult<Amount> result = commitAudit(tx, amount);
             publishPostCommit(tx);
             return result;
+            } finally {
+                lock.unlock();
+            }
         } finally {
-            lock.unlock();
+            if (permit != null) {
+                permit.close();
+            }
         }
     }
 
@@ -786,9 +1184,21 @@ public final class EconomyService {
         if (adminStore == null) {
             return EconomyResult.failure(EconomyError.AUDIT_FAILURE, STORAGE_UNAVAILABLE);
         }
-        ReentrantLock lock = locks.lockFor(uuid);
-        lock.lock();
+        com.smile.aceeconomy.operations.security.SecurityControlService control = securityControl;
+        com.smile.aceeconomy.operations.security.SecurityControlService.MutationPermit permit =
+                control == null ? null : control.acquireMutationPermit();
         try {
+            if (control != null) {
+                Optional<EconomyError> refusal = control.checkInitiating(uuid);
+                if (refusal.isPresent()) {
+                    recordRefusal("admin-" + type.name().toLowerCase(java.util.Locale.ROOT),
+                            uuid, refusal.get());
+                    return EconomyResult.failure(refusal.get(), refusalMessage(refusal.get()));
+                }
+            }
+            ReentrantLock lock = locks.lockFor(uuid);
+            lock.lock();
+            try {
             AccountBalanceCache.CacheStamp stamp = balanceCache.stampOf(uuid);
             Optional<Account> acc;
             try {
@@ -885,8 +1295,13 @@ public final class EconomyService {
             }
             balanceCache.invalidate(uuid);
             return EconomyResult.failure(EconomyError.ACCOUNT_NOT_FOUND, "no account for " + uuid);
+            } finally {
+                lock.unlock();
+            }
         } finally {
-            lock.unlock();
+            if (permit != null) {
+                permit.close();
+            }
         }
     }
 
@@ -967,8 +1382,21 @@ public final class EconomyService {
         if (requestCapRefusal.isPresent()) {
             return requestCapRefusal.get();
         }
-        locks.lockBoth(from, to);
+        com.smile.aceeconomy.operations.security.SecurityControlService control = securityControl;
+        com.smile.aceeconomy.operations.security.SecurityControlService.MutationPermit permit =
+                control == null ? null : control.acquireMutationPermit();
         try {
+            if (control != null) {
+                Optional<EconomyError> refusal = control.checkInitiating(from, to);
+                if (refusal.isPresent()) {
+                    UUID target = control.isFrozen(from) ? from
+                            : control.isFrozen(to) ? to : null;
+                    recordRefusal("transfer", target, refusal.get());
+                    return EconomyResult.failure(refusal.get(), refusalMessage(refusal.get()));
+                }
+            }
+            locks.lockBoth(from, to);
+            try {
             AccountBalanceCache.CacheStamp fromStamp = balanceCache.stampOf(from);
             AccountBalanceCache.CacheStamp toStamp = balanceCache.stampOf(to);
             Optional<Account> fromAcc = accounts.load(from);
@@ -1121,8 +1549,243 @@ public final class EconomyService {
             publishPostCommit(outTx);
             publishPostCommit(inTx);
             return EconomyResult.success(result, auditError);
+            } finally {
+                locks.unlockBoth(from, to);
+            }
         } finally {
-            locks.unlockBoth(from, to);
+            if (permit != null) {
+                permit.close();
+            }
+        }
+    }
+
+    // ---------- trusted failed-mint refund ----------
+
+    /** Audit reason recorded for a trusted failed-mint refund. */
+    static final String FAILED_MINT_REFUND_REASON = "failed-mint-refund";
+
+    /**
+     * Credit a proven failed ticket mint through the same atomic commit as an
+     * ordinary deposit, exempt from the freeze and read-only gate. The ledger
+     * must hold an exact unused entry (nonce, account, currency, amount)
+     * recorded by the ticket pipeline after its deduction committed and its
+     * mint observably failed without exposing a redeemable note. Unknown,
+     * undeducted, already-redeemed, tampered, replayed, spent, or uncertain
+     * proofs are refused with no money movement, and so is every proof when
+     * no ledger is bound: an unbound refund fails closed instead of trusting
+     * the presented proof.
+     *
+     * <p>Claim lifecycle: the entry is claimed up front and settles exactly
+     * once. A committed refund (even one whose audit record carries a failure)
+     * settles it as refunded and never releases it. An uncertain or
+     * already-committed outcome settles it as uncertain — retained, never
+     * re-authorized for consumption. Only a definitely-uncommitted storage
+     * failure releases the same claim so a later retry can proceed.
+     */
+    public EconomyResult<Amount> refundFailedMint(
+            com.smile.aceeconomy.operations.internal.FailedMintRefund proof) {
+        if (proof == null) {
+            return EconomyResult.failure(EconomyError.INVALID_AMOUNT, "proof null");
+        }
+        UUID accountId = proof.accountId();
+        String currencyId = proof.currencyId();
+        Amount amount = proof.amount();
+        UUID nonce = proof.mintNonce();
+        EconomyResult<Void> v = validateAmountPositive(amount);
+        if (v.isFailure()) {
+            return EconomyResult.failure(v.error(), v.message());
+        }
+        if (!currencies.contains(currencyId)) {
+            return EconomyResult.failure(EconomyError.CURRENCY_NOT_FOUND, currencyId);
+        }
+        Optional<EconomyResult<Amount>> capRefusal = refuseOnRequestAmountCap(currencyId, amount);
+        if (capRefusal.isPresent()) {
+            return capRefusal.get();
+        }
+        com.smile.aceeconomy.operations.security.SecurityControlService control = securityControl;
+        com.smile.aceeconomy.operations.security.SecurityControlService.MutationPermit permit =
+                control == null ? null : control.acquireMutationPermit();
+        try {
+            if (accounts instanceof com.smile.aceeconomy.ports.persistence.NonceStore nonces) {
+                boolean consumed;
+                try {
+                    consumed = nonces.isConsumed(nonce);
+                } catch (PersistenceException e) {
+                    balanceCache.invalidate(accountId);
+                    throw e;
+                }
+                if (consumed) {
+                    return EconomyResult.failure(EconomyError.REPLAY_DETECTED,
+                            "note already redeemed; refund refused");
+                }
+            }
+            com.smile.aceeconomy.operations.internal.TrustedRefundLedger ledger = refundLedger;
+            if (ledger == null) {
+                return EconomyResult.failure(EconomyError.AUDIT_FAILURE,
+                        "refund ledger is not bound; refund refused with no money movement");
+            }
+            if (!ledger.tryConsume(nonce, accountId, currencyId, amount, com.smile.aceeconomy.operations.internal.TrustedRefundLedger.RefundPurpose.FAILED_MINT)) {
+                return EconomyResult.failure(EconomyError.INVALID_AMOUNT,
+                        "no matching refund authorization; refund refused");
+            }
+            ReentrantLock lock = locks.lockFor(accountId);
+            lock.lock();
+            try {
+                AccountBalanceCache.CacheStamp stamp = balanceCache.stampOf(accountId);
+                Optional<Account> acc = accounts.load(accountId);
+                if (acc.isEmpty()) {
+                    releaseForRetry(ledger, nonce, accountId, currencyId, amount, com.smile.aceeconomy.operations.internal.TrustedRefundLedger.RefundPurpose.FAILED_MINT);
+                    return EconomyResult.failure(EconomyError.ACCOUNT_NOT_FOUND,
+                            "no account for " + accountId);
+                }
+                Optional<EconomyResult<Amount>> scaleRefusal =
+                        refuseOnScaleMismatch(currencyId, acc.get().balanceOf(currencyId), amount);
+                if (scaleRefusal.isPresent()) {
+                    releaseForRetry(ledger, nonce, accountId, currencyId, amount, com.smile.aceeconomy.operations.internal.TrustedRefundLedger.RefundPurpose.FAILED_MINT);
+                    return scaleRefusal.get();
+                }
+                Optional<EconomyResult<Amount>> storedCapRefusal =
+                        refuseOnStoredAmountCap(currencyId, acc.get().balanceOf(currencyId));
+                if (storedCapRefusal.isPresent()) {
+                    releaseForRetry(ledger, nonce, accountId, currencyId, amount, com.smile.aceeconomy.operations.internal.TrustedRefundLedger.RefundPurpose.FAILED_MINT);
+                    return storedCapRefusal.get();
+                }
+                Amount before = orZero(acc.get().balanceOf(currencyId), amount);
+                Amount after = before.add(amount);
+                Optional<EconomyResult<Amount>> resultCapRefusal =
+                        refuseOnResultAmountCap(currencyId, after);
+                if (resultCapRefusal.isPresent()) {
+                    releaseForRetry(ledger, nonce, accountId, currencyId, amount, com.smile.aceeconomy.operations.internal.TrustedRefundLedger.RefundPurpose.FAILED_MINT);
+                    return resultCapRefusal.get();
+                }
+                // System-initiated compensation like the undelivered-note path:
+                // no pre-commit event fires, so no listener can veto the refund
+                // and strand a charged player without a note.
+                Account updated = acc.get().deposit(currencyId, amount);
+                try {
+                    accounts.save(acc.get(), updated);
+                } catch (PersistenceException e) {
+                    if (e instanceof IndeterminatePersistenceException indeterminate) {
+                        // Uncertain outcome: settle the claim as uncertain so it
+                        // is retained, never re-authorized for consumption, and
+                        // a retry can never send twice. Keep it pending instead
+                        // of refunding blindly.
+                        settleUncertain(ledger, nonce);
+                        balanceCache.invalidate(accountId);
+                        throw indeterminate;
+                    }
+                    if (e.isCommitted()) {
+                        // The credit is durable with only post-commit cleanup
+                        // failed: settle as refunded and report it as done
+                        // without fabricating anything.
+                        settleRefunded(ledger, nonce);
+                        try {
+                            Optional<Account> committedAcc = accounts.load(accountId);
+                            if (committedAcc.isPresent()) {
+                                Amount bal = committedAcc.get().balanceOf(currencyId);
+                                if (bal != null) {
+                                    Transaction authoritativeTx = new Transaction(newId(),
+                                            accountId, null, norm(currencyId), amount,
+                                            TransactionType.DEPOSIT, before, bal, now(),
+                                            FAILED_MINT_REFUND_REASON);
+                                    balanceCache.putIfStamp(accountId, currencyId, bal, stamp);
+                                    publishPostCommit(authoritativeTx);
+                                    return EconomyResult.success(bal);
+                                }
+                            }
+                        } catch (PersistenceException ignored) {
+                            // Provider abandoned after post-commit failure; still committed.
+                        }
+                        balanceCache.putIfStamp(accountId, currencyId, after, stamp);
+                        publishPostCommit(new Transaction(newId(), accountId, null,
+                                norm(currencyId), amount, TransactionType.DEPOSIT, before,
+                                after, now(), FAILED_MINT_REFUND_REASON));
+                        return EconomyResult.success(after);
+                    }
+                    // Definitely uncommitted: nothing moved, so the same claim
+                    // is released and may be tried again later.
+                    balanceCache.invalidate(accountId);
+                    releaseForRetry(ledger, nonce, accountId, currencyId, amount, com.smile.aceeconomy.operations.internal.TrustedRefundLedger.RefundPurpose.FAILED_MINT);
+                    LOG.log(Level.WARNING,
+                            "Refund failed before commit; answering AUDIT_FAILURE without changing anything",
+                            e);
+                    return EconomyResult.failure(EconomyError.AUDIT_FAILURE, STORAGE_UNAVAILABLE);
+                }
+                balanceCache.putIfStamp(accountId, currencyId, after, stamp);
+                Transaction tx = new Transaction(newId(), accountId, null, norm(currencyId),
+                        amount, TransactionType.DEPOSIT, before, after, now(),
+                        FAILED_MINT_REFUND_REASON);
+                EconomyResult<Amount> result = commitAudit(tx, after);
+                // The balance moved (an audit-record failure travels on the
+                // success, never as a second spend), so the claim settles as
+                // refunded and is never released.
+                settleRefunded(ledger, nonce);
+                publishPostCommit(tx);
+                return result;
+            } finally {
+                lock.unlock();
+            }
+        } finally {
+            if (permit != null) {
+                permit.close();
+            }
+        }
+    }
+
+    /**
+     * Release a claimed entry for a later retry with the exact same fields.
+     * Only called when the commit definitely did not happen, so the release
+     * can never fund two credits. Best-effort: the refusal stands either way.
+     */
+    private void releaseForRetry(
+            com.smile.aceeconomy.operations.internal.TrustedRefundLedger ledger,
+            UUID nonce, UUID accountId, String currencyId, Amount amount,
+            com.smile.aceeconomy.operations.internal.TrustedRefundLedger.RefundPurpose purpose) {
+        if (ledger != null) {
+            try {
+                ledger.releaseClaim(nonce, accountId, currencyId, amount, purpose);
+            } catch (RuntimeException ignored) {
+                // The retry hint is best-effort; the refusal stands either way.
+            }
+        }
+    }
+
+    /**
+     * Settle a claimed entry as refunded once money has moved. Best-effort:
+     * the credit is already durable, so a settle failure is only logged.
+     */
+    private void settleRefunded(
+            com.smile.aceeconomy.operations.internal.TrustedRefundLedger ledger,
+            UUID nonce) {
+        if (ledger != null) {
+            try {
+                ledger.markRefunded(nonce);
+            } catch (RuntimeException settleFailure) {
+                LOG.log(Level.SEVERE,
+                        "Refund settled on storage but the ledger claim could not be marked"
+                                + " refunded; the nonce stays claimed and retries stay refused",
+                        settleFailure);
+            }
+        }
+    }
+
+    /**
+     * Settle a claimed entry as uncertain once the outcome can no longer be
+     * proven uncommitted. Best-effort: the indeterminate failure still
+     * propagates, so a settle failure is only logged.
+     */
+    private void settleUncertain(
+            com.smile.aceeconomy.operations.internal.TrustedRefundLedger ledger,
+            UUID nonce) {
+        if (ledger != null) {
+            try {
+                ledger.markUncertain(nonce);
+            } catch (RuntimeException settleFailure) {
+                LOG.log(Level.SEVERE,
+                        "Refund outcome is uncertain and the ledger claim could not be marked"
+                                + " uncertain; retries stay refused",
+                        settleFailure);
+            }
         }
     }
 

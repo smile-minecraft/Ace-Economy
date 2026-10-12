@@ -24,6 +24,9 @@ public final class TypedErrors {
         EconomyError err = result.error();
         String code = switch (err) {
             case ACCOUNT_NOT_FOUND -> "ACELIB-CMD-ACCOUNT-NOT-FOUND";
+            case ACCOUNT_FROZEN -> "ACELIB-CMD-ACCOUNT-FROZEN";
+            case GLOBAL_READ_ONLY -> "ACELIB-CMD-GLOBAL-READ-ONLY";
+            case CONTROL_UNAVAILABLE -> "ACELIB-CMD-CONTROL-UNAVAILABLE";
             case CURRENCY_NOT_FOUND -> "ACELIB-CMD-UNKNOWN-CURRENCY";
             case CURRENCY_SCALE_MISMATCH -> "ACELIB-CMD-CURRENCY-SCALE-MISMATCH";
             case AMOUNT_EXCEEDS_CAP -> "ACELIB-CMD-AMOUNT-OVERFLOW";
@@ -42,6 +45,9 @@ public final class TypedErrors {
         }
         String key = switch (err) {
             case ACCOUNT_NOT_FOUND -> "economy.account-not-found";
+            case ACCOUNT_FROZEN -> "general.account-frozen";
+            case GLOBAL_READ_ONLY -> "general.global-readonly";
+            case CONTROL_UNAVAILABLE -> "general.control-unavailable";
             case CURRENCY_NOT_FOUND -> "general.unknown-currency";
             case CURRENCY_SCALE_MISMATCH -> "economy.currency-scale-mismatch";
             // The overflow template carries no value placeholder, so the cap diagnosis

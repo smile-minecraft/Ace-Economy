@@ -119,6 +119,15 @@ public final class ImportService {
      * uncommitted records. Null means no observers are attached (legacy callers).
      */
     private final TransactionEventPublisher events;
+    /**
+     * Safety-control gate. Null keeps the legacy open gate for callers that
+     * predate the freeze; production Bootstrap always binds the shared
+     * control. Applies bypass EconomyService the same way direct mutations
+     * do: an apply touching a frozen account, or any apply while the server
+     * is read-only, is refused per record with nothing applied. Dry-run
+     * previews never consult the gate.
+     */
+    private volatile com.smile.aceeconomy.operations.security.SecurityControlService securityControl;
 
     public ImportService(CurrencyRegistry currencies, AccountRepository accounts,
                          TransactionRepository transactions, Clock clock, IdempotencyGuard idempotency) {
@@ -147,6 +156,12 @@ public final class ImportService {
 
     public ImportReport importRecords(List<ImportRecord> records, ImportOptions options) {
         return importRecords(records, options, com.smile.aceeconomy.domain.AdminAudit.unrecorded());
+    }
+
+    /** Bind the safety-control gate; see the field note for the exact refusal scope. */
+    public void bindSecurityControl(
+            com.smile.aceeconomy.operations.security.SecurityControlService control) {
+        this.securityControl = control;
     }
 
     /**
@@ -200,10 +215,82 @@ public final class ImportService {
         if (r.amount() == null || r.amount().isNegative()) {
             return ImportRecordResult.failed(r, "amount must be non-negative");
         }
+        if (!options.dryRun()) {
+            com.smile.aceeconomy.operations.security.SecurityControlService control =
+                    securityControl;
+            if (control != null) {
+                // Hold one mutation permit across the gate check and the store
+                // commit below, so a freeze requested afterwards waits until
+                // this record settles instead of slipping between check and commit.
+                com.smile.aceeconomy.operations.security.SecurityControlService.MutationPermit permit =
+                        control.acquireMutationPermit();
+                try {
+                    var refusal = control.checkInitiating(r.accountUuid());
+                    if (refusal.isPresent()) {
+                        recordBlocked(control, "import", r.accountUuid(), refusal.get(), audit);
+                        return ImportRecordResult.failed(r, gateMessage(refusal.get()));
+                    }
+                    if (importStore != null) {
+                        return processAtomic(r, options, audit);
+                    }
+                    return processLegacy(r, options, audit);
+                } finally {
+                    permit.close();
+                }
+            }
+        }
         if (importStore != null) {
             return processAtomic(r, options, audit);
         }
         return processLegacy(r, options, audit);
+    }
+
+    private static String gateMessage(com.smile.aceeconomy.domain.EconomyError error) {
+        return switch (error) {
+            case ACCOUNT_FROZEN ->
+                    "account is frozen; import refused, nothing applied";
+            case GLOBAL_READ_ONLY ->
+                    "server is read-only; import refused, nothing applied";
+            case CONTROL_UNAVAILABLE ->
+                    "safety control unavailable; import refused, nothing applied";
+            default -> "import refused by the safety control";
+        };
+    }
+
+    /**
+     * Keep one minimal blocked-attempt record per refused record: operation,
+     * target, fixed refusal category, control version, trusted operator. One
+     * record per refused initiating action. Best-effort and never throwing:
+     * the refusal stands even when recording fails, and the reply never
+     * claims the audit succeeded.
+     */
+    private void recordBlocked(
+            com.smile.aceeconomy.operations.security.SecurityControlService control,
+            String operation, UUID target,
+            com.smile.aceeconomy.domain.EconomyError error,
+            com.smile.aceeconomy.domain.AdminAudit audit) {
+        String category = switch (error) {
+            case ACCOUNT_FROZEN ->
+                    com.smile.aceeconomy.domain.BlockedControlAttempt.CATEGORY_FROZEN;
+            case GLOBAL_READ_ONLY ->
+                    com.smile.aceeconomy.domain.BlockedControlAttempt.CATEGORY_READONLY;
+            case CONTROL_UNAVAILABLE ->
+                    com.smile.aceeconomy.domain.BlockedControlAttempt.CATEGORY_UNAVAILABLE;
+            default -> null;
+        };
+        if (category == null) {
+            return;
+        }
+        try {
+            control.recordBlockedAttempt(
+                    com.smile.aceeconomy.domain.BlockedControlAttempt.of(operation, target,
+                            category, control.controlVersion(),
+                            audit == null ? null : audit.operatorId(),
+                            audit == null ? null : audit.operatorName(),
+                            clock.instant()));
+        } catch (RuntimeException ignored) {
+            // The refusal stands; the evidence record is best-effort here.
+        }
     }
 
     /**

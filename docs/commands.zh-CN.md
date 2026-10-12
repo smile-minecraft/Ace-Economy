@@ -138,7 +138,7 @@ Java 玩家打开的是箱子菜单，按钮与格子对应如下：
 
 ## 管理员权限
 
-管理员的主指令是 `/aceeco`，v2 指令规格未提供别名。想动余额就用 `give`、`take`、`set`；想查记录就用 `history`，它只读取已记录的交易，不会改变余额。`reload`、`rollback`、`restore` 与 `import` 只能由控制台执行；`rollback` 要带交易 ID，`restore` 要带备份 ID 与精确的 `confirm`，`import` 要带来源与路径（写入时需精确的 `apply confirm`）。会动到余额的六个操作（`give`、`take`、`set`、`rollback`、`restore`、`import`）都可在尾段加上可选的 `reason` 留作审计；权限维持不变。搞混执行者或参数就看[常见指令错误](#常见指令错误)。
+管理员的主指令是 `/aceeco`，v2 指令规格未提供别名。想动余额就用 `give`、`take`、`set`；想查记录就用 `history`，它只读取已记录的交易，不会改变余额。`reload`、`rollback`、`restore` 与 `import` 只能由控制台执行；`rollback` 要带交易 ID，`restore` 要带备份 ID 与精确的 `confirm`，`import` 要带来源与路径（写入时需精确的 `apply confirm`）。会动到余额的六个操作（`give`、`take`、`set`、`rollback`、`restore`、`import`）都可在尾段加上可选的 `reason` 留作审计；权限维持不变。`freeze`、`unfreeze`、`readonly` 是安全控制：玩家或控制台都能执行，各自有独立权限，每次成功都会在独立的控制审计里记下操作者与原因，绝不会伪造一笔金钱交易。搞混执行者或参数就看[常见指令错误](#常见指令错误)。
 
 | 子指令 | 用法 | 执行者 | 子指令权限 | 别名 |
 |---|---|---|---|---|
@@ -151,8 +151,11 @@ Java 玩家打开的是箱子菜单，按钮与格子对应如下：
 | `backup` | `/aceeco backup [label]` | 玩家或控制台 | `aceeconomy.admin.backup` | 无 |
 | `restore` | `/aceeco restore <backup-id> confirm [reason]` | 仅限控制台 | `aceeconomy.admin.restore` | 无 |
 | `import` | `/aceeco import <essentials\|cmi> <path> [currency] [apply confirm] [reason]` | 仅限控制台 | `aceeconomy.admin.import` | 无 |
+| `freeze` | `/aceeco freeze <player> [reason]` | 玩家或控制台 | `aceeconomy.admin.freeze` | 无 |
+| `unfreeze` | `/aceeco unfreeze <player> [reason]` | 玩家或控制台 | `aceeconomy.admin.unfreeze` | 无 |
+| `readonly` | `/aceeco readonly <on\|off> [reason]` | 玩家或控制台 | `aceeconomy.admin.readonly` | 无 |
 
-每个操作除了主权限 `aceeconomy.admin`，还要各自的子指令权限。插件声明的默认值是：玩家指令权限为 `true`，管理员权限为 `op`。另外，插件也声明 `aceeconomy.bypass.debt`，默认值为 `op`，用于跳过债务上限的权限。
+每个操作除了主权限 `aceeconomy.admin`，还要各自的子指令权限。插件声明的默认值是：玩家指令权限为 `true`，管理员权限为 `op`，上面三个安全控制节点也是 `op`。另外，插件也声明 `aceeconomy.bypass.debt`，默认值为 `op`，用于跳过债务上限的权限。三个安全控制权限互相独立：只有 `freeze` 不能解冻，也不能切换唯读。
 
 ### 管理操作审计：操作者与原因
 
@@ -175,6 +178,29 @@ Java 玩家打开的是箱子菜单，按钮与格子对应如下：
 需要把玩家余额直接设为指定金额时使用 `set`。尾段可加上可选的 `reason` 留作审计，规则见上方审计一节。
 
 示例：`/aceeco set Alex 1000 <currency>`。附原因：`/aceeco set Alex 1000 <currency> balance-fix`。
+
+### 冻结账户：`/aceeco freeze`
+
+怀疑账户被盗或需要立刻止血时使用 `freeze`。用法：`/aceeco freeze <player> [reason]`。玩家或控制台持有 `aceeconomy.admin.freeze` 就能执行。玩家不存在会明确拒绝，不动任何状态；重复冻结已冻结的账户是幂等的，状态与版本号都不变。成功会记一条控制审计（可按原因查到），绝不伪造金钱交易。变更在玩家查找之后走共用 IO 线程，指令会立刻返回，回复只在完成后发一次，慢控制落盘不会在控制路径上卡住地域线程；已通过 permit 的普通金流在控制写锁落盘期间仍会等待（已接受的线性化代价，慢盘量测留给整合验证）。冻结期间该账户不能发起任何余额变更（转出、提领、兑票、`give`/`take`/`set` 都没有例外），也不能接收（转入、外部存入都会明确失败）；被拒绝的转账一分钱都不会扣，被拒绝的兑票也不会烧掉序号。查余额、查明细、排行榜不受影响。
+
+示例：`/aceeco freeze Alex incident-case`。拒绝消息走 `general.account-frozen`。
+
+### 解冻账户：`/aceeco unfreeze`
+
+调查结束后使用 `unfreeze` 恢复。用法：`/aceeco unfreeze <player> [reason]`。它需要独立的 `aceeconomy.admin.unfreeze` 权限，只有冻结权限是不够的。未知玩家与重复解冻的处理与 `freeze` 相同（明确拒绝、幂等无操作），成功同样记一条控制审计。
+
+示例：`/aceeco unfreeze Alex cleared-case`。
+
+### 全服唯读：`/aceeco readonly`
+
+需要一键停住全服金流时使用 `readonly`。用法：`/aceeco readonly <on|off> [reason]`。玩家或控制台持有 `aceeconomy.admin.readonly` 就能执行。打开后所有账户的余额变更都会被拒绝，消息走 `general.global-readonly`；查询、预览、备份不受影响，管理员随时可以关掉。重复执行当前状态是幂等的。切换跟 `freeze` 一样走共用 IO 线程，指令立刻返回，回复只在完成后发一次。已通过 permit 的普通金流在控制写锁落盘期间仍会等待（已接受的线性化代价，慢盘量测留给整合验证）。控制文件损坏时服务器本来就已经 fail-closed 到唯读，这时关闭会被忽略（先修文件再重启），绝不会绕过保护。每次切换都记一条控制审计。
+
+示例：
+
+```text
+/aceeco readonly on emergency-hold
+/aceeco readonly off recovered
+```
 
 ### 查询交易历史：`/aceeco history`
 

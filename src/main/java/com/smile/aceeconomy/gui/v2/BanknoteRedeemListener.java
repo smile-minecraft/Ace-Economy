@@ -237,6 +237,15 @@ public final class BanknoteRedeemListener implements Listener {
         } else if ("transaction.cancelled".equals(outcome.reason())) {
             key = "general.transaction-cancelled";
             vars = Map.of();
+        } else if ("account.frozen".equals(outcome.reason())) {
+            key = "general.account-frozen";
+            vars = Map.of();
+        } else if ("server.readonly".equals(outcome.reason())) {
+            key = "general.global-readonly";
+            vars = Map.of();
+        } else if ("control.unavailable".equals(outcome.reason())) {
+            key = "general.control-unavailable";
+            vars = Map.of();
         } else {
             key = "banknote.redeem-failed";
             vars = Map.of();
@@ -264,7 +273,7 @@ public final class BanknoteRedeemListener implements Listener {
             return;
         }
         if (!result.success()) {
-            notifyFailed(player);
+            notifyRedeemRefusal(player, result.reason());
             return;
         }
         // The credit above already committed the nonce and the balance together, so from here on
@@ -326,6 +335,25 @@ public final class BanknoteRedeemListener implements Listener {
     private void notifyFailed(Player player) {
         try {
             messages.sendChatWithFallback(player, messages.renderMessage("banknote.redeem-failed", Map.of()), null);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /**
+     * Refusal reply for a direct (non-flow) redeem: frozen, read-only, and
+     * unavailable controls each use their own message so the player knows
+     * nothing moved and the note is still theirs; anything else stays a
+     * generic redeem failure.
+     */
+    private void notifyRedeemRefusal(Player player, String reason) {
+        String key = switch (reason) {
+            case "account.frozen" -> "general.account-frozen";
+            case "server.readonly" -> "general.global-readonly";
+            case "control.unavailable" -> "general.control-unavailable";
+            default -> "banknote.redeem-failed";
+        };
+        try {
+            messages.sendChatWithFallback(player, messages.renderMessage(key, Map.of()), null);
         } catch (Throwable ignored) {
         }
     }

@@ -41,10 +41,24 @@ public final class RollbackService {
 
     private final TransactionRepository transactions;
     private final ReversalExecutor executor;
+    /**
+     * Safety-control gate. Null keeps the legacy open gate for callers that
+     * predate the freeze; production Bootstrap always binds the shared
+     * control. A rollback touching a frozen account, or any rollback while
+     * the server is read-only, is refused before the executor runs, so a
+     * refused rollback never reaches its executor and moves no money.
+     */
+    private volatile com.smile.aceeconomy.operations.security.SecurityControlService securityControl;
 
     public RollbackService(TransactionRepository transactions, ReversalExecutor executor) {
         this.transactions = Objects.requireNonNull(transactions, "transactions");
         this.executor = Objects.requireNonNull(executor, "executor");
+    }
+
+    /** Bind the safety-control gate; see the field note for the exact refusal scope. */
+    public void bindSecurityControl(
+            com.smile.aceeconomy.operations.security.SecurityControlService control) {
+        this.securityControl = control;
     }
 
     public RollbackResult rollback(UUID transactionId) {
@@ -77,51 +91,112 @@ public final class RollbackService {
                     "no transaction with id " + transactionId);
         }
 
-        boolean already;
+        com.smile.aceeconomy.operations.security.SecurityControlService control = securityControl;
+        com.smile.aceeconomy.operations.security.SecurityControlService.MutationPermit permit =
+                control == null ? null : control.acquireMutationPermit();
         try {
-            already = transactions.isReverted(transactionId);
-        } catch (PersistenceException e) {
-            return RollbackResult.failure(RollbackError.EXECUTION_FAILED,
-                    "failed to check reverted marker: " + e.getMessage());
-        }
-        if (already) {
-            return RollbackResult.alreadyReverted();
-        }
-
-        RollbackCategory category = categorize(target);
-        ReversalPlan plan;
-        try {
-            plan = buildPlan(target, category, all);
-        } catch (CounterpartNotFoundException e) {
-            return RollbackResult.failure(RollbackError.COUNTERPART_NOT_FOUND, e.getMessage());
-        }
-
-        ReversalOutcome outcome = executor.execute(plan, audit);
-        if (!outcome.isSuccess()) {
-            // Executor failed: do NOT mark reverted, so the operation remains retryable.
-            return RollbackResult.failure(RollbackError.EXECUTION_FAILED, outcome.message());
-        }
-
-        // Marker ownership follows the executor. An atomic executor that already committed
-        // the markers inside its storage transaction must never receive a second, separate
-        // marker write: such a write failing after a durable reversal would report a false
-        // MARK_FAILED for an operation that is fully committed and safely retryable as
-        // ALREADY_REVERTED. Legacy (marker-unaware) executors keep the service-owned
-        // idempotent mark pass below.
-        if (!executor.ownsMarkerPersistence()) {
-            try {
-                for (UUID markerId : plan.markerIds()) {
-                    transactions.markReverted(markerId);
+            if (control != null) {
+                var refusal = control.checkInitiating(target.accountId(), target.counterparty());
+                if (refusal.isPresent()) {
+                    recordBlocked(control, "rollback", target.accountId(), refusal.get(), audit);
+                    return RollbackResult.failure(RollbackError.EXECUTION_FAILED,
+                            switch (refusal.get()) {
+                                case ACCOUNT_FROZEN ->
+                                        "account is frozen; rollback refused, nothing reversed";
+                                case GLOBAL_READ_ONLY ->
+                                        "server is read-only; rollback refused, nothing reversed";
+                                case CONTROL_UNAVAILABLE ->
+                                        "safety control unavailable; rollback refused, nothing reversed";
+                                default -> "rollback refused by the safety control";
+                            });
                 }
+            }
+
+            boolean already;
+            try {
+                already = transactions.isReverted(transactionId);
             } catch (PersistenceException e) {
-                // Reversal already applied but the marker could not be persisted. Surface as MARK_FAILED
-                // so operators know the effect occurred without durable bookkeeping.
-                return RollbackResult.failure(RollbackError.MARK_FAILED,
-                        "reversal applied but marker persist failed: " + e.getMessage());
+                return RollbackResult.failure(RollbackError.EXECUTION_FAILED,
+                        "failed to check reverted marker: " + e.getMessage());
+            }
+            if (already) {
+                return RollbackResult.alreadyReverted();
+            }
+
+            RollbackCategory category = categorize(target);
+            ReversalPlan plan;
+            try {
+                plan = buildPlan(target, category, all);
+            } catch (CounterpartNotFoundException e) {
+                return RollbackResult.failure(RollbackError.COUNTERPART_NOT_FOUND, e.getMessage());
+            }
+
+            ReversalOutcome outcome = executor.execute(plan, audit);
+            if (!outcome.isSuccess()) {
+                // Executor failed: do NOT mark reverted, so the operation remains retryable.
+                return RollbackResult.failure(RollbackError.EXECUTION_FAILED, outcome.message());
+            }
+
+            // Marker ownership follows the executor. An atomic executor that already committed
+            // the markers inside its storage transaction must never receive a second, separate
+            // marker write: such a write failing after a durable reversal would report a false
+            // MARK_FAILED for an operation that is fully committed and safely retryable as
+            // ALREADY_REVERTED. Legacy (marker-unaware) executors keep the service-owned
+            // idempotent mark pass below.
+            if (!executor.ownsMarkerPersistence()) {
+                try {
+                    for (UUID markerId : plan.markerIds()) {
+                        transactions.markReverted(markerId);
+                    }
+                } catch (PersistenceException e) {
+                    // Reversal already applied but the marker could not be persisted. Surface as MARK_FAILED
+                    // so operators know the effect occurred without durable bookkeeping.
+                    return RollbackResult.failure(RollbackError.MARK_FAILED,
+                            "reversal applied but marker persist failed: " + e.getMessage());
+                }
+            }
+
+            return RollbackResult.success(outcome.reversalTransactionIds());
+        } finally {
+            if (permit != null) {
+                permit.close();
             }
         }
+    }
 
-        return RollbackResult.success(outcome.reversalTransactionIds());
+    /**
+     * Keep one minimal blocked-attempt record per refused rollback: operation,
+     * target, fixed refusal category, control version, trusted operator. One
+     * record per refused initiating action. Best-effort and never throwing:
+     * the refusal stands even when recording fails, and the reply never
+     * claims the audit succeeded.
+     */
+    private void recordBlocked(
+            com.smile.aceeconomy.operations.security.SecurityControlService control,
+            String operation, UUID target,
+            com.smile.aceeconomy.domain.EconomyError error, AdminAudit audit) {
+        String category = switch (error) {
+            case ACCOUNT_FROZEN ->
+                    com.smile.aceeconomy.domain.BlockedControlAttempt.CATEGORY_FROZEN;
+            case GLOBAL_READ_ONLY ->
+                    com.smile.aceeconomy.domain.BlockedControlAttempt.CATEGORY_READONLY;
+            case CONTROL_UNAVAILABLE ->
+                    com.smile.aceeconomy.domain.BlockedControlAttempt.CATEGORY_UNAVAILABLE;
+            default -> null;
+        };
+        if (category == null) {
+            return;
+        }
+        try {
+            control.recordBlockedAttempt(
+                    com.smile.aceeconomy.domain.BlockedControlAttempt.of(operation, target,
+                            category, control.controlVersion(),
+                            audit == null ? null : audit.operatorId(),
+                            audit == null ? null : audit.operatorName(),
+                            java.time.Instant.now()));
+        } catch (RuntimeException ignored) {
+            // The refusal stands; the evidence record is best-effort here.
+        }
     }
 
     static RollbackCategory categorize(Transaction t) {

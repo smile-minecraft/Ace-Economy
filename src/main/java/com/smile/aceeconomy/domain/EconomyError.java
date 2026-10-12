@@ -3,6 +3,9 @@ package com.smile.aceeconomy.domain;
 /** Typed failure reasons returned by the v2 economy use cases. */
 public enum EconomyError {
     ACCOUNT_NOT_FOUND,
+    ACCOUNT_FROZEN,
+    GLOBAL_READ_ONLY,
+    CONTROL_UNAVAILABLE,
     CURRENCY_NOT_FOUND,
     CURRENCY_SCALE_MISMATCH, // stored/requested scale differs from the configured currency scale
     AMOUNT_EXCEEDS_CAP,    // request/stored/resulting amount above the public AmountCap (10^15)

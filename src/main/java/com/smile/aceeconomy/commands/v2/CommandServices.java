@@ -26,7 +26,9 @@ public record CommandServices(
         RollbackCommandService rollback,
         BackupCommandService backupRestore,
         ImportCommandService imports,
-        ConfigLangAdapter messages) {
+        ConfigLangAdapter messages,
+        com.smile.aceeconomy.operations.security.SecurityControlService securityControl,
+        java.util.concurrent.Executor controlExecutor) {
 
     public CommandServices {
         Objects.requireNonNull(economy, "economy");
@@ -38,8 +40,44 @@ public record CommandServices(
         Objects.requireNonNull(history, "history");
         Objects.requireNonNull(rollback, "rollback");
         Objects.requireNonNull(backupRestore, "backupRestore");
-        // imports and messages may be null in offline unit tests that don't exercise
-        // them; production always supplies both
+        // imports, messages, securityControl and controlExecutor may be null
+        // in offline unit tests that don't exercise them; production always
+        // supplies all four (the executor is the shared IO executor).
+    }
+
+    /** Full wiring with a control but the legacy direct executor — used by offline tests. */
+    public CommandServices(
+            EconomyCommandService economy,
+            PlayerLookupService players,
+            WithdrawCommandService withdrawals,
+            LeaderboardQueryService leaderboard,
+            BankCommandService bank,
+            AdminCommandService admin,
+            HistoryQueryService history,
+            RollbackCommandService rollback,
+            BackupCommandService backupRestore,
+            ImportCommandService imports,
+            ConfigLangAdapter messages,
+            com.smile.aceeconomy.operations.security.SecurityControlService securityControl) {
+        this(economy, players, withdrawals, leaderboard, bank, admin, history, rollback,
+                backupRestore, imports, messages, securityControl, Runnable::run);
+    }
+
+    /** Full wiring without a control — used by offline tests predating freeze. */
+    public CommandServices(
+            EconomyCommandService economy,
+            PlayerLookupService players,
+            WithdrawCommandService withdrawals,
+            LeaderboardQueryService leaderboard,
+            BankCommandService bank,
+            AdminCommandService admin,
+            HistoryQueryService history,
+            RollbackCommandService rollback,
+            BackupCommandService backupRestore,
+            ImportCommandService imports,
+            ConfigLangAdapter messages) {
+        this(economy, players, withdrawals, leaderboard, bank, admin, history, rollback,
+                backupRestore, imports, messages, null, Runnable::run);
     }
 
     /** Legacy constructor without messages — used by offline tests that don't exercise i18n. */
@@ -55,7 +93,7 @@ public record CommandServices(
             BackupCommandService backupRestore,
             ImportCommandService imports) {
         this(economy, players, withdrawals, leaderboard, bank, admin, history, rollback,
-                backupRestore, imports, null);
+                backupRestore, imports, null, null);
     }
 
     /** Legacy constructor without import/messages — used by offline tests predating import. */
@@ -70,6 +108,6 @@ public record CommandServices(
             RollbackCommandService rollback,
             BackupCommandService backupRestore) {
         this(economy, players, withdrawals, leaderboard, bank, admin, history, rollback,
-                backupRestore, null, null);
+                backupRestore, null, null, null);
     }
 }

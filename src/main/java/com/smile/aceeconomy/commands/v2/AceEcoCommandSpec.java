@@ -50,7 +50,7 @@ public final class AceEcoCommandSpec {
         var messages = services.messages();
         TypedCommand.Builder builder = TypedCommand.builder("aceeco")
                 .description("Administrative economy commands")
-                .usage("/aceeco <give|take|set|history|reload|rollback|backup|restore|import>")
+                .usage("/aceeco <give|take|set|history|reload|rollback|backup|restore|import|freeze|unfreeze|readonly>")
                 .permission("aceeconomy.admin")
                 .subcommand(mutation(services, "give"))
                 .subcommand(mutation(services, "take"))
@@ -60,6 +60,9 @@ public final class AceEcoCommandSpec {
                 .subcommand(backup(services))
                 .subcommand(restore(services))
                 .subcommand(importBalances(services))
+                .subcommand(freezeAccount(services))
+                .subcommand(unfreezeAccount(services))
+                .subcommand(globalReadonly(services))
                 .subcommand(TypedSubCommand.builder("reload")
                         .description("Reload economy configuration")
                         .usage("")
@@ -127,8 +130,333 @@ public final class AceEcoCommandSpec {
                 .build();
     }
 
-    private static TypedSubCommand history(CommandServices services) {
-        CommandArgument<String> player = CommandArguments.optionalPlayerName(services);
+    /**
+     * {@code /aceeco freeze <player> [reason]}.
+     *
+     * <p>Resolves the player, enforces {@code aceeconomy.admin.freeze},
+     * applies the shared reason policy with default fallback, and publishes
+     * state plus audit atomically with idempotent repeats. Both console and
+     * player senders are allowed.
+     */
+    private static TypedSubCommand freezeAccount(CommandServices services) {
+        CommandArgument<String> player = CommandArguments.playerName(services);
+        CommandArgument<String> reason = CommandArguments.reason();
+        return TypedSubCommand.builder("freeze")
+                .description("Freeze one account")
+                .usage("<player> [reason]")
+                .permission(SecurityCommandPolicy.FREEZE_PERMISSION)
+                .argument(player)
+                .optional(reason, sender -> "")
+                .executes(context -> executeFreeze(services, context, player, reason))
+                .build();
+    }
+
+    /**
+     * {@code /aceeco unfreeze <player> [reason]}.
+     *
+     * <p>Uses its own {@code aceeconomy.admin.unfreeze} node; holding freeze never
+     * implies unfreeze. Repeating an unfreeze is idempotent.
+     */
+    private static TypedSubCommand unfreezeAccount(CommandServices services) {
+        CommandArgument<String> player = CommandArguments.playerName(services);
+        CommandArgument<String> reason = CommandArguments.reason();
+        return TypedSubCommand.builder("unfreeze")
+                .description("Unfreeze one account")
+                .usage("<player> [reason]")
+                .permission(SecurityCommandPolicy.UNFREEZE_PERMISSION)
+                .argument(player)
+                .optional(reason, sender -> "")
+                .executes(context -> executeUnfreeze(services, context, player, reason))
+                .build();
+    }
+
+    /**
+     * {@code /aceeco readonly <on|off> [reason]}.
+     *
+     * <p>Both senders allowed. Switching the flag publishes state plus audit
+     * atomically; switching off while the control failed to load is ignored
+     * by the control itself and reported back.
+     */
+    private static TypedSubCommand globalReadonly(CommandServices services) {
+        CommandArgument<String> mode = CommandArguments.token("mode", "<on|off>");
+        CommandArgument<String> reason = CommandArguments.reason();
+        return TypedSubCommand.builder("readonly")
+                .description("Switch global read-only mode")
+                .usage("<on|off> [reason]")
+                .permission(SecurityCommandPolicy.READONLY_PERMISSION)
+                .argument(mode)
+                .optional(reason, sender -> "")
+                .executes(context -> executeReadonly(services, context, mode, reason))
+                .build();
+    }
+
+    private static void executeFreeze(CommandServices services, TypedContext context,
+                                      CommandArgument<String> playerArg,
+                                      CommandArgument<String> reasonArg) {
+        var messages = services.messages();
+        var control = services.securityControl();
+        if (control == null) {
+            V2CommandSupport.replyFailure(context, CommandException.custom(
+                    "ACELIB-CMD-CONTROL-UNAVAILABLE", "safety control is not wired"));
+            return;
+        }
+        if (!SecurityCommandPolicy.hasFreezePermission(context.sender()::hasPermission)) {
+            V2CommandSupport.replyFailure(context, CommandException.custom(
+                    "ACELIB-CMD-NO-PERMISSION", noPermissionMessage(messages)));
+            return;
+        }
+        String name = context.get(playerArg);
+        AdminAudit audit;
+        try {
+            audit = AdminAuditSupport.resolve(context.sender(), context.get(reasonArg));
+        } catch (CommandException invalidReason) {
+            V2CommandSupport.replyFailure(context, invalidReason);
+            return;
+        }
+        java.util.concurrent.Executor controlExecutor = services.controlExecutor();
+        if (controlExecutor == null) {
+            V2CommandSupport.replyFailure(context, CommandException.custom(
+                    "ACELIB-CMD-EMPTY-EXECUTOR", "control callback executor is not configured"));
+            return;
+        }
+        java.util.concurrent.CompletableFuture<java.util.Optional<PlayerIdentity>> lookup;
+        try {
+            lookup = services.players().resolve(name);
+        } catch (RuntimeException resolveFailure) {
+            V2CommandSupport.replyFailure(context, resolveFailure);
+            return;
+        }
+        if (lookup == null) {
+            V2CommandSupport.replyFailure(context, CommandException.custom(
+                    "ACELIB-CMD-EMPTY-FUTURE", "command.empty-future"));
+            return;
+        }
+        java.util.concurrent.CompletableFuture<Void> stage;
+        try {
+            // The whole control mutation (read check plus write publish with
+            // its file fsync and its wait for older permits) runs on the
+            // shared IO executor, never on the Folia region thread. The
+            // handler returns immediately; the reply below fires only after
+            // the mutation completes, through the region dispatch seam.
+            stage = lookup.handleAsync((target, failure) -> {
+                if (failure != null) {
+                    V2CommandSupport.replyFailure(context, failure);
+                    return null;
+                }
+                if (target == null || target.isEmpty()) {
+                    String msg = messages != null
+                            ? messages.plainMessage("general.player-not-found", Map.of("player", name))
+                            : "general.player-not-found";
+                    CommandReply.replyError(context,
+                            CommandException.custom("ACELIB-CMD-ACCOUNT-NOT-FOUND", msg));
+                    return null;
+                }
+                PlayerIdentity identity = target.get();
+                try {
+                    if (control.isFrozen(identity.uuid())) {
+                        CommandReply.replyComponent(context, messages, Component.text(
+                                "account already frozen: " + identity.name()));
+                        return null;
+                    }
+                    control.freeze(identity.uuid(), audit);
+                } catch (RuntimeException controlFailure) {
+                    V2CommandSupport.replyFailure(context, controlFailure);
+                    return null;
+                }
+                CommandReply.replyComponent(context, messages, Component.text(
+                        "froze " + identity.name() + " (" + audit.reason() + ")"));
+                return null;
+            }, controlExecutor);
+        } catch (RuntimeException submissionFailure) {
+            V2CommandSupport.replyFailure(context, CommandException.custom(
+                    "ACELIB-CMD-EXECUTOR-REJECTED",
+                    "control executor rejected the mutation; nothing was applied"));
+            return;
+        }
+        stage.whenComplete((ignored, stageFailure) -> {
+            if (stageFailure != null) {
+                V2CommandSupport.replyFailure(context, CommandException.custom(
+                        "ACELIB-CMD-EXECUTOR-REJECTED",
+                        "control executor rejected the mutation; nothing was applied"));
+            }
+        });
+    }
+
+    private static void executeUnfreeze(CommandServices services, TypedContext context,
+                                        CommandArgument<String> playerArg,
+                                        CommandArgument<String> reasonArg) {
+        var messages = services.messages();
+        var control = services.securityControl();
+        if (control == null) {
+            V2CommandSupport.replyFailure(context, CommandException.custom(
+                    "ACELIB-CMD-CONTROL-UNAVAILABLE", "safety control is not wired"));
+            return;
+        }
+        if (!SecurityCommandPolicy.hasUnfreezePermission(context.sender()::hasPermission)) {
+            V2CommandSupport.replyFailure(context, CommandException.custom(
+                    "ACELIB-CMD-NO-PERMISSION", noPermissionMessage(messages)));
+            return;
+        }
+        String name = context.get(playerArg);
+        AdminAudit audit;
+        try {
+            audit = AdminAuditSupport.resolve(context.sender(), context.get(reasonArg));
+        } catch (CommandException invalidReason) {
+            V2CommandSupport.replyFailure(context, invalidReason);
+            return;
+        }
+        java.util.concurrent.Executor controlExecutor = services.controlExecutor();
+        if (controlExecutor == null) {
+            V2CommandSupport.replyFailure(context, CommandException.custom(
+                    "ACELIB-CMD-EMPTY-EXECUTOR", "control callback executor is not configured"));
+            return;
+        }
+        java.util.concurrent.CompletableFuture<java.util.Optional<PlayerIdentity>> lookup;
+        try {
+            lookup = services.players().resolve(name);
+        } catch (RuntimeException resolveFailure) {
+            V2CommandSupport.replyFailure(context, resolveFailure);
+            return;
+        }
+        if (lookup == null) {
+            V2CommandSupport.replyFailure(context, CommandException.custom(
+                    "ACELIB-CMD-EMPTY-FUTURE", "command.empty-future"));
+            return;
+        }
+        java.util.concurrent.CompletableFuture<Void> stage;
+        try {
+            stage = lookup.handleAsync((target, failure) -> {
+                if (failure != null) {
+                    V2CommandSupport.replyFailure(context, failure);
+                    return null;
+                }
+                if (target == null || target.isEmpty()) {
+                    String msg = messages != null
+                            ? messages.plainMessage("general.player-not-found", Map.of("player", name))
+                            : "general.player-not-found";
+                    CommandReply.replyError(context,
+                            CommandException.custom("ACELIB-CMD-ACCOUNT-NOT-FOUND", msg));
+                    return null;
+                }
+                PlayerIdentity identity = target.get();
+                try {
+                    if (!control.isFrozen(identity.uuid())) {
+                        CommandReply.replyComponent(context, messages, Component.text(
+                                "account is not frozen: " + identity.name()));
+                        return null;
+                    }
+                    control.unfreeze(identity.uuid(), audit);
+                } catch (RuntimeException controlFailure) {
+                    V2CommandSupport.replyFailure(context, controlFailure);
+                    return null;
+                }
+                CommandReply.replyComponent(context, messages, Component.text(
+                        "unfroze " + identity.name() + " (" + audit.reason() + ")"));
+                return null;
+            }, controlExecutor);
+        } catch (RuntimeException submissionFailure) {
+            V2CommandSupport.replyFailure(context, CommandException.custom(
+                    "ACELIB-CMD-EXECUTOR-REJECTED",
+                    "control executor rejected the mutation; nothing was applied"));
+            return;
+        }
+        stage.whenComplete((ignored, stageFailure) -> {
+            if (stageFailure != null) {
+                V2CommandSupport.replyFailure(context, CommandException.custom(
+                        "ACELIB-CMD-EXECUTOR-REJECTED",
+                        "control executor rejected the mutation; nothing was applied"));
+            }
+        });
+    }
+
+    private static void executeReadonly(CommandServices services, TypedContext context,
+                                        CommandArgument<String> modeArg,
+                                        CommandArgument<String> reasonArg) {
+        var messages = services.messages();
+        var control = services.securityControl();
+        if (control == null) {
+            V2CommandSupport.replyFailure(context, CommandException.custom(
+                    "ACELIB-CMD-CONTROL-UNAVAILABLE", "safety control is not wired"));
+            return;
+        }
+        if (!SecurityCommandPolicy.hasReadonlyPermission(context.sender()::hasPermission)) {
+            V2CommandSupport.replyFailure(context, CommandException.custom(
+                    "ACELIB-CMD-NO-PERMISSION", noPermissionMessage(messages)));
+            return;
+        }
+        String mode = context.get(modeArg);
+        boolean enabled;
+        if ("on".equalsIgnoreCase(mode)) {
+            enabled = true;
+        } else if ("off".equalsIgnoreCase(mode)) {
+            enabled = false;
+        } else {
+            V2CommandSupport.replyFailure(context, CommandException.custom(
+                    "ACELIB-CMD-INVALID-ARGS", "usage: readonly <on|off> [reason]"));
+            return;
+        }
+        AdminAudit audit;
+        try {
+            audit = AdminAuditSupport.resolve(context.sender(), context.get(reasonArg));
+        } catch (CommandException invalidReason) {
+            V2CommandSupport.replyFailure(context, invalidReason);
+            return;
+        }
+        java.util.concurrent.Executor controlExecutor = services.controlExecutor();
+        if (controlExecutor == null) {
+            V2CommandSupport.replyFailure(context, CommandException.custom(
+                    "ACELIB-CMD-EMPTY-EXECUTOR", "control callback executor is not configured"));
+            return;
+        }
+        java.util.concurrent.CompletableFuture<Void> stage;
+        try {
+            // Read check plus write publish run together on the IO executor;
+            // the region thread never acquires the control write lock nor
+            // fsyncs. The reply fires only after the mutation completes.
+            stage = java.util.concurrent.CompletableFuture.runAsync(() -> {
+                try {
+                    if (control.isGlobalReadonly() == enabled) {
+                        CommandReply.replyComponent(context, messages, Component.text(
+                                enabled ? "server is already read-only" : "server is already writable"));
+                        return;
+                    }
+                    control.setGlobalReadonly(enabled, audit);
+                } catch (RuntimeException controlFailure) {
+                    V2CommandSupport.replyFailure(context, controlFailure);
+                    return;
+                }
+                if (!enabled && control.isLoadFailed()) {
+                    CommandReply.replyComponent(context, messages, Component.text(
+                            "read-only off ignored: the safety control failed to load;"
+                                    + " repair the control file and restart"));
+                    return;
+                }
+                CommandReply.replyComponent(context, messages, Component.text(
+                        enabled ? "server is now read-only (" + audit.reason() + ")"
+                                : "server is writable again (" + audit.reason() + ")"));
+            }, controlExecutor);
+        } catch (RuntimeException submissionFailure) {
+            V2CommandSupport.replyFailure(context, CommandException.custom(
+                    "ACELIB-CMD-EXECUTOR-REJECTED",
+                    "control executor rejected the mutation; nothing was applied"));
+            return;
+        }
+        stage.whenComplete((ignored, stageFailure) -> {
+            if (stageFailure != null) {
+                V2CommandSupport.replyFailure(context, CommandException.custom(
+                        "ACELIB-CMD-EXECUTOR-REJECTED",
+                        "control executor rejected the mutation; nothing was applied"));
+            }
+        });
+    }
+
+    private static String noPermissionMessage(ConfigLangAdapter messages) {
+        return messages != null
+                ? messages.plainMessage("general.no-permission", Map.of())
+                : "general.no-permission";
+    }
+
+    private static TypedSubCommand history(CommandServices services) {        CommandArgument<String> player = CommandArguments.optionalPlayerName(services);
         CommandArgument<CurrencyInfo> currency = CommandArguments.currency(services);
         CommandArgument<Integer> page = CommandArguments.page(services);
         return TypedSubCommand.builder("history")

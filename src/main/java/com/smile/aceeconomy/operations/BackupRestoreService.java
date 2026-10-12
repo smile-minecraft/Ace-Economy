@@ -83,6 +83,15 @@ public final class BackupRestoreService {
     private final Clock clock;
     private final Supplier<String> uniqueSuffix;
     private final ReentrantLock operationLock = new ReentrantLock();
+    /**
+     * Safety-control gate. Null keeps the legacy open gate for callers that
+     * predate the freeze; production Bootstrap always binds the shared
+     * control. A restore under global read-only, with an unavailable
+     * control, or touching a frozen account in the live-plus-candidate union
+     * is refused as a whole before any live state is replaced, and a restore
+     * never replaces the current control.
+     */
+    private volatile com.smile.aceeconomy.operations.security.SecurityControlService securityControl;
 
     public BackupRestoreService(PersistenceLifecycle lifecycle,
                                 Path pluginDataFolder,
@@ -109,6 +118,143 @@ public final class BackupRestoreService {
         this.cacheReset = cacheReset;
         this.clock = clock;
         this.uniqueSuffix = uniqueSuffix;
+    }
+
+    /** Bind the safety-control gate; see the field note for the exact refusal scope. */
+    public void bindSecurityControl(
+            com.smile.aceeconomy.operations.security.SecurityControlService control) {
+        this.securityControl = control;
+    }
+
+    /**
+     * Safety-control gate for a parsed restore candidate against the live
+     * world. Refuses the restore as a whole under global read-only, with an
+     * unavailable control, or when any account the restore would change or
+     * delete is frozen — the union of every account named by the incoming
+     * snapshot and by the live world (accounts, transactions and their
+     * balances), so a candidate that omits a live frozen account still
+     * refuses instead of deleting it. Returns null when the restore may
+     * proceed. Every refusal leaves one minimal blocked-attempt record.
+     *
+     * <p>Must run inside the backend exclusive window (holding a mutation
+     * permit) together with the safety snapshot and the publish, so a freeze
+     * requested afterwards waits until the restore settles instead of
+     * slipping between check and commit, and ordinary writes cannot change
+     * the judged live set mid-restore.
+     */
+    private RestoreResult gateRestore(JsonModel candidate, JsonModel live,
+            com.smile.aceeconomy.operations.security.SecurityControlService control,
+            AdminAudit audit) {
+        var global = control.checkInitiating();
+        if (global.isPresent()) {
+            recordBlocked(control, "restore", null, global.get(), audit);
+            return RestoreResult.failure(BackupRestoreError.INVALID_REQUEST,
+                    switch (global.get()) {
+                        case GLOBAL_READ_ONLY ->
+                                "server is read-only; restore refused, live state untouched";
+                        case CONTROL_UNAVAILABLE ->
+                                "safety control unavailable; restore refused, live state untouched";
+                        default -> "restore refused by the safety control";
+                    });
+        }
+        java.util.Set<java.util.UUID> touched = touchedAccounts(candidate);
+        touched.addAll(touchedAccounts(live));
+        var refusal = control.checkInitiating(touched.toArray(new java.util.UUID[0]));
+        if (refusal.isPresent()) {
+            java.util.UUID target = null;
+            for (java.util.UUID id : touched) {
+                if (control.isFrozen(id)) {
+                    target = id;
+                    break;
+                }
+            }
+            recordBlocked(control, "restore", target, refusal.get(), audit);
+            return RestoreResult.failure(BackupRestoreError.INVALID_REQUEST,
+                    "restore touches a frozen account; restore refused as a whole,"
+                            + " live state untouched");
+        }
+        return null;
+    }
+
+    /** Every account UUID a snapshot would change or delete when published. */
+    private static java.util.Set<java.util.UUID> touchedAccounts(JsonModel model) {
+        java.util.Set<java.util.UUID> touched = new java.util.HashSet<>();
+        for (String key : model.accounts.keySet()) {
+            addAccountId(touched, key);
+        }
+        for (JsonModel.JsonTransaction row : model.transactions) {
+            addAccountId(touched, row.accountId);
+            addAccountId(touched, row.counterparty);
+        }
+        return touched;
+    }
+
+    private static void addAccountId(java.util.Set<java.util.UUID> touched, String key) {
+        if (key == null) {
+            return;
+        }
+        try {
+            touched.add(java.util.UUID.fromString(key));
+        } catch (IllegalArgumentException notAnAccount) {
+            // Preflight already validated the snapshot; ignore unparseable keys here.
+        }
+    }
+
+    /**
+     * Re-read the just-written safety snapshot and judge the live-plus-
+     * candidate union inside the exclusive window. One record per refused
+     * restoring action. Best-effort recording: the refusal stands even when
+     * recording fails.
+     */
+    private RestoreResult gateUnionInsideWindow(JsonModel candidate, String safetyBackupId,
+            AdminAudit audit) {
+        com.smile.aceeconomy.operations.security.SecurityControlService control = securityControl;
+        if (control == null) {
+            return null;
+        }
+        JsonModel live;
+        try {
+            live = SnapshotPreflight.parse(
+                    new String(readCandidateSnapshot(safetyBackupId), StandardCharsets.UTF_8));
+        } catch (IOException | RuntimeException e) {
+            return RestoreResult.failure(BackupRestoreError.IO_FAILED,
+                    "pre-restore safety snapshot could not be re-read; live state untouched: "
+                            + e.getMessage());
+        }
+        return gateRestore(candidate, live, control, audit);
+    }
+
+    /**
+     * Keep one minimal blocked-attempt record per refused restore: operation,
+     * target, fixed refusal category, control version, trusted operator. The
+     * reply never claims the audit succeeded.
+     */
+    private void recordBlocked(
+            com.smile.aceeconomy.operations.security.SecurityControlService control,
+            String operation, java.util.UUID target,
+            com.smile.aceeconomy.domain.EconomyError error, AdminAudit audit) {
+        String category = switch (error) {
+            case ACCOUNT_FROZEN ->
+                    com.smile.aceeconomy.domain.BlockedControlAttempt.CATEGORY_FROZEN;
+            case GLOBAL_READ_ONLY ->
+                    com.smile.aceeconomy.domain.BlockedControlAttempt.CATEGORY_READONLY;
+            case CONTROL_UNAVAILABLE ->
+                    com.smile.aceeconomy.domain.BlockedControlAttempt.CATEGORY_UNAVAILABLE;
+            default -> null;
+        };
+        if (category == null) {
+            return;
+        }
+        try {
+            control.recordBlockedAttempt(
+                    com.smile.aceeconomy.domain.BlockedControlAttempt.of(operation, target,
+                            category, control.controlVersion(),
+                            audit == null ? null : audit.operatorId(),
+                            audit == null ? null : audit.operatorName(),
+                            clock.instant()));
+        } catch (RuntimeException ignored) {
+            // The refusal stands; the evidence record is best-effort here.
+        }
     }
 
     // ---------------- backup ----------------
@@ -214,55 +360,80 @@ public final class BackupRestoreService {
         } catch (PersistenceException e) {
             return classifyPreflightFailure(e);
         }
-        // 3. Operation lock serializes against concurrent backups/restores.
-        if (!operationLock.tryLock()) {
-            return RestoreResult.failure(BackupRestoreError.BUSY,
-                    "another backup or restore operation is already running");
-        }
+        // 2b. One mutation permit covers the union gate and the backend
+        // publish below, so a freeze requested afterwards waits until the
+        // restore settles instead of slipping between check and commit. The
+        // gate itself runs inside the exclusive window below (live plus
+        // candidate union), where ordinary writes cannot change the judged
+        // set mid-restore. A restore never replaces the current control: the
+        // control lives outside the economy snapshot and is never written here.
+        com.smile.aceeconomy.operations.security.SecurityControlService control = securityControl;
+        com.smile.aceeconomy.operations.security.SecurityControlService.MutationPermit permit =
+                control == null ? null : control.acquireMutationPermit();
         try {
-            // 4. Hard online-player gate, re-checked inside the lock before any write.
-            if (onlineProbe.hasOnlinePlayers()) {
-                return RestoreResult.failure(BackupRestoreError.PLAYERS_ONLINE,
-                        "players are still online; ask everyone to leave before restoring");
+            // 3. Operation lock serializes against concurrent backups/restores.
+            if (!operationLock.tryLock()) {
+                return RestoreResult.failure(BackupRestoreError.BUSY,
+                        "another backup or restore operation is already running");
             }
-            // 5+6. Exclusive boundary on the SAME backend instance: ordinary repository
-            // writes cannot interleave between the safety snapshot and the restore. The
-            // backend lock/monitor is reentrant, so the safety backup inside may safely
-            // re-enter lifecycle.backup, and it is never rejected by the service busy gate
-            // because this thread already holds the service operation lock.
             try {
-                return lifecycle.runExclusive(() -> {
-                    BackupResult safety = createBackup(SAFETY_LABEL);
-                    if (!safety.isSuccess()) {
-                        return RestoreResult.failure(BackupRestoreError.SAFETY_BACKUP_FAILED,
-                                "pre-restore safety snapshot failed; live state untouched — "
-                                        + safety.message());
-                    }
-                    OperationAudit record = OperationAudit.restore(audit, clock.instant(),
-                            id, safety.backupId());
-                    byte[] augmented = augmentCandidate(candidate, record);
-                    try {
-                        lifecycle.restore(new ByteArrayInputStream(augmented));
-                    } catch (PersistenceException | IOException e) {
-                        // Truthful contract: once lifecycle.restore has been entered, a
-                        // backend failure does NOT prove the live state is unchanged —
-                        // a failed SQL rollback or a post-commit autoCommit failure can
-                        // leave it changed or committed. Never claim a rollback here.
-                        return RestoreResult.failure(BackupRestoreError.RESTORE_FAILED,
-                                "backend restore failed; live state was not confirmed "
-                                        + "unchanged — inspect the safety backup and SQL "
-                                        + "connection before any retry: " + e.getMessage());
-                    }
-                    // 7. Success: stale cached rankings must never survive a replaced world.
-                    cacheReset.run();
-                    return RestoreResult.success(id, safety.backupId());
-                });
-            } catch (PersistenceException | IOException e) {
-                return RestoreResult.failure(BackupRestoreError.IO_FAILED,
-                        "exclusive restore window failed: " + e.getMessage());
+                // 4. Hard online-player gate, re-checked inside the lock before any write.
+                if (onlineProbe.hasOnlinePlayers()) {
+                    return RestoreResult.failure(BackupRestoreError.PLAYERS_ONLINE,
+                            "players are still online; ask everyone to leave before restoring");
+                }
+                // 5+6. Exclusive boundary on the SAME backend instance: ordinary repository
+                // writes cannot interleave between the safety snapshot and the restore. The
+                // backend lock/monitor is reentrant, so the safety backup inside may safely
+                // re-enter lifecycle.backup, and it is never rejected by the service busy gate
+                // because this thread already holds the service operation lock.
+                try {
+                    return lifecycle.runExclusive(() -> {
+                        BackupResult safety = createBackup(SAFETY_LABEL);
+                        if (!safety.isSuccess()) {
+                            return RestoreResult.failure(BackupRestoreError.SAFETY_BACKUP_FAILED,
+                                    "pre-restore safety snapshot failed; live state untouched — "
+                                            + safety.message());
+                        }
+                        // 5b. Safety-control union gate, still before any live
+                        // state is replaced: global read-only, an unavailable
+                        // control, or any frozen account in the live-plus-
+                        // candidate union refuses the restore as a whole.
+                        RestoreResult gate =
+                                gateUnionInsideWindow(candidate, safety.backupId(), audit);
+                        if (gate != null) {
+                            return gate;
+                        }
+                        OperationAudit record = OperationAudit.restore(audit, clock.instant(),
+                                id, safety.backupId());
+                        byte[] augmented = augmentCandidate(candidate, record);
+                        try {
+                            lifecycle.restore(new ByteArrayInputStream(augmented));
+                        } catch (PersistenceException | IOException e) {
+                            // Truthful contract: once lifecycle.restore has been entered, a
+                            // backend failure does NOT prove the live state is unchanged —
+                            // a failed SQL rollback or a post-commit autoCommit failure can
+                            // leave it changed or committed. Never claim a rollback here.
+                            return RestoreResult.failure(BackupRestoreError.RESTORE_FAILED,
+                                    "backend restore failed; live state was not confirmed "
+                                            + "unchanged — inspect the safety backup and SQL "
+                                            + "connection before any retry: " + e.getMessage());
+                        }
+                        // 7. Success: stale cached rankings must never survive a replaced world.
+                        cacheReset.run();
+                        return RestoreResult.success(id, safety.backupId());
+                    });
+                } catch (PersistenceException | IOException e) {
+                    return RestoreResult.failure(BackupRestoreError.IO_FAILED,
+                            "exclusive restore window failed: " + e.getMessage());
+                }
+            } finally {
+                operationLock.unlock();
             }
         } finally {
-            operationLock.unlock();
+            if (permit != null) {
+                permit.close();
+            }
         }
     }
 
@@ -298,52 +469,72 @@ public final class BackupRestoreService {
         } catch (PersistenceException e) {
             return classifyPreflightFailure(e);
         }
-        // 3. Operation lock serializes against concurrent backups/restores.
-        if (!operationLock.tryLock()) {
-            return RestoreResult.failure(BackupRestoreError.BUSY,
-                    "another backup or restore operation is already running");
-        }
+        // 2b. One mutation permit covers the union gate and the backend
+        // publish below; a restore never replaces the current control.
+        com.smile.aceeconomy.operations.security.SecurityControlService control = securityControl;
+        com.smile.aceeconomy.operations.security.SecurityControlService.MutationPermit permit =
+                control == null ? null : control.acquireMutationPermit();
         try {
-            // 4. Hard online-player gate, re-checked inside the lock before any write.
-            if (onlineProbe.hasOnlinePlayers()) {
-                return RestoreResult.failure(BackupRestoreError.PLAYERS_ONLINE,
-                        "players are still online; ask everyone to leave before restoring");
+            // 3. Operation lock serializes against concurrent backups/restores.
+            if (!operationLock.tryLock()) {
+                return RestoreResult.failure(BackupRestoreError.BUSY,
+                        "another backup or restore operation is already running");
             }
-            // 5+6. Exclusive boundary on the SAME backend instance: ordinary repository
-            // writes cannot interleave between the safety snapshot and the restore. The
-            // backend lock/monitor is reentrant, so the safety backup inside may safely
-            // re-enter lifecycle.backup, and it is never rejected by the service busy gate
-            // because this thread already holds the service operation lock.
             try {
-                return lifecycle.runExclusive(() -> {
-                    BackupResult safety = createBackup(SAFETY_LABEL);
-                    if (!safety.isSuccess()) {
-                        return RestoreResult.failure(BackupRestoreError.SAFETY_BACKUP_FAILED,
-                                "pre-restore safety snapshot failed; live state untouched — "
-                                        + safety.message());
-                    }
-                    try {
-                        lifecycle.restore(new ByteArrayInputStream(snapshot));
-                    } catch (PersistenceException | IOException e) {
-                        // Truthful contract: once lifecycle.restore has been entered, a
-                        // backend failure does NOT prove the live state is unchanged —
-                        // a failed SQL rollback or a post-commit autoCommit failure can
-                        // leave it changed or committed. Never claim a rollback here.
-                        return RestoreResult.failure(BackupRestoreError.RESTORE_FAILED,
-                                "backend restore failed; live state was not confirmed "
-                                        + "unchanged — inspect the safety backup and SQL "
-                                        + "connection before any retry: " + e.getMessage());
-                    }
-                    // 7. Success: stale cached rankings must never survive a replaced world.
-                    cacheReset.run();
-                    return RestoreResult.success(id, safety.backupId());
-                });
-            } catch (PersistenceException | IOException e) {
-                return RestoreResult.failure(BackupRestoreError.IO_FAILED,
-                        "exclusive restore window failed: " + e.getMessage());
+                // 4. Hard online-player gate, re-checked inside the lock before any write.
+                if (onlineProbe.hasOnlinePlayers()) {
+                    return RestoreResult.failure(BackupRestoreError.PLAYERS_ONLINE,
+                            "players are still online; ask everyone to leave before restoring");
+                }
+                // 5+6. Exclusive boundary on the SAME backend instance: ordinary repository
+                // writes cannot interleave between the safety snapshot and the restore. The
+                // backend lock/monitor is reentrant, so the safety backup inside may safely
+                // re-enter lifecycle.backup, and it is never rejected by the service busy gate
+                // because this thread already holds the service operation lock.
+                try {
+                    return lifecycle.runExclusive(() -> {
+                        BackupResult safety = createBackup(SAFETY_LABEL);
+                        if (!safety.isSuccess()) {
+                            return RestoreResult.failure(BackupRestoreError.SAFETY_BACKUP_FAILED,
+                                    "pre-restore safety snapshot failed; live state untouched — "
+                                            + safety.message());
+                        }
+                        // 5b. Safety-control union gate, still before any live
+                        // state is replaced: the live-plus-candidate union
+                        // refuses the restore as a whole when it would change
+                        // or delete a frozen account.
+                        RestoreResult gate = gateUnionInsideWindow(candidate,
+                                safety.backupId(), AdminAudit.unrecorded());
+                        if (gate != null) {
+                            return gate;
+                        }
+                        try {
+                            lifecycle.restore(new ByteArrayInputStream(snapshot));
+                        } catch (PersistenceException | IOException e) {
+                            // Truthful contract: once lifecycle.restore has been entered, a
+                            // backend failure does NOT prove the live state is unchanged —
+                            // a failed SQL rollback or a post-commit autoCommit failure can
+                            // leave it changed or committed. Never claim a rollback here.
+                            return RestoreResult.failure(BackupRestoreError.RESTORE_FAILED,
+                                    "backend restore failed; live state was not confirmed "
+                                            + "unchanged — inspect the safety backup and SQL "
+                                            + "connection before any retry: " + e.getMessage());
+                        }
+                        // 7. Success: stale cached rankings must never survive a replaced world.
+                        cacheReset.run();
+                        return RestoreResult.success(id, safety.backupId());
+                    });
+                } catch (PersistenceException | IOException e) {
+                    return RestoreResult.failure(BackupRestoreError.IO_FAILED,
+                            "exclusive restore window failed: " + e.getMessage());
+                }
+            } finally {
+                operationLock.unlock();
             }
         } finally {
-            operationLock.unlock();
+            if (permit != null) {
+                permit.close();
+            }
         }
     }
 

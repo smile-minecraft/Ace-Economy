@@ -398,6 +398,7 @@ final class ProductionAdapters {
         private final BanknoteFactory banknotes; private final BanknoteValidator validator;
         private final AtomicRedemptionStore redemptions;
         private final com.smile.aceeconomy.infrastructure.banknote.BanknoteFlow flow;
+        private volatile com.smile.aceeconomy.operations.internal.TrustedRefundLedger refundLedger;
         BankUseCase(EconomyApi api, EconomyService economy, CurrencyRegistry currencies,
                     BanknoteFactory banknotes, BanknoteValidator validator,
                     AtomicRedemptionStore redemptions,
@@ -420,6 +421,17 @@ final class ProductionAdapters {
                     BanknoteFactory banknotes, BanknoteValidator validator,
                     AtomicRedemptionStore redemptions) {
             this(api, economy, currencies, banknotes, validator, redemptions, null);
+        }
+        /**
+         * Bind the single-use trusted-refund ledger shared with the core
+         * service and the banknote flow. A GUI mint failure with a bound
+         * ledger refunds through the trusted path exempt from the freeze
+         * gate; without it the legacy ordinary deposit is used and a frozen
+         * refund stays refused instead of stranding the charge silently.
+         */
+        void bindRefundLedger(
+                com.smile.aceeconomy.operations.internal.TrustedRefundLedger ledger) {
+            this.refundLedger = ledger;
         }
         public WithdrawResult withdraw(UUID id, long value) {
             return withdraw(id, value, null);
@@ -454,7 +466,7 @@ final class ProductionAdapters {
                 LOGGER.log(System.Logger.Level.WARNING,
                         "banknote mint threw: player={0}, currency={1}, amount={2}, type={3}",
                         new Object[] { id, c.id(), amount, mintThrew.getClass().getName() });
-                return refundAndReject(id, c.id(), amount,
+                return refundAndReject(id, c.id(), amount, claim.nonce(),
                         "banknote mint failed: " + mintThrew.getClass().getSimpleName());
             }
             if (note == null) {
@@ -463,7 +475,7 @@ final class ProductionAdapters {
                 // currency — the same money-safety rule the command path applies. A failed
                 // refund is logged at ERROR and stays observable; it is never retried here,
                 // so a refund outage can neither silently lose the money nor double-refund.
-                return refundAndReject(id, c.id(), amount, "banknote could not be created");
+                return refundAndReject(id, c.id(), amount, claim.nonce(), "banknote could not be created");
             }
             return WithdrawResult.success(note);
         }
@@ -474,8 +486,46 @@ final class ProductionAdapters {
          * after-balance a withdrawal result resolves to), runs at most once and is never
          * retried; a refund outage is logged at ERROR with full context so it stays
          * observable for manual reconciliation instead of silently losing the money.
+         *
+         * <p>When the trusted-refund ledger is bound, the proven-undelivered
+         * note refunds through the single-use trusted path exempt from the
+         * freeze and read-only gate (the note never left memory). Without a
+         * bound ledger the legacy ordinary deposit is used.
          */
-        private WithdrawResult refundAndReject(UUID id, String currencyId, Amount withdrawn, String reason) {
+        private WithdrawResult refundAndReject(UUID id, String currencyId, Amount withdrawn,
+                                               UUID nonce, String reason) {
+            com.smile.aceeconomy.operations.internal.TrustedRefundLedger ledger = refundLedger;
+            if (ledger != null && economy != null && nonce != null) {
+                try {
+                    ledger.authorize(nonce, id, currencyId, withdrawn,
+                            com.smile.aceeconomy.operations.internal.TrustedRefundLedger
+                                    .RefundPurpose.FAILED_MINT);
+                } catch (Throwable authorizeFailure) {
+                    LOGGER.log(System.Logger.Level.ERROR,
+                            "gui withdraw compensation failed: player={0}, currency={1}, amount={2}, reason={3}",
+                            new Object[] {id, currencyId, withdrawn,
+                                    authorizeFailure.getClass().getSimpleName()});
+                    return WithdrawResult.rejected(reason);
+                }
+                EconomyResult<Amount> trusted;
+                try {
+                    trusted = economy.refundFailedMint(
+                            com.smile.aceeconomy.operations.internal.FailedMintRefund.proven(
+                                    id, currencyId, withdrawn, nonce));
+                } catch (Throwable refundFailure) {
+                    LOGGER.log(System.Logger.Level.ERROR,
+                            "gui withdraw compensation failed: player={0}, currency={1}, amount={2}, reason={3}",
+                            new Object[] {id, currencyId, withdrawn,
+                                    refundFailure.getClass().getSimpleName()});
+                    return WithdrawResult.rejected(reason);
+                }
+                if (trusted.isFailure()) {
+                    LOGGER.log(System.Logger.Level.ERROR,
+                            "gui withdraw compensation failed: player={0}, currency={1}, amount={2}, reason={3}",
+                            new Object[] {id, currencyId, withdrawn, trusted.message()});
+                }
+                return WithdrawResult.rejected(reason);
+            }
             EconomyResult<Amount> refund = api.deposit(id, currencyId, withdrawn);
             if (refund.isFailure()) {
                 LOGGER.log(System.Logger.Level.ERROR,
@@ -535,6 +585,15 @@ final class ProductionAdapters {
                 }
                 if (err == EconomyError.INVALID_AMOUNT) {
                     return DepositResult.rejected("value.nonpositive");
+                }
+                if (err == EconomyError.ACCOUNT_FROZEN) {
+                    return DepositResult.rejected("account.frozen");
+                }
+                if (err == EconomyError.GLOBAL_READ_ONLY) {
+                    return DepositResult.rejected("server.readonly");
+                }
+                if (err == EconomyError.CONTROL_UNAVAILABLE) {
+                    return DepositResult.rejected("control.unavailable");
                 }
                 return DepositResult.rejected("credit.failed");
             }

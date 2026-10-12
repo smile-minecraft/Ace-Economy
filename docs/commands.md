@@ -138,7 +138,7 @@ For a valid v2 banknote, durable replay protection and credit complete before th
 
 ## For administrators
 
-The administrator root is `/aceeco`, with no alias listed by the v2 command specification. The root permission is `aceeconomy.admin`; each operation also declares its own permission node. The mutation commands accept the same player, amount, and optional currency pattern as the player commands. `history` reads recorded transactions instead of changing balances. `reload`, `rollback`, `restore`, and `import` are console-only; `rollback` takes a transaction id, `restore` takes a backup id plus the exact confirmation word `confirm`, and `import` takes a source plus a gate-relative path (writes only with the exact `apply confirm` pair). The six balance-changing operations (`give`, `take`, `set`, `rollback`, `restore`, and `import`) accept an optional trailing `reason` for the audit record; their permissions are unchanged.
+The administrator root is `/aceeco`, with no alias listed by the v2 command specification. The root permission is `aceeconomy.admin`; each operation also declares its own permission node. The mutation commands accept the same player, amount, and optional currency pattern as the player commands. `history` reads recorded transactions instead of changing balances. `reload`, `rollback`, `restore`, and `import` are console-only; `rollback` takes a transaction id, `restore` takes a backup id plus the exact confirmation word `confirm`, and `import` takes a source plus a gate-relative path (writes only with the exact `apply confirm` pair). The six balance-changing operations (`give`, `take`, `set`, `rollback`, `restore`, and `import`) accept an optional trailing `reason` for the audit record; their permissions are unchanged. `freeze`, `unfreeze`, and `readonly` are the safety control: either sender may run them, each has its own permission node, and each records operator plus reason in the separate control audit trail (never as a money transaction).
 
 | Subcommand | Usage | Sender | Subcommand permission | Alias |
 |---|---|---|---|---|
@@ -151,8 +151,11 @@ The administrator root is `/aceeco`, with no alias listed by the v2 command spec
 | `backup` | `/aceeco backup [label]` | Player or console | `aceeconomy.admin.backup` | None |
 | `restore` | `/aceeco restore <backup-id> confirm [reason]` | Console only | `aceeconomy.admin.restore` | None |
 | `import` | `/aceeco import <essentials\|cmi> <path> [currency] [apply confirm] [reason]` | Console only | `aceeconomy.admin.import` | None |
+| `freeze` | `/aceeco freeze <player> [reason]` | Player or console | `aceeconomy.admin.freeze` | None |
+| `unfreeze` | `/aceeco unfreeze <player> [reason]` | Player or console | `aceeconomy.admin.unfreeze` | None |
+| `readonly` | `/aceeco readonly <on\|off> [reason]` | Player or console | `aceeconomy.admin.readonly` | None |
 
-The declared defaults are `true` for the player command permissions and `op` for the administrator permissions. The plugin also declares `aceeconomy.bypass.debt` with an `op` default for debt-limit bypass access.
+The declared defaults are `true` for the player command permissions and `op` for the administrator permissions, including the three safety-control nodes above. The plugin also declares `aceeconomy.bypass.debt` with an `op` default for debt-limit bypass access. Holding one safety-control node never implies another: `freeze` alone grants neither `unfreeze` nor `readonly`.
 
 ### Administrative audit: operator and reason
 
@@ -175,6 +178,29 @@ Example: `/aceeco take Alex 125 <currency>`. With a reason: `/aceeco take Alex 1
 Use `set` when an administrator needs to assign a player's balance to a specific amount. An optional trailing reason may be added for the audit record; see the audit rule above.
 
 Example: `/aceeco set Alex 1000 <currency>`. With a reason: `/aceeco set Alex 1000 <currency> balance-fix`.
+
+### Freeze an account: `/aceeco freeze`
+
+Use `freeze` when an account must stop moving money immediately (for example a compromised account). Usage: `/aceeco freeze <player> [reason]`. Either sender may run it with `aceeconomy.admin.freeze`. An unknown player is refused explicitly and touches no state. Repeating a freeze on an already frozen account is idempotent: state and version do not change. A successful freeze records operator plus reason in the control audit trail (reachable by reason search) and never fabricates a money transaction. The mutation runs on the shared IO executor after player lookup; the command handler returns immediately and the reply arrives once after completion, so a slow control-file publish never blocks the region thread on the control path; ordinary money operations admitted through a permit still wait while the control write holds the lock (accepted linearisation cost, slow-disk measurement left to integration). While frozen, the account cannot start any balance change (transfer out, withdraw, redeem, `give`/`take`/`set` with no override) and cannot receive one (transfer in, external deposit); a refused transfer deducts nothing and a refused redeem keeps its note. Balance, history, and leaderboard queries keep working.
+
+Example: `/aceeco freeze Alex incident-case`. The refusal reply uses `general.account-frozen`.
+
+### Unfreeze an account: `/aceeco unfreeze`
+
+Use `unfreeze` to lift a freeze. Usage: `/aceeco unfreeze <player> [reason]`. It needs its own `aceeconomy.admin.unfreeze` node; holding `freeze` never implies it. Unknown players and repeated unfreezes behave like `freeze` above (explicit refusal, idempotent no-op). The unfreeze is recorded in the control audit trail the same way.
+
+Example: `/aceeco unfreeze Alex cleared-case`.
+
+### Switch global read-only mode: `/aceeco readonly`
+
+Use `readonly` as the emergency stop for all money movement. Usage: `/aceeco readonly <on|off> [reason]`. Either sender may run it with `aceeconomy.admin.readonly`. Switching on refuses every initiating balance change on every account with `general.global-readonly`; queries, previews, and backups keep working, and the operator can always switch it back off. Repeating the current value is idempotent. The switch runs on the shared IO executor like `freeze`; the handler returns immediately and the reply arrives once after completion. Ordinary money operations admitted through a permit still wait while the control write holds the lock (accepted linearisation cost, slow-disk measurement left to integration). When the control file failed to load, the server is already fail-closed to read-only: switching off is ignored (repair the file and restart), never a bypass. Each switch records operator plus reason in the control audit trail.
+
+Examples:
+
+```text
+/aceeco readonly on emergency-hold
+/aceeco readonly off recovered
+```
 
 ### Query the transaction history: `/aceeco history`
 
