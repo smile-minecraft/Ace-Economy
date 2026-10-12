@@ -168,6 +168,7 @@ class DefaultSubcommandRegistryTest {
 
         List<String> completions = h.registry().tabComplete(h.sender(), "money", List.of());
 
-        assertEquals(List.of("money", "balance"), completions);
+        // history is a deliberately added subcommand, so the full set now includes it.
+        assertEquals(List.of("money", "balance", "history"), completions);
     }
 }

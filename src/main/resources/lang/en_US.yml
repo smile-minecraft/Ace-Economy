@@ -114,12 +114,12 @@ command:
   empty-future: "<red>Command service returned no async result</red>"
   empty-result: "<red>Command service returned no result</red>"
   missing-argument: "<red>Argument {index} is required</red>"
-  usage-pay: '<gray>Usage: <white>/pay \<player> \<amount> [currency]</white></gray>'
-  usage-withdraw: '<gray>Usage: <white>/withdraw \<amount></white></gray>'
-  usage-balance: "<gray>Usage: <white>/balance [player] [currency]</white></gray>"
-  usage-baltop: "<gray>Usage: <white>/baltop [currency] [page]</white></gray>"
+  usage-pay: '<gray>Usage: <white>/pay send \<player> \<amount> [currency]</white></gray>'
+  usage-withdraw: '<gray>Usage: <white>/withdraw cash \<amount> [currency]</white></gray>'
+  usage-balance: "<gray>Usage: <white>/money balance [player] [currency]</white></gray>"
+  usage-baltop: "<gray>Usage: <white>/baltop top [currency]</white></gray>"
   usage-history: '<gray>Usage: <white>/aceeco history \<player> [page]</white></gray>'
-  usage-rollback: '<gray>Usage: <white>/aceeco rollback \<player> \<time> [category]</white></gray>'
+  usage-rollback: '<gray>Usage: <white>/aceeco rollback \<transaction-id></white></gray>'
   invalid-uuid: "<red>Transaction id must be a valid UUID: <white>{raw}</white></red>"
   invalid-page: "<red>Page must be a non-negative integer: <white>{raw}</white></red>"
   restore-confirm-required: "<red>Restore is destructive. Re-run exactly as: <white>/aceeco restore {backup_id} confirm</white></red>"
@@ -157,19 +157,19 @@ rollback:
   already-reverted: "<yellow>Transaction {transaction_id} was already reverted; no changes made</yellow>"
   invalid-result: "<red>Rollback service returned a failure without a typed error; inspect logs and do not retry blindly — {details}</red>"
   success: "<green>Rolled back transaction {transaction_id}; reversal audit records ({count}): {ids}</green>"
-  usage: '<gray>Usage: <white>/aceeco rollback \<player> \<time> [category]</white></gray>'
+  usage: '<gray>Usage: <white>/aceeco rollback \<transaction-id></white></gray>'
   searching: "<yellow>Searching and rolling back transactions...</yellow>"
   none-found: "<red>No matching transactions found to rollback.</red>"
   complete: "<green>Rollback complete! Success: {success}, Failed: {fail}</green>"
   error: "<red>Error occurred during rollback.</red>"
 
 usage:
-  pay: '<gray>Usage: <white>/pay \<player> \<amount> [currency]</white></gray>'
-  withdraw: '<gray>Usage: <white>/withdraw \<amount></white></gray>'
-  balance: "<gray>Usage: <white>/balance [player] [currency]</white></gray>"
-  baltop: "<gray>Usage: <white>/baltop [currency] [page]</white></gray>"
+  pay: '<gray>Usage: <white>/pay send \<player> \<amount> [currency]</white></gray>'
+  withdraw: '<gray>Usage: <white>/withdraw cash \<amount> [currency]</white></gray>'
+  balance: "<gray>Usage: <white>/money balance [player] [currency]</white></gray>"
+  baltop: "<gray>Usage: <white>/baltop top [currency]</white></gray>"
   history: '<gray>Usage: <white>/aceeco history \<player> [page]</white></gray>'
-  rollback: '<gray>Usage: <white>/aceeco rollback \<player> \<time> [category]</white></gray>'
+  rollback: '<gray>Usage: <white>/aceeco rollback \<transaction-id></white></gray>'
 
 console:
   start: "AceEconomy {version} Enabled!"
@@ -222,7 +222,7 @@ banknote:
   voided: "<red>This banknote has been voided!</red>"
   redeem-success: "<green>Redeemed banknote: <yellow>{amount}</yellow> <gray>(Issuer: {issuer})</gray></green>"
   redeem-failed: "<red>Redemption failed!</red>"
-  redeem-retained: "<yellow>Banknote redeemed for <yellow>{amount}</yellow>, but the item could not be removed. Keep it and contact an administrator.</yellow>"
+  redeem-retained: "<yellow>Banknote redeemed for <gold>{amount}</gold>, but the item could not be removed. Keep it and contact an administrator.</yellow>"
   redeem-replay: "<red>This banknote was already redeemed!</red>"
   redeem-mismatch: "<yellow>The banknote was credited, but the held item had been swapped, so nothing was removed. Keep the item and contact an administrator if it is still there.</yellow>"
   withdraw-pending: "<yellow>Withdraw result uncertain: the deduction, the note handover and any correction are all unconfirmed. Do not retry; contact an administrator.</yellow>"

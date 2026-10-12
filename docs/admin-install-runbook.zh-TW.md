@@ -17,7 +17,7 @@
 
 Paper/Folia 26.1.2 是正式支援的版本。Folia 26.2 只有特定 build 通過驗證（VERIFIED-BETA），其他 26.2 build 還沒驗證過。
 
-> **開發者說明（尚未發布的原始碼）：**本倉庫目前的原始碼（尚未發布為 Release）需要以 AceLib v1.4.0 建置（SHA-256 `80c5274b1d2ab1ed528f49b7878f58ad8dfb110492da59277b6aacc7b4e3185b`，[AceLib v1.4.0 Release](https://github.com/smile-minecraft/AceLib/releases/tag/v1.4.0)）。請勿將已發布的 `AceEconomy-2.2.0.jar` 附件與 AceLib 1.4.0 搭配使用：該附件仍會呼叫已被移除的 `GuiService#shutdown()`，停用時會記錄 `NoSuchMethodError`。已發布附件請用上文的 AceLib 1.2.1；只有自行建置本倉庫原始碼時才用 AceLib 1.4.0。
+> **開發者說明（尚未發布的原始碼）：**本倉庫目前的原始碼（尚未發布為 Release）需要以 AceLib v1.5.0 建置（SHA-256 `346be2a8ecee247bf67fef71e804f829bdb8cc4f5be8980adc0b2b594facca9b`，[AceLib v1.5.0 Release](https://github.com/smile-minecraft/AceLib/releases/tag/v1.5.0)）。請勿將已發布的 `AceEconomy-2.2.0.jar` 附件與 AceLib 1.5.0 搭配使用：該附件仍會呼叫已被移除的 `GuiService#shutdown()`，停用時會記錄 `NoSuchMethodError`。已發布附件請用上文的 AceLib 1.2.1；只有自行建置本倉庫原始碼時才用 AceLib 1.5.0。
 
 先準備好這兩個檔案：
 

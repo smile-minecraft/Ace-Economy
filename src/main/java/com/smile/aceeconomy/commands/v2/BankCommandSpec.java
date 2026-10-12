@@ -1,7 +1,8 @@
 package com.smile.aceeconomy.commands.v2;
 
 import com.smile.acelib.command.CommandSpec;
-import com.smile.acelib.command.SubCommandSpec;
+import com.smile.acelib.command.TypedCommand;
+import com.smile.acelib.command.TypedSubCommand;
 
 /** AceLib spec for opening the bank presentation surface. */
 public final class BankCommandSpec {
@@ -10,23 +11,22 @@ public final class BankCommandSpec {
     }
 
     public static CommandSpec create(CommandServices services) {
-        SubCommandSpec open = SubCommandSpec.builder("open")
+        TypedSubCommand open = TypedSubCommand.builder("open")
                 .description("Open the bank")
                 .usage("")
                 .permission("aceeconomy.command.bank")
                 .playerOnly()
-                .minArgs(0)
-                .maxArgs(0)
-                .handler(context -> {
+                .executes(context -> {
                     var player = context.requireOnlinePlayer();
                     services.bank().open(player.getUniqueId(), player.getName());
                 })
                 .build();
-        return CommandSpec.builder("bank")
+        return TypedCommand.builder("bank")
                 .description("Open the bank")
                 .usage("/bank open")
                 .permission("aceeconomy.command.bank")
-                .subCommand(open)
-                .build();
+                .subcommand(open)
+                .build()
+                .toCommandSpec();
     }
 }

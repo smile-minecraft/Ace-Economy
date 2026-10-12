@@ -6,7 +6,10 @@ import com.smile.acelib.config.ConfigManager;
 import com.smile.acelib.config.ConfigSchema;
 import com.smile.acelib.config.ConfigSnapshot;
 import com.smile.acelib.config.LangManager;
+import com.smile.acelib.message.MessageScope;
 import com.smile.acelib.message.MessageService;
+import com.smile.acelib.message.PlayerLocaleResolver;
+import com.smile.acelib.message.RenderedMessage;
 import com.smile.acelib.bedrock.BedrockService;
 import com.smile.aceeconomy.ports.BedrockDetector;
 
@@ -32,8 +35,8 @@ import java.util.logging.Level;
 /**
  * v2 config / language / message compatibility adapter (clean-slate).
  *
- * <p>Built only on the public AceLib v1.4.0 surface: {@link ConfigManager},
- * {@link LangManager} and {@link MessageService}. It introduces no internal
+ * <p>Built only on the public AceLib v1.5.0 surface: {@link ConfigManager},
+ * {@link LangManager}, {@link MessageScope} and {@link MessageService}. It introduces no internal
  * datastore, performs no plugin cast and uses no reflection.</p>
  *
  * <p>Responsibilities:</p>
@@ -42,16 +45,21 @@ import java.util.logging.Level;
  *       with a {@link V2ConfigSchema};</li>
  *   <li>ensure the three v2 lang resources ({@code lang/<locale>.yml}) are present
  *       on first install via {@link JavaPlugin#saveResource(String, boolean)};</li>
- *   <li>render messages through {@link MessageService#formatComponent} (typed
- *       substitution with user-value escaping and MiniMessage parsing); plain text
- *       is projected from the resulting Component without a second parse;</li>
+ *   <li>render messages through the plugin-scoped {@link MessageScope}
+ *       ({@link MessageService#render}, typed substitution with user-value
+ *       escaping and MiniMessage parsing); plain text is projected from the
+ *       resulting Component without a second parse, so the
+ *       {@link RenderedMessage#text()} view (which backslash-escapes variable
+ *       {@code <...>} content) is deliberately not used;</li>
  *   <li>deliver player chat through the Bedrock-aware
  *       {@code sendChatWithFallback} path when a {@link BedrockService} is
  *       attached, so Bedrock click actions degrade to readable hints while
  *       Java output stays untouched; without an attached service every player
  *       keeps the original Component (Floodgate-absent behaviour);</li>
  *   <li>resolve the active locale from {@code settings.locale} (only
- *       {@code en_US}, {@code zh_TW}, {@code zh_CN});</li>
+ *       {@code en_US}, {@code zh_TW}, {@code zh_CN}); the scope carries a
+ *       fixed {@link PlayerLocaleResolver} for that global locale, so
+ *       per-player client locales are explicitly not followed;</li>
  *   <li>reload while preserving the last valid snapshot and returning a
  *       diagnosable {@link ReloadResult}.</li>
  * </ul>
@@ -70,6 +78,17 @@ public final class ConfigLangAdapter {
     private volatile ConfigManager configManager;
     private volatile LangManager langManager;
     private volatile MessageService messageService;
+    /**
+     * Plugin-scoped message scope rendering from the live {@link #langManager}.
+     *
+     * <p>Rebuilt with every config/lang snapshot swap and closed when replaced
+     * (see {@link #close()}): rendering always goes through the current scope,
+     * while the Bedrock-aware {@link #messageService} stays on the send path.
+     * The scope is constructed directly around the validated candidate
+     * {@link LangManager} (never through the shared static registry) so a
+     * failed reload can never disturb the live snapshot.</p>
+     */
+    private volatile MessageScope messageScope;
     /**
      * Last published fixed settings and the immutable snapshot they were bound
      * from. Both advance only on the single atomic swap after the whole
@@ -109,6 +128,7 @@ public final class ConfigLangAdapter {
         this.configManager = new ConfigManager(plugin, "config.yml", schema, V2ConfigSchema.V2);
         this.langManager = new LangManager(plugin, defaultLocale);
         this.messageService = newMessageService(langManager);
+        this.messageScope = newMessageScope(langManager, defaultLocale);
     }
 
     private MessageService newMessageService(LangManager lang) {
@@ -120,11 +140,45 @@ public final class ConfigLangAdapter {
     }
 
     /**
+     * Build the render scope for one language snapshot with a fixed resolver
+     * for the global locale: every render without an explicit locale uses that
+     * locale, and per-player client locales are explicitly not followed (the
+     * stock {@code PlayerLocaleResolver#playerLocale} would follow the client
+     * locale whenever a player is supplied, which would change player-visible
+     * behaviour outside this task's scope).
+     */
+    private MessageScope newMessageScope(LangManager lang, Locale fixedLocale) {
+        Locale fixed = fixedLocale != null ? fixedLocale : defaultLocale;
+        PlayerLocaleResolver retainGlobal = player -> fixed;
+        return new MessageScope(plugin, lang, retainGlobal);
+    }
+
+    /** Current render scope, for tests in the same package. Never {@code null} after construction. */
+    MessageScope messageScopeForTest() {
+        return messageScope;
+    }
+
+    /**
+     * Close the plugin-scoped render scope. Idempotent and safe to call at any
+     * time; it never touches shared AceLib services or the send pipeline, so
+     * other consumers of the same AceLib instance are unaffected. After this
+     * call {@link #renderMessage} fails closed with the scope's lifecycle
+     * error instead of rendering.
+     */
+    public void close() {
+        MessageScope scope = messageScope;
+        if (scope != null && !scope.isClosed()) {
+            scope.close();
+        }
+    }
+
+    /**
      * Attach (or detach with {@code null}) the Bedrock lookup service and
-     * rebuild the message pipeline on the current language snapshot.
+     * rebuild the Bedrock-aware send pipeline on the current language snapshot.
      *
      * <p>Used when the ready AceLib facade becomes available after this
-     * adapter was constructed; safe to call at any time and idempotent.</p>
+     * adapter was constructed; safe to call at any time and idempotent. The
+     * render scope is untouched: rendering never needs Bedrock lookup.</p>
      */
     public void attachBedrockService(@Nullable BedrockService bedrock) {
         synchronized (lock) {
@@ -420,11 +474,15 @@ public final class ConfigLangAdapter {
                 throw new IllegalStateException(summary);
             }
             MessageService candidateService = newMessageService(candidateLang);
+            MessageScope candidateScope = newMessageScope(candidateLang, target);
             this.configManager = candidate;
             this.configSnapshot = validated.snapshot();
             this.fixedSettings = validated.settings();
             this.langManager = candidateLang;
             this.messageService = candidateService;
+            MessageScope retired = this.messageScope;
+            this.messageScope = candidateScope;
+            retired.close();
         }
     }
 
@@ -1087,11 +1145,15 @@ public final class ConfigLangAdapter {
             }
             // Both candidates succeeded — single atomic swap (keep candidate side-effect files as persisted)
             MessageService candidateService = newMessageService(candidateLang);
+            MessageScope candidateScope = newMessageScope(candidateLang, target);
             this.configManager = candidateConfig;
             this.configSnapshot = validated.snapshot();
             this.fixedSettings = validated.settings();
             this.langManager = candidateLang;
             this.messageService = candidateService;
+            MessageScope retired = this.messageScope;
+            this.messageScope = candidateScope;
+            retired.close();
             java.util.List<String> appliedNotes = appliedNotesFor(plan);
             return new ReloadResult(true, true, null, null,
                     plan.summary(), appliedNotes, restartNotes);
@@ -1244,9 +1306,10 @@ public final class ConfigLangAdapter {
         }
     }
 
-    /** Render a message to an Adventure {@link Component} using AceLib v1.4.0
-     *  {@link MessageService#formatComponent(String, java.util.Map)} so user-provided
-     *  values are escaped before MiniMessage parsing (prevents tag injection).
+    /** Render a message to an Adventure {@link Component} through the
+     *  plugin-scoped {@link MessageScope} ({@link MessageService#render},
+     *  so user-provided values are escaped before MiniMessage parsing and
+     *  prevent tag injection).
      *
      * <p>Missing keys produce a diagnosable non-blank fallback
      * {@code Missing translation: <key>} and a warning without leaking user values.
@@ -1257,7 +1320,8 @@ public final class ConfigLangAdapter {
     public Component renderMessage(String key, Map<String, Object> vars) {
         Objects.requireNonNull(key, "key");
         synchronized (lock) {
-            Component raw = messageService.formatComponent(key, vars);
+            RenderedMessage rendered = messageScope.render(key, vars);
+            Component raw = rendered == null ? null : rendered.component();
             if (raw == null || raw.equals(Component.empty())) {
                 Optional<String> present = langManager.get(key, null);
                 if (present.isEmpty()) {
@@ -1271,6 +1335,33 @@ public final class ConfigLangAdapter {
         }
     }
 
+    /** Render a message for an explicit locale through the plugin-scoped
+     *  {@link MessageScope}.
+     *
+     * <p>Same fallback, warning and prefix-repair contract as
+     * {@link #renderMessage(String, Map)}; the shared {@code message.prefix}
+     * is taken from the requested locale (falling back to the default locale
+     * when that locale has no prefix), matching AceLib v1.5.0. A missing key
+     * still returns {@code Missing translation: <key>} with a warning.</p> */
+    public Component renderMessage(String key, Map<String, Object> vars, Locale locale) {
+        Objects.requireNonNull(key, "key");
+        Objects.requireNonNull(locale, "locale");
+        synchronized (lock) {
+            RenderedMessage rendered = messageScope.render(key, vars, locale);
+            Component raw = rendered == null ? null : rendered.component();
+            if (raw == null || raw.equals(Component.empty())) {
+                Optional<String> present = langManager.get(locale, key);
+                if (present.isEmpty()) {
+                    warnMissing(key);
+                    return Component.text("Missing translation: " + key);
+                }
+                // key exists but rendered empty (e.g. parse failure) – keep raw empty
+                return raw == null ? Component.empty() : raw;
+            }
+            return fixPrefixIfLiteralLocked(raw, locale);
+        }
+    }
+
     /** Render a message to plain text via safe Component projection.
      *
      * <p>Uses the safe {@link #renderMessage(String, Map)} component and
@@ -1280,6 +1371,19 @@ public final class ConfigLangAdapter {
     public String plainMessage(String key, Map<String, Object> vars) {
         Objects.requireNonNull(key, "key");
         Component comp = renderMessage(key, vars);
+        return plainOf(comp, key);
+    }
+
+    /** Plain-text variant of {@link #renderMessage(String, Map, Locale)}:
+     * same safe projection for an explicit locale. */
+    public String plainMessage(String key, Map<String, Object> vars, Locale locale) {
+        Objects.requireNonNull(key, "key");
+        Objects.requireNonNull(locale, "locale");
+        Component comp = renderMessage(key, vars, locale);
+        return plainOf(comp, key);
+    }
+
+    private static String plainOf(Component comp, String key) {
         if (comp.equals(Component.text("Missing translation: " + key))) {
             return "Missing translation: " + key;
         }
@@ -1290,7 +1394,18 @@ public final class ConfigLangAdapter {
     }
 
     private Component fixPrefixIfLiteralLocked(Component raw) {
-        Optional<String> prefixOpt = langManager.get("message.prefix");
+        return fixPrefixIfLiteralLocked(raw, null);
+    }
+
+    /**
+     * Repair the literal prefix AceLib currently prepends, reading the prefix
+     * template from the given locale (or the active global locale when
+     * {@code null}) so an explicit-locale render matches its own prefix.
+     */
+    private Component fixPrefixIfLiteralLocked(Component raw, Locale locale) {
+        Optional<String> prefixOpt = locale == null
+                ? langManager.get("message.prefix")
+                : langManager.get(locale, "message.prefix");
         if (prefixOpt.isEmpty() || prefixOpt.get().isEmpty() || prefixOpt.get().isBlank()) {
             return raw;
         }

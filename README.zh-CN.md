@@ -4,7 +4,7 @@
 
 AceEconomy 为 Paper 和 Folia 服务器提供游戏内经济系统。玩家可以查询余额、互相付款、提取银行支票、打开银行面板，并在排行榜上比较名次。服务器管理员可以选择存储后端、定义货币、接入 Vault 或 PlaceholderAPI，并将交易通知发送到 Discord。
 
-第一次安装？请从[管理员安装手册](docs/admin-install-runbook.zh-CN.md)开始。如果你是在已有服务器上游玩，[玩家指南](docs/player-guide.zh-CN.md) 是最快的入口。
+初次安装请参阅[管理员安装手册](docs/admin-install-runbook.zh-CN.md)。玩家操作请参阅[玩家指南](docs/player-guide.zh-CN.md)。
 
 ## 运行要求
 
@@ -17,7 +17,7 @@ AceEconomy 为 Paper 和 Folia 服务器提供游戏内经济系统。玩家可�
 
 Paper/Folia 26.1.2 是正式支持的服务器线。Folia 26.2 仅在特定 build 上通过验证（VERIFIED-BETA），其余 26.2 build 未验证。
 
-> **开发者说明（尚未发布的源码）：**本仓库当前源码（尚未发布为 Release）需要以 AceLib v1.4.0 构建（SHA-256 `80c5274b1d2ab1ed528f49b7878f58ad8dfb110492da59277b6aacc7b4e3185b`，[AceLib v1.4.0 Release](https://github.com/smile-minecraft/AceLib/releases/tag/v1.4.0)）。请勿将已发布的 `AceEconomy-2.2.0.jar` 附件与 AceLib 1.4.0 搭配使用：该附件仍会调用已被移除的 `GuiService#shutdown()`，停用时会记录 `NoSuchMethodError`。已发布附件请用上文的 AceLib 1.2.1；只有自行构建本仓库源码时才用 AceLib 1.4.0。
+> **开发者说明（尚未发布的源码）：**本仓库当前源码（尚未发布为 Release）需要以 AceLib v1.5.0 构建（SHA-256 `346be2a8ecee247bf67fef71e804f829bdb8cc4f5be8980adc0b2b594facca9b`，[AceLib v1.5.0 Release](https://github.com/smile-minecraft/AceLib/releases/tag/v1.5.0)）。请勿将已发布的 `AceEconomy-2.2.0.jar` 附件与 AceLib 1.5.0 搭配使用：该附件仍会调用已被移除的 `GuiService#shutdown()`，停用时会记录 `NoSuchMethodError`。已发布附件请用上文的 AceLib 1.2.1；只有自行构建本仓库源码时才用 AceLib 1.5.0。
 
 ## 快速开始
 
@@ -26,7 +26,7 @@ Paper/Folia 26.1.2 是正式支持的服务器线。Folia 26.2 仅在特定 buil
 3. 如果需要这些整合功能，再安装 Vault 或 PlaceholderAPI。
 4. 启动服务器。AceEconomy 首次启动时会创建默认配置和存储。
 5. 根据需要调整 `config.yml` 中的存储、语言、货币和整合设置。[配置指南](docs/config.zh-CN.md) 解释了各项设置。
-6. 使用 `/money balance` 查询余额，再使用 `/bank open` 打开银行面板。
+6. 执行 `/money balance` 验证账户余额，并以 `/bank open` 打开银行面板测试功能。
 
 ## 主要功能
 
@@ -48,7 +48,7 @@ Paper/Folia 26.1.2 是正式支持的服务器线。Folia 26.2 仅在特定 buil
 | `/baltop top [currency]` | 查看余额排行榜 |
 | `/bank open` | 打开银行面板 |
 
-参数规则、权限、管理员指令和完整参考请查看[指令与权限](docs/commands.zh-CN.md)。想按情境操作时，可以从[玩家指南](docs/player-guide.zh-CN.md)开始。
+参数规则、权限节点、管理员指令和完整语法请参阅[指令与权限](docs/commands.zh-CN.md)。日常场景操作请参阅[玩家指南](docs/player-guide.zh-CN.md)。
 
 ## 文档索引
 

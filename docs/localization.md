@@ -82,6 +82,8 @@ economy:
 
 The reload reads the config and language snapshot again under a single adapter lock. A valid change becomes visible in the next message that uses the changed key. The active locale is resolved from `config.yml` via `ConfigLangAdapter` and `LangManager`; the constructor default (`zh_TW`) is only a fallback when `settings.locale` is absent before the first load — an invalid value (not `en_US`/`zh_TW`/`zh_CN`) fails the initial `load()` and never falls back, while a `reload()` with an invalid locale keeps the previous valid snapshot.
 
+Every render uses that global locale. The adapter renders through one plugin-scoped message scope whose resolver is fixed to the active locale, so players with different client locales still see the same language — per-player locales are deliberately not followed. A render that names an explicit locale takes its `message.prefix` from that locale (falling back to the default locale when the locale has no prefix); a missing key still returns `Missing translation: <key>` with a `WARNING`.
+
 ## Edit a translation safely
 
 Start from the v2 file that matches the locale you want to edit. Change only YAML values:
@@ -103,13 +105,26 @@ Keep the built-in resource shape when maintaining a locale. The built-in resourc
 
 ## Reload and recovery
 
-`/aceeco reload` from the server console reloads the v2 config and selected language resource atomically via candidate managers. The adapter builds a candidate `ConfigManager` and validates `config.yml` under strict type rules for every declared v2 field before any swap: integer fields (`storage.mysql.port` 1–65535, `storage.mysql.pool-size` 1–1000, `leaderboard.cache-time-seconds` 1–86400, `leaderboard.page-size` 1–100, `storage.mysql.max-lifetime` ≥1) must be finite integral numbers — fractional values such as `3306.5`, non-finite `NaN`/`Infinity`, and numeric strings such as `"3306"` are rejected without truncation; boolean fields (`economy.allow-negative-balance`, `discord.enabled`, `leaderboard.enabled`) must be YAML Boolean (`"true"`/`"false"` strings are rejected); string fields (`settings.locale` as `en_US`/`zh_TW`/`zh_CN` enum, `settings.main-command-alias`, `storage.sqlite.path`, `storage.mysql.host`/`database`/`username`/`password`, `discord.webhook-url`) must be String type (empty `password`/`webhook-url` remains legal, traversal of `storage.sqlite.path` outside the data folder is rejected, and storage/MySQL cross-field rules are enforced).Diagnostics never echo raw config, user, or exception values — validation failures use fixed `invalid <path>: must be …` or `must be one of …` messages, and load/IO failures use only the exception class; an unsupported `settings.locale` emits a fixed `WARNING` without echoing the raw code. The adapter then builds a candidate `LangManager` after a preflight that the selected canonical file exists, is a regular file, and is non-empty (missing, empty, non-regular/directory, or unreadable `lang/<locale>.yml` is treated as a failure and never falls back silently to the default locale). Only when both candidates succeed are `ConfigManager`/`LangManager`/`MessageService` swapped under a single lock; any failure (corrupt YAML, type/range violation such as `storage.mysql.port: not-a-number` or `3306.5`, unsupported `settings.locale` such as `ja_JP`, or missing/empty/corrupt/non-regular selected `lang/<locale>.yml`) keeps the previous complete snapshot for `getConfig("settings.locale")`, active language, and all render output — no half-applied state, and file preservation/restore failures are reported as part of the diagnostic.
+Running `/aceeco reload` from the console atomically reloads configuration and language resources. The process enforces a three-stage validation pipeline; any failure keeps the existing active snapshot completely untouched:
 
-A failure returns `ReloadResult{config=failed/lang=failed, configError/langError}` with a non-sensitive diagnostic (fixed `invalid <path>: …` or exception class only; passwords, webhook URLs, and arbitrary user values are never echoed) and emits a `WARNING` via the plugin logger; `diagnostics()` always contains the failing side's reason. Successful reloads return `config=ok, lang=ok`. Bad edits never overwrite the in-memory language currently in use.
+### 1. Configuration Validation (`config.yml`)
+The adapter validates the candidate configuration using `ConfigManager.load()` under strict typing:
+- **Integer fields:** Must be finite integers. Includes `storage.mysql.port` (1–65535), `storage.mysql.pool-size` (1–1000), `leaderboard.cache-time-seconds` (1–86400), `leaderboard.page-size` (1–100), and `storage.mysql.max-lifetime` (≥1). Decimals (e.g. `3306.5`), non-finite values (`NaN`/`Infinity`), or numeric strings (`"3306"`) are rejected immediately without truncation.
+- **Boolean fields:** Must be native YAML Booleans (`economy.allow-negative-balance`, `discord.enabled`, `leaderboard.enabled`). String values like `"true"`/`"false"` are rejected.
+- **String fields:** Includes `settings.locale` (strictly `en_US`, `zh_TW`, or `zh_CN`), paths, and credentials. Paths that escape the plugin data directory via `storage.sqlite.path` are rejected.
+- **Redaction policy:** Diagnostics never output raw passwords, webhook URLs, or user strings. Errors only report fixed schema paths (such as `invalid <path>: must be …`) or exception class names.
 
-Missing keys produce a non-blank fallback `Missing translation: <key>` (without leaking user-provided values) and a diagnostic `WARNING`. User-provided values containing MiniMessage tags (e.g. `<red>`, `<bold>`, `<click:...>`, `<hover:...>`, `<insertion>`, `<font>`) are escaped before parsing, so they appear as literal text with no colour, decoration, click/hover, insertion, or font injection in both component and plain-text projections.
+### 2. Language Preflight and Load
+The adapter checks the selected `lang/<locale>.yml`:
+- The file must exist, be a regular file, and be non-empty. Missing, unreadable, directory, or zero-byte files fail the operation immediately without silent fallback.
+- Once verified, `LangManager.load(locale)` parses the templates and MiniMessage tags.
 
-Fix the reported YAML problem (check valid `{placeholder}` names, paired MiniMessage tags, escaped `\<literal>` for command examples, and correct `settings.locale`), save the file, and run `/aceeco reload` again. If it still fails, restore the last valid copy and check key indentation, quotes, and MiniMessage tags.
+### 3. Atomic Swap and Failure Isolation
+Only when both configuration and language pass validation are `ConfigManager`, `LangManager`, `MessageService`, and active render scopes swapped under a single lock. Retired scopes close immediately to prevent torn rendering states.
+
+If validation fails, a `ReloadResult` containing sanitized failure diagnostics is returned and logged as a `WARNING`. The existing in-memory configuration and active language remain completely untouched.
+
+Missing translation keys fall back to `Missing translation: <key>` and log a `WARNING`. User-supplied variable values containing MiniMessage tags (e.g. `<red>`, `<click>`) are escaped before resolution, preventing color or click injection attacks.
 
 ## Related guides
 

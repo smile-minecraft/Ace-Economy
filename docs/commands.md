@@ -16,6 +16,7 @@ AceEconomy v2 commands always name their subcommand — `/money balance`, not `/
 | Root command | Subcommand | Usage | Sender | Permission | Alias |
 |---|---|---|---|---|---|
 | `/money` | `balance` | `[player] [currency]` | Player or console; a console sender must provide `player` | `aceeconomy.command.money` | `/balance` |
+| `/money` | `history` | `[currency] [page]` | Player only | `aceeconomy.command.history` | `/balance` |
 | `/pay` | `send` | `<player> <amount> [currency]` | Player only | `aceeconomy.command.pay` | None |
 | `/withdraw` | `cash` | `<amount> [currency]` | Player only | `aceeconomy.command.withdraw` | None |
 | `/baltop` | `top` | `[currency]` | Player or console | `aceeconomy.command.baltop` | None |
@@ -26,13 +27,13 @@ AceEconomy v2 commands always name their subcommand — `/money balance`, not `/
 
 Amounts must be valid numbers, greater than zero, within the currency's decimal scale, and no greater than `1,000,000,000,000,000`.
 
-The only v2 root alias listed by the command specification is `/balance` for `/money`. It uses the same `balance` subcommand: `/balance balance [player] [currency]`. There are no separate `/backup` or `/restore` root commands; use the `/aceeco` subcommands shown below.
+The only v2 root alias listed by the command specification is `/balance` for `/money`. It uses the same `balance` subcommand: `/balance balance [player] [currency]`. The same alias works for history: `/balance history [currency] [page]`. There are no separate `/backup` or `/restore` root commands; use the `/aceeco` subcommands shown below.
 
 ## For players
 
 ### Check a balance: `/money balance`
 
-Use this when you want to see your own balance. Add a player name when looking up another account; the console must use that form because it has no player account of its own.
+Query the balance of your own account or another player's account. Players can omit the player argument to check their own balance; console senders have no account and must provide a target player name.
 
 | Item | Details |
 |---|---|
@@ -49,9 +50,30 @@ Examples:
 /balance balance Alex <currency>
 ```
 
+### Check your transaction history: `/money history`
+
+View paginated transaction history for the executing player. Restricted to players and only displays the executor's account; additional arguments are rejected with typed errors.
+
+| Item | Details |
+|---|---|
+| Usage | `/money history [currency] [page]` |
+| Sender | Player only; the console has no player account of its own |
+| Permission | `aceeconomy.command.history` (with the root `aceeconomy.command.money`) |
+| Alias | `/balance` for the root command; keep the `history` subcommand |
+
+Omitting `currency` uses the configured default currency. `page` is 0-based and each page shows 10 entries, newest first — the same paging, ordering, and fields as `/aceeco history`. An empty page gets an explicit reply. An unknown currency and an invalid page are rejected with typed errors.
+
+Examples:
+
+```text
+/money history
+/money history <currency>
+/money history <currency> 2
+```
+
 ### Send money: `/pay send`
 
-Use this to transfer money to another player. The command must be run by a player.
+Transfer money to another online player. Restricted to players.
 
 | Item | Details |
 |---|---|
@@ -64,7 +86,7 @@ Example: `/pay send Alex 25 <currency>`
 
 ### Withdraw a banknote: `/withdraw cash`
 
-Use this to withdraw an amount as a banknote. The command must be run by a player.
+Withdraw funds from your balance into a physical banknote item. Restricted to players; ensure at least one inventory slot is free before executing.
 
 | Item | Details |
 |---|---|
@@ -77,7 +99,7 @@ Example: `/withdraw cash 100 <currency>`
 
 ### View the leaderboard: `/baltop top`
 
-Use this to list the highest balances. A player or the console can run it; choose a currency when you do not want to use the configured default.
+Query the highest balance leaderboard. Can be run by players or console; specify a currency to query non-default balances.
 
 | Item | Details |
 |---|---|
@@ -95,7 +117,7 @@ Examples:
 
 ### Open the bank: `/bank open`
 
-Use this to open the AceEconomy bank interface. The command must be run by a player and takes no arguments.
+Open the bank interface. Takes no arguments and is restricted to players.
 
 | Item | Details |
 |---|---|

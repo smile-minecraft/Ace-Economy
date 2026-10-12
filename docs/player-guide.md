@@ -2,7 +2,7 @@
 
 English · [简体中文](player-guide.zh-CN.md) · [繁體中文](player-guide.zh-TW.md)
 
-Every task below shows the command, the permission it needs, and what happens when it runs. If an argument gets rejected, [Common input problems](#common-input-problems) lists the usual causes.
+This guide covers player commands and operations for the AceEconomy v2 economy system. Commands follow an explicit `/<command> <action>` syntax (for example, `/money balance`). In command templates, `<...>` denotes required parameters, and `[...]` denotes optional parameters; enter actual values without the brackets. Omitting `[currency]` automatically selects the server's default currency.
 
 ## Contents
 
@@ -19,119 +19,123 @@ Every task below shows the command, the permission it needs, and what happens wh
 
 ## Before you start
 
-The v2 commands use an action word after the main command. For example, use `/money balance`, not an older shortened form. Text in angle brackets is a placeholder: replace `<player>`, `<amount>`, or `<currency>` with your value, and do not type the angle brackets.
-
-If you leave out `[currency]`, AceEconomy uses the server's configured default currency. Currency IDs come from the server configuration; the display name players see can be different from the ID.
+1. **Command Syntax:** v2 commands require explicit action subcommands (e.g., `/money balance`, `/pay send`); legacy root abbreviations are deprecated.
+2. **Currency IDs:** Currency IDs are alphanumeric identifiers (such as `dollar` or `token`) defined in the server configuration and may differ from in-game display names or symbols. Consult your server administrator if unsure.
 
 ## I want to check a balance
 
 ### My own balance
 
-Use:
+Check your default currency balance:
 
 ```text
 /money balance
 ```
 
-You will see your balance in the default currency. To check a named currency, include your player name followed by its ID:
+To query a specific currency, append the currency ID after your player name:
 
 ```text
 /money balance <player> <currency>
 ```
 
-This command requires `aceeconomy.command.money`.
+Requires `aceeconomy.command.money`.
 
 ### Another player's balance
 
-Use the player's name and, when needed, the currency ID:
+Query another player's balance, optionally specifying a currency ID:
 
 ```text
 /money balance <player> [currency]
 ```
 
-For example:
+Example:
 
 ```text
 /money balance Alex token
 ```
 
-The same `aceeconomy.command.money` permission covers this command.
+Requires `aceeconomy.command.money`.
 
 ## I want to pay another player
 
-Use:
+Transfer funds to another online player:
 
 ```text
 /pay send <player> <amount> [currency]
 ```
 
-For example:
+Example (transfer 250 default currency to Alex):
 
 ```text
 /pay send Alex 250
 ```
 
-This pays `Alex` 250 units of the default currency. To pay in another currency, name it explicitly:
+Example (transfer 10 tokens to Alex):
 
 ```text
 /pay send Alex 10 token
 ```
 
-`/pay` is player-only and requires `aceeconomy.command.pay`. The amount must be positive and valid for the selected currency. A successful transfer reports the amount and recipient; the receiving player gets a matching payment notification.
+`/pay` is restricted to players and requires `aceeconomy.command.pay`. Amounts must be greater than 0 and conform to the configured decimal places for that currency. Both sender and recipient receive real-time notifications upon completion.
 
 ## I want to carry money as an item
 
 ### Withdraw a banknote
 
-Use:
+Withdraw funds into a physical banknote item. Ensure you have at least one empty inventory slot before executing:
 
 ```text
 /withdraw cash <amount> [currency]
 ```
 
-For example:
+Example:
 
 ```text
 /withdraw cash 100
 ```
 
-AceEconomy removes the amount from your balance and gives you a physical banknote. Keep an empty inventory slot available before you withdraw. This command is player-only and requires `aceeconomy.command.withdraw`.
+The specified amount is debited from your account balance and converted into a physical banknote. Player-only; requires `aceeconomy.command.withdraw`.
 
 ### Redeem a banknote
 
-Open the bank dashboard with `/bank open`, hold the banknote in your main hand, and click the deposit button (the top-middle slot). The amount is credited to your account and the banknote disappears from your hand. Right-clicking while holding a banknote redeems it too; both paths share the same atomic credit.
+Redeem a banknote through either of the following methods (both enforce strict anti-replay validation and atomic crediting):
 
-A banknote can be redeemed only once — the server remembers every redeemed note even after a restart. If the deposit is refused (invalid, already used, or unknown currency), the banknote stays in your hand. Keep it and ask a server administrator for help rather than trying to duplicate the transaction.
+1. **Via Bank GUI:** Run `/bank open`, hold the banknote, and click the deposit button.
+2. **Right-Click in Hand:** Hold the banknote and right-click.
 
-If the credit succeeds but the note cannot be removed, the credit stays: a multi-note stack is left whole in your hand, while a single note may not survive a failed clear. Either way, keep whatever is left, do not click again, and contact an administrator. The server log records the note id, player, and credited value, so the administrator can verify and compensate you manually.
+If an exception occurs during redemption:
+- **Deposit rejected:** If the item is invalid, already redeemed, or uses an unknown currency, the note remains in your inventory. Do not attempt duplicate submissions; contact an administrator.
+- **Clear delay / retention:** If funds are credited but the item cannot be removed, the transaction ID and credited amount remain logged in the audit ledger. Retain the item and notify an administrator.
 
 ## I want to see the richest players
 
-Use:
+Display the server balance leaderboard:
 
 ```text
 /baltop top [currency]
 ```
 
-Without a currency, the leaderboard uses the configured default currency. For a specific currency:
+Omit `[currency]` to query the default currency. Specific currency example:
 
 ```text
 /baltop top token
 ```
 
-The command requires `aceeconomy.command.baltop`. The leaderboard displays player names, ranks, and balances for the selected currency.
+Requires `aceeconomy.command.baltop`.
 
 ## I want to use the bank dashboard
 
-Open the dashboard with:
+Open the player bank interface:
 
 ```text
 /bank open
 ```
 
-The bank is a player-only menu. It gives you a single place to view your account area and use the available banknote withdrawal actions. Close the menu when you are done. The command requires `aceeconomy.command.bank`.
+Player-only; requires `aceeconomy.command.bank`. If an administrator reloads the bank configuration while the GUI is open, the interface dynamically rebuilds and updates in place.
 
-Java players get a chest menu; Bedrock players (Geyser + Floodgate) get a native form instead. The form shows your balance with three buttons: deposit the banknote held in your main hand, withdraw, or close. Withdraw asks for an amount and a currency, then shows a confirm screen — nothing moves until you confirm. Closing a form or entering an invalid value never changes your balance. Both interfaces share the same deposit/withdraw path, so the one-banknote-once rule and the full-inventory check apply everywhere.
+- **Java Edition Clients:** Renders a chest GUI displaying account details, asset breakdowns, transaction logs, and deposit/withdrawal actions.
+- **Bedrock Edition Clients (Geyser + Floodgate):** Renders a native modal form showing current balances with deposit, withdrawal, and close options. Withdrawals require explicit amount/currency inputs and secondary confirmation.
+Both platforms execute identical backend transaction pipelines and validation rules.
 
 ## I want to use more than one currency
 

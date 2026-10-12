@@ -4,7 +4,7 @@
 
 AceEconomy 為 Paper 與 Folia 伺服器加入遊戲內經濟系統。玩家可以查詢餘額、互相付款、提領銀行支票、開啟銀行面板，並在排行榜上比較名次。伺服器管理員可以選擇儲存後端、定義貨幣、接入 Vault 或 PlaceholderAPI，並把交易通知送到 Discord。
 
-第一次安裝嗎？請從[管理員安裝手冊](docs/admin-install-runbook.zh-TW.md)開始。如果你是在既有伺服器上遊玩，[玩家指南](docs/player-guide.zh-TW.md) 是最快的入口。
+初次安裝請參閱[管理員安裝手冊](docs/admin-install-runbook.zh-TW.md)。玩家操作請參閱[玩家指南](docs/player-guide.zh-TW.md)。
 
 ## 執行需求
 
@@ -17,7 +17,7 @@ AceEconomy 為 Paper 與 Folia 伺服器加入遊戲內經濟系統。玩家可�
 
 Paper/Folia 26.1.2 是正式支援的伺服器線。Folia 26.2 僅在特定 build 上通過驗證（VERIFIED-BETA），其餘 26.2 build 尚未驗證。
 
-> **開發者說明（尚未發布的原始碼）：**本倉庫目前的原始碼（尚未發布為 Release）需要以 AceLib v1.4.0 建置（SHA-256 `80c5274b1d2ab1ed528f49b7878f58ad8dfb110492da59277b6aacc7b4e3185b`，[AceLib v1.4.0 Release](https://github.com/smile-minecraft/AceLib/releases/tag/v1.4.0)）。請勿將已發布的 `AceEconomy-2.2.0.jar` 附件與 AceLib 1.4.0 搭配使用：該附件仍會呼叫已被移除的 `GuiService#shutdown()`，停用時會記錄 `NoSuchMethodError`。已發布附件請用上文的 AceLib 1.2.1；只有自行建置本倉庫原始碼時才用 AceLib 1.4.0。
+> **開發者說明（尚未發布的原始碼）：**本倉庫目前的原始碼（尚未發布為 Release）需要以 AceLib v1.5.0 建置（SHA-256 `346be2a8ecee247bf67fef71e804f829bdb8cc4f5be8980adc0b2b594facca9b`，[AceLib v1.5.0 Release](https://github.com/smile-minecraft/AceLib/releases/tag/v1.5.0)）。請勿將已發布的 `AceEconomy-2.2.0.jar` 附件與 AceLib 1.5.0 搭配使用：該附件仍會呼叫已被移除的 `GuiService#shutdown()`，停用時會記錄 `NoSuchMethodError`。已發布附件請用上文的 AceLib 1.2.1；只有自行建置本倉庫原始碼時才用 AceLib 1.5.0。
 
 ## 快速開始
 
@@ -26,7 +26,7 @@ Paper/Folia 26.1.2 是正式支援的伺服器線。Folia 26.2 僅在特定 buil
 3. 需要這些整合功能時，再安裝 Vault 或 PlaceholderAPI。
 4. 啟動伺服器。AceEconomy 第一次啟動時會建立預設設定與資料儲存。
 5. 依需求調整 `config.yml` 的儲存方式、語系、貨幣與整合設定。[設定指南](docs/config.zh-TW.md) 會說明各項設定。
-6. 使用 `/money balance` 查詢餘額，再使用 `/bank open` 開啟銀行面板。
+6. 執行 `/money balance` 驗證帳戶餘額，並以 `/bank open` 開啟銀行面板測試功能。
 
 ## 主要功能
 
@@ -48,7 +48,7 @@ Paper/Folia 26.1.2 是正式支援的伺服器線。Folia 26.2 僅在特定 buil
 | `/baltop top [currency]` | 查看餘額排行榜 |
 | `/bank open` | 開啟銀行面板 |
 
-參數規則、權限、管理員指令與完整參考請查看[指令與權限](docs/commands.zh-TW.md)。想依情境操作時，可以從[玩家指南](docs/player-guide.zh-TW.md)開始。
+參數規則、權限節點、管理員指令與完整語法請參閱[指令與權限](docs/commands.zh-TW.md)。日常情境操作請參閱[玩家指南](docs/player-guide.zh-TW.md)。
 
 ## 文件索引
 

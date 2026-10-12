@@ -2,7 +2,7 @@
 
 English · [简体中文](integration-api.zh-CN.md) · [繁體中文](integration-api.zh-TW.md)
 
-This reference is for plugin developers. It describes the public integration surfaces for reading or modifying AceEconomy balances without depending on internal classes: the standard Vault `Economy` service and the PlaceholderAPI `aceeco` namespace. Server installation is covered in [Integrations](integrations.md); language-file syntax is in [Localization](localization.md).
+This reference covers the public integration surfaces for reading and modifying balances without coupling to internal classes: the standard Vault `Economy` service and the PlaceholderAPI `aceeco` namespace. For server setup see [Integrations](integrations.md); for language formatting see [Localization](localization.md).
 
 ## Contents
 
@@ -16,7 +16,7 @@ This reference is for plugin developers. It describes the public integration sur
 
 ## Availability and compatibility
 
-AceEconomy requires AceLib `v1.2.1` at runtime. Vault and PlaceholderAPI are optional integrations; your plugin should handle either public service being unavailable. Do not make an AceEconomy implementation class a hard dependency when the standard integration is enough.
+AceEconomy requires AceLib `v1.2.1` at runtime. Vault and PlaceholderAPI are optional integrations; plugins must handle missing external services gracefully. Avoid declaring hard dependencies on AceEconomy internal implementation classes when standard integration interfaces suffice.
 
 ## Vault provider
 

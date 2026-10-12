@@ -6,30 +6,30 @@ import com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter;
 import net.kyori.adventure.text.Component;
 
 import org.bukkit.Material;
-import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.jetbrains.annotations.NotNull;
 
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 import java.util.function.Function;
 
 /**
- * Renders a validated {@link BankGuiLayout} into a bank top inventory. Display text is always
+ * Builds the button items for a validated {@link BankGuiLayout}. Display text is always
  * resolved through {@link ConfigLangAdapter#renderMessage} (safe component pipeline, never a
  * re-parse of operator raw MiniMessage); materials come from {@link Material#matchMaterial}
  * against the already-validated material names.
  *
- * <p>All Bukkit touches ({@code ItemStack} creation, meta writes, inventory writes) must happen
- * inside the player's region context. In production the caller ({@code V2BankGuiSession}) invokes
- * {@link #renderInto} from the AceLib async-update renderer, which AceLib guarantees to run on
- * the player region thread; the material resolver and item factory seams exist so offline tests
- * can drive the same mapping without Bukkit registries.
+ * <p>Items are fully constructed during view assembly, before the scope is asked to open.
+ * A button whose item cannot be built refuses the whole open, so no partly assembled view
+ * is handed over. That guarantee ends at the handover. The upstream scope then copies each
+ * item onto the player region thread when the view opens, so one declaration serves every
+ * player independently. If a single slot's clone or setItem fails at that stage, only that
+ * slot is skipped and the view still opens, so the player can see a missing button. The
+ * material resolver and item factory seams exist so offline tests can drive the same
+ * mapping without Bukkit registries.
  */
 public final class BankGuiRenderer {
 
@@ -109,65 +109,5 @@ public final class BankGuiRenderer {
             return null;
         }
         return stack;
-    }
-
-    /**
-     * Write every planned button into the top inventory. Slots whose material no longer
-     * resolves, or whose item construction fails, are skipped individually so one bad entry
-     * cannot blank the whole GUI.
-     *
-     * @return the slots actually written, in layout order
-     */
-    public @NotNull Set<Integer> renderInto(@NotNull Inventory top,
-                                            @NotNull BankGuiLayout layout,
-                                            @NotNull ConfigLangAdapter messages) {
-        Objects.requireNonNull(top, "top");
-        Objects.requireNonNull(layout, "layout");
-        Objects.requireNonNull(messages, "messages");
-        Map<Integer, BankGuiLayout.SlotConfig> planned = plan(layout);
-        // Preserve layout definition order for deterministic writes.
-        List<BankGuiLayout.SlotConfig> ordered = new ArrayList<>(layout.actions().values().stream()
-                .filter(slot -> planned.containsKey(slot.slot()))
-                .toList());
-        Set<Integer> written = new java.util.LinkedHashSet<>();
-        for (BankGuiLayout.SlotConfig slot : ordered) {
-            Map<String, Object> vars = displayVars(slot);
-            Component name;
-            List<Component> lore;
-            try {
-                name = messages.renderMessage(slot.nameKey(), vars);
-                List<Component> lines = new ArrayList<>(slot.loreKeys().size());
-                for (String loreKey : slot.loreKeys()) {
-                    lines.add(messages.renderMessage(loreKey, vars));
-                }
-                lore = List.copyOf(lines);
-            } catch (Exception e) {
-                continue;
-            }
-            ItemStack button = buildButton(slot, name, lore);
-            if (button == null) {
-                continue;
-            }
-            try {
-                top.setItem(slot.slot(), button);
-            } catch (Exception e) {
-                continue;
-            }
-            written.add(slot.slot());
-        }
-        return Set.copyOf(written);
-    }
-
-    /**
-     * Button display vars: a withdraw slot exposes its configured amount as the {@code {amount}}
-     * template var so the locale lore can never drift from the actual withdraw amount; other
-     * action types render without vars. Amounts come from the validated layout (operator config),
-     * never from player input, and travel through the safe escaped-substitution pipeline.
-     */
-    private static Map<String, Object> displayVars(@NotNull BankGuiLayout.SlotConfig slot) {
-        if (slot.type() == BankGuiLayout.ActionType.WITHDRAW) {
-            return Map.of("amount", Long.toString(slot.amount()));
-        }
-        return Map.of();
     }
 }

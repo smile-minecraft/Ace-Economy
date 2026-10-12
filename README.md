@@ -4,7 +4,7 @@ English · [简体中文](README.zh-CN.md) · [繁體中文](README.zh-TW.md)
 
 AceEconomy adds an in-game economy to Paper and Folia servers. Players can check balances, pay each other, withdraw banknotes, open the bank dashboard, and compare standings on a leaderboard. Server owners can pick a storage backend, define currencies, connect Vault or PlaceholderAPI, and send transaction alerts to Discord.
 
-Installing it for the first time? Start with the [admin installation runbook](docs/admin-install-runbook.md). If you play on a server that already runs AceEconomy, the [player guide](docs/player-guide.md) is the shortest path.
+For first-time setup, see the [admin installation runbook](docs/admin-install-runbook.md). For end-user commands, see the [player guide](docs/player-guide.md).
 
 ## Requirements
 
@@ -17,7 +17,7 @@ Installing it for the first time? Start with the [admin installation runbook](do
 
 Paper/Folia 26.1.2 is the officially supported server line. Folia 26.2 has been validated only on specific builds (VERIFIED-BETA); other 26.2 builds are unverified.
 
-> **Developer note (unreleased source tree):** the current source in this repo — not yet published as a release — builds against AceLib v1.4.0 (SHA-256 `80c5274b1d2ab1ed528f49b7878f58ad8dfb110492da59277b6aacc7b4e3185b`, [AceLib v1.4.0 Release](https://github.com/smile-minecraft/AceLib/releases/tag/v1.4.0)). Do not pair the published `AceEconomy-2.2.0.jar` attachment with AceLib 1.4.0: that published JAR still calls the removed `GuiService#shutdown()` and logs `NoSuchMethodError` on disable. Use AceLib 1.2.1 with the published attachment (above); use AceLib 1.4.0 only when building this source tree.
+> **Developer note (unreleased source tree):** the current source in this repo — not yet published as a release — builds against AceLib v1.5.0 (SHA-256 `346be2a8ecee247bf67fef71e804f829bdb8cc4f5be8980adc0b2b594facca9b`, [AceLib v1.5.0 Release](https://github.com/smile-minecraft/AceLib/releases/tag/v1.5.0)). Do not pair the published `AceEconomy-2.2.0.jar` attachment with AceLib 1.5.0: that published JAR still calls the removed `GuiService#shutdown()` and logs `NoSuchMethodError` on disable. Use AceLib 1.2.1 with the published attachment (above); use AceLib 1.5.0 only when building this source tree.
 
 ## Quick start
 
@@ -26,7 +26,7 @@ Paper/Folia 26.1.2 is the officially supported server line. Folia 26.2 has been 
 3. Add Vault or PlaceholderAPI if you want those integrations.
 4. Start the server. AceEconomy creates its default configuration and storage on first start.
 5. Adjust `config.yml` for your storage, locale, currencies, and integrations. The [configuration guide](docs/config.md) explains each setting.
-6. Give the server a quick tour with `/money balance` and `/bank open`.
+6. Verify account balances with `/money balance` and test the dashboard with `/bank open`.
 
 ## Core features
 
@@ -48,7 +48,7 @@ Paper/Folia 26.1.2 is the officially supported server line. Folia 26.2 has been 
 | `/baltop top [currency]` | View the balance leaderboard |
 | `/bank open` | Open the bank dashboard |
 
-For argument rules, permissions, administrator commands, and the full reference, see [Commands and permissions](docs/commands.md). For guided player-focused examples, start with the [player guide](docs/player-guide.md).
+For argument rules, permissions, administrator commands, and the complete syntax reference, see [Commands and permissions](docs/commands.md). For end-user scenarios, see the [player guide](docs/player-guide.md).
 
 ## Documentation
 

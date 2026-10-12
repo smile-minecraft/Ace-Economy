@@ -1,12 +1,12 @@
 package com.smile.aceeconomy.commands.v2;
 
-import com.smile.acelib.command.CommandContext;
+import com.smile.acelib.command.CommandArgument;
 import com.smile.acelib.command.CommandSpec;
-import com.smile.acelib.command.SubCommandSpec;
+import com.smile.acelib.command.TypedCommand;
+import com.smile.acelib.command.TypedContext;
+import com.smile.acelib.command.TypedSubCommand;
 import com.smile.aceeconomy.commands.v2.CommandModels.CurrencyInfo;
 import com.smile.aceeconomy.commands.v2.CommandModels.PlayerIdentity;
-
-import java.util.List;
 
 /** AceLib spec for player-to-player transfers exposed as {@code /pay send}. */
 public final class PayCommandSpec {
@@ -15,31 +15,36 @@ public final class PayCommandSpec {
     }
 
     public static CommandSpec create(CommandServices services) {
-        SubCommandSpec send = SubCommandSpec.builder("send")
+        CommandArgument<String> player = CommandArguments.playerName(services);
+        CommandArgument<String> amount = CommandArguments.amountToken(services);
+        CommandArgument<CurrencyInfo> currency = CommandArguments.currency(services);
+        TypedSubCommand send = TypedSubCommand.builder("send")
                 .description("Pay another player")
                 .usage("<player> <amount> [currency]")
                 .permission("aceeconomy.command.pay")
                 .playerOnly()
-                .minArgs(2)
-                .maxArgs(3)
-                .args("player", "amount", "currency")
-                .handler(context -> execute(services, context))
-                .completer((context, args) -> complete(services, args))
+                .argument(player)
+                .argument(amount)
+                .optional(currency, sender -> CommandArguments.defaultCurrency(services))
+                .executes(ctx -> execute(services, ctx, player, amount, currency))
                 .build();
-        return CommandSpec.builder("pay")
+        return TypedCommand.builder("pay")
                 .description("Transfer funds to another player")
                 .usage("/pay send <player> <amount> [currency]")
                 .permission("aceeconomy.command.pay")
-                .subCommand(send)
-                .build();
+                .subcommand(send)
+                .build()
+                .toCommandSpec();
     }
 
-    private static void execute(CommandServices services, CommandContext context) {
+    private static void execute(CommandServices services, TypedContext context,
+                                CommandArgument<String> playerArg,
+                                CommandArgument<String> amountArg,
+                                CommandArgument<CurrencyInfo> currencyArg) {
         var messages = services.messages();
-        String targetName = V2CommandSupport.arg(messages, context, 0);
-        String currencyId = context.commandArgs().size() == 3 ? V2CommandSupport.arg(messages, context, 2) : null;
-        CurrencyInfo currency = V2CommandSupport.currency(services, currencyId);
-        var amount = V2CommandSupport.amount(messages, context, currency, 1);
+        String targetName = context.get(playerArg);
+        CurrencyInfo currency = context.get(currencyArg);
+        var amount = V2CommandSupport.amount(messages, context.get(amountArg), currency);
         var sender = context.requireOnlinePlayer();
         services.players().resolve(targetName).whenComplete((target, failure) -> {
             if (failure != null) {
@@ -74,12 +79,5 @@ public final class PayCommandSpec {
             return messages.renderMessage("economy.payment-sent-currency",
                     java.util.Map.of("amount", amountStr, "player", targetName, "currency_name", currency.displayName()));
         }
-    }
-
-    private static List<String> complete(CommandServices services, List<String> args) {
-        if (args.size() >= 3) {
-            return CommandCompletion.byPrefix(services.economy().knownCurrencyIds(), CommandCompletion.last(args));
-        }
-        return CommandCompletion.byPrefix(services.players().onlinePlayerNames(), CommandCompletion.last(args));
     }
 }

@@ -60,7 +60,12 @@ Not measured, not claimed: per-row storage cost inside SQLite/MySQL, behaviour o
 
 ## JSON file
 
-With `storage.type: json`, the plugin creates `data-v2.json` in its data folder when the file does not exist. Each mutation writes a temporary file next to the live file, forces it to storage, then replaces the live file with an atomic rename and syncs the file and its directory, so the live file is always either the previous or the new complete file, never a partially written document. A failed write attempts to clean up its temp file on a best-effort basis; if cleanup fails, or if the process is killed, one may be left behind (temp names never collide with the live file, and leftovers are ignored). The filesystem must support atomic file replacement; otherwise the write fails with an explicit error instead of a silent non-atomic fallback. If the replacement succeeded but the final durability sync could not be confirmed, the failure is reported as already committed (never as a safe retry) and the backend stops accepting writes until the server restarts and the file is verified. These automated tests simulate I/O failures only; they do not cut power and do not prove safety against arbitrary hardware power loss.
+When `storage.type: json` and the target file does not exist, the plugin creates `data-v2.json`. Every state mutation strictly follows a Copy-on-Write strategy:
+1. **Staged write and forced sync:** A temporary file is created next to the live file, populated with the complete state snapshot, and flushed to disk via `fsync`.
+2. **Atomic rename:** The temporary file replaces the live file using an atomic move operation, syncing directory metadata. The live file always represents a valid snapshot—never a partially written corrupted state.
+3. **Error handling and recovery:** Aborted writes clean up temporary files on a best-effort basis; if the filesystem lacks atomic rename support, the operation fails immediately rather than falling back to an unsafe non-atomic write. If the atomic rename succeeds but the durability sync cannot be confirmed, the transaction is marked as committed and write operations are halted to prevent state split, requiring a server restart and manual verification.
+
+*Note: Automated tests simulate I/O failures; they do not test arbitrary hardware power loss.*
 
 The JSON model contains a schema version, accounts with their balances, and transactions. Amounts are represented as decimal strings so their stored value is not changed by floating-point formatting.
 

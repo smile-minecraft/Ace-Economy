@@ -1,202 +1,169 @@
 package com.smile.aceeconomy.gui.v2;
 
-import com.smile.acelib.gui.GuiSession;
 import com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter;
-import com.smile.aceeconomy.ports.FoliaContextExecutor;
+import com.smile.aceeconomy.infrastructure.acelib.RecordingFoliaContext;
+import com.smile.aceeconomy.infrastructure.banknote.BanknoteFlow;
 
 import net.kyori.adventure.text.Component;
 
-import org.bukkit.Location;
-import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
-import org.bukkit.event.inventory.InventoryClickEvent;
-import org.bukkit.inventory.Inventory;
-import org.bukkit.inventory.InventoryView;
 import org.bukkit.inventory.ItemStack;
-import org.bukkit.inventory.PlayerInventory;
-import org.jetbrains.annotations.NotNull;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
-import java.util.Optional;
-import java.util.Set;
-import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyMap;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * The click listener must consume the async click outcome instead of
- * discarding it: every failure and pending state replies on the player's
- * region thread, while successes stay silent. Replies never run on the IO
- * thread that completes the click future.
+ * Every click failure and pending state must reply with the cause it names,
+ * on the player region thread; successes stay silent. The mapping below is
+ * the whole contract: a swapped hand reports the completed credit, an
+ * uncertain withdraw never promises a delivery, and a stale click reports a
+ * cancellation.
  */
 class BankGuiClickReplyTest {
 
-    private static final long GENERATION = 7L;
-    private static final int SIZE = 27;
-
-    static final class RecordingFolia implements FoliaContextExecutor {
-        int playerDispatches;
-        Thread dispatchThread;
-
-        @Override
-        public void runForPlayer(@NotNull Player player, @NotNull Runnable action) {
-            playerDispatches++;
-            dispatchThread = Thread.currentThread();
-            action.run();
-        }
-
-        @Override
-        public void runForEntity(@NotNull Entity entity, @NotNull Runnable action) {
-        }
-
-        @Override
-        public void runAtLocation(@NotNull Location location, @NotNull Runnable action) {
-        }
-
-        @Override
-        public void runGlobal(@NotNull Runnable action) {
-        }
-
-        @Override
-        public void runAsync(@NotNull Runnable action) {
-        }
-
-        @Override
-        public boolean runForPlayer(@NotNull UUID playerId, @NotNull java.util.function.Consumer<Player> action) {
-            throw new UnsupportedOperationException();
-        }
-    }
-
-    private UUID uuid;
-    private Player player;
-    private PlayerInventory playerInv;
-    private Inventory top;
-    private InventoryView view;
-    private V2BankGuiSession session;
-    private RecordingFolia folia;
-    private ConfigLangAdapter messages;
-    private BankGuiClickListener listener;
-
-    @BeforeEach
-    void setUp() {
-        uuid = UUID.randomUUID();
-        player = Mockito.mock(Player.class);
-        playerInv = Mockito.mock(PlayerInventory.class);
-        top = Mockito.mock(Inventory.class);
-        view = Mockito.mock(InventoryView.class);
-        Mockito.when(player.getUniqueId()).thenReturn(uuid);
-        Mockito.when(player.getInventory()).thenReturn(playerInv);
-        Mockito.when(top.getSize()).thenReturn(SIZE);
-        Mockito.when(view.getTopInventory()).thenReturn(top);
-        Mockito.when(view.getTitle()).thenReturn("Bank");
-
-        session = Mockito.mock(V2BankGuiSession.class);
-        GuiSession aceSession = new GuiSession(uuid, GENERATION, "v2-bank", "Bank", SIZE, Set.of());
-        Mockito.when(session.activeSession(uuid)).thenReturn(Optional.of(aceSession));
-        Mockito.when(session.isBoundView(Mockito.eq(uuid), Mockito.eq(GENERATION), Mockito.any()))
-                .thenReturn(true);
-
-        folia = new RecordingFolia();
-        messages = Mockito.mock(ConfigLangAdapter.class);
-        Mockito.when(messages.renderMessage(anyString(), anyMap()))
-                .thenAnswer(invocation -> Component.text("msg:" + invocation.getArgument(0)));
-        listener = new BankGuiClickListener(session, folia, messages);
-    }
-
-    private InventoryClickEvent click(int rawSlot) {
-        InventoryClickEvent event = Mockito.mock(InventoryClickEvent.class);
-        Mockito.when(event.getWhoClicked()).thenReturn(player);
-        Mockito.when(event.getView()).thenReturn(view);
-        Mockito.when(event.getRawSlot()).thenReturn(rawSlot);
-        Mockito.when(event.isShiftClick()).thenReturn(false);
-        return event;
-    }
-
-    private void awaitKey(String key) {
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-        while (System.nanoTime() < deadline) {
-            try {
-                Mockito.verify(messages, Mockito.timeout(50).times(1))
-                        .renderMessage(eq(key), anyMap());
-                return;
-            } catch (Throwable t) {
-                // Retry until the async reply arrives.
-            }
-        }
-        Mockito.verify(messages).renderMessage(eq(key), anyMap());
-    }
-
-    private void dispatchWith(V2BankGuiSession.ClickOutcome outcome) {
-        Mockito.when(session.actionForSlot(11)).thenReturn(BankGuiAction.withdraw(100L));
-        Mockito.when(session.handleClickAsync(Mockito.eq(uuid), Mockito.eq(GENERATION), Mockito.anyInt()))
-                .thenReturn(CompletableFuture.completedFuture(outcome));
-        listener.onClick(click(11));
+    private static String keyOf(V2BankGuiSession.ClickOutcome outcome) {
+        V2BankGuiSession.Reply reply = V2BankGuiSession.replyFor(outcome, null);
+        assertNotNull(reply, "failure and pending outcomes must reply, never stay silent");
+        return reply.key();
     }
 
     @Test
-    void inventoryFullRepliesOnTheRegionThread() {
-        Thread caller = Thread.currentThread();
-        dispatchWith(V2BankGuiSession.ClickOutcome.inventoryFull());
-
-        awaitKey("general.inventory-full");
-        assertEquals(1, folia.playerDispatches, "the reply must go through the region thread");
+    void inventoryFullMapsToInventoryFull() {
+        assertEquals("general.inventory-full",
+                keyOf(V2BankGuiSession.ClickOutcome.inventoryFull()));
     }
 
     @Test
-    void insufficientFundsRepliesInsufficient() {
-        dispatchWith(V2BankGuiSession.ClickOutcome.rejected("insufficient.funds"));
-
-        awaitKey("economy.insufficient-funds");
-        assertEquals(1, folia.playerDispatches);
+    void itemMismatchMapsToMismatch() {
+        assertEquals("banknote.redeem-mismatch",
+                keyOf(V2BankGuiSession.ClickOutcome.itemMismatch()));
     }
 
     @Test
-    void replayRepliesReplay() {
-        dispatchWith(V2BankGuiSession.ClickOutcome.rejected("replay.detected"));
-
-        awaitKey("banknote.redeem-replay");
+    void retainedCreditMapsToRetainedWithAmount() {
+        V2BankGuiSession.Reply reply =
+                V2BankGuiSession.replyFor(V2BankGuiSession.ClickOutcome.creditRetained(100L), null);
+        assertNotNull(reply);
+        assertEquals("banknote.redeem-retained", reply.key());
+        assertEquals(Map.of("amount", "100"), reply.vars());
     }
 
     @Test
-    void swappedItemRepliesMismatch() {
-        dispatchWith(V2BankGuiSession.ClickOutcome.itemMismatch());
-
-        awaitKey("banknote.redeem-mismatch");
+    void retainedCreditWithoutValueMapsToFailed() {
+        assertEquals("banknote.redeem-failed",
+                keyOf(V2BankGuiSession.ClickOutcome.creditRetained()));
     }
 
     @Test
-    void retainedCreditRepliesRetained() {
-        dispatchWith(V2BankGuiSession.ClickOutcome.creditRetained(100L));
-
-        awaitKey("banknote.redeem-retained");
+    void creditIndeterminateMapsToRedeemPending() {
+        assertEquals("banknote.redeem-pending", keyOf(V2BankGuiSession.ClickOutcome.pending(
+                BanknoteFlow.PENDING_CREDIT_INDETERMINATE)));
     }
 
     @Test
-    void pendingWithdrawRepliesPending() {
-        dispatchWith(V2BankGuiSession.ClickOutcome.pending("withdraw.indeterminate"));
-
-        awaitKey("banknote.withdraw-pending");
+    void flowShutdownMapsToCancelled() {
+        assertEquals("general.transaction-cancelled", keyOf(
+                V2BankGuiSession.ClickOutcome.pending(BanknoteFlow.PENDING_SHUTDOWN)));
     }
 
     @Test
-    void successStaysSilent() {
+    void uncertainWithdrawMapsToWithdrawPending() {
+        for (String reason : new String[] {
+                BanknoteFlow.PENDING_WITHDRAW_INDETERMINATE,
+                BanknoteFlow.PENDING_DELIVERY_UNCERTAIN}) {
+            assertEquals("banknote.withdraw-pending",
+                    keyOf(V2BankGuiSession.ClickOutcome.pending(reason)),
+                    "uncertain " + reason + " must never promise a delivery");
+        }
+    }
+
+    @Test
+    void insufficientFundsMapsToInsufficient() {
+        assertEquals("economy.insufficient-funds",
+                keyOf(V2BankGuiSession.ClickOutcome.rejected("insufficient.funds")));
+    }
+
+    @Test
+    void replayMapsToReplay() {
+        assertEquals("banknote.redeem-replay",
+                keyOf(V2BankGuiSession.ClickOutcome.rejected("replay.detected")));
+    }
+
+    @Test
+    void uncertainDeliveryMapsToDeliveryUncertain() {
+        assertEquals("banknote.delivery-uncertain",
+                keyOf(V2BankGuiSession.ClickOutcome.rejected("delivery.uncertain")));
+    }
+
+    @Test
+    void staleAndCancelledMapToCancelled() {
+        for (String reason : new String[] {"stale.generation", "transaction.cancelled"}) {
+            assertEquals("general.transaction-cancelled",
+                    keyOf(V2BankGuiSession.ClickOutcome.rejected(reason)));
+        }
+    }
+
+    @Test
+    void unknownRejectionMapsToFailed() {
+        assertEquals("general.transaction-failed",
+                keyOf(V2BankGuiSession.ClickOutcome.rejected("business.rejected")));
+    }
+
+    @Test
+    void futureFailureMapsToFailed() {
+        V2BankGuiSession.Reply reply = V2BankGuiSession.replyFor(
+                V2BankGuiSession.ClickOutcome.inventoryFull(), new RuntimeException("probe-boom"));
+        assertNotNull(reply);
+        assertEquals("general.transaction-failed", reply.key());
+    }
+
+    @Test
+    void successesAndAllowancesStaySilent() {
         ItemStack note = Mockito.mock(ItemStack.class);
-        dispatchWith(V2BankGuiSession.ClickOutcome.success(note));
+        assertNull(V2BankGuiSession.replyFor(V2BankGuiSession.ClickOutcome.success(note), null));
+        assertNull(V2BankGuiSession.replyFor(V2BankGuiSession.ClickOutcome.credited(), null));
+        assertNull(V2BankGuiSession.replyFor(V2BankGuiSession.ClickOutcome.allowed(), null));
+        assertNull(V2BankGuiSession.replyFor(
+                V2BankGuiSession.ClickOutcome.snapshotFailed(), null));
+    }
 
-        try {
-            Thread.sleep(200);
-        } catch (InterruptedException interrupted) {
-            Thread.currentThread().interrupt();
-        }
-        Mockito.verify(messages, Mockito.never()).renderMessage(anyString(), anyMap());
-        assertEquals(0, folia.playerDispatches, "successes stay silent with no region reply");
+    @Test
+    void failureReplyArrivesOnTheRegionThread() {
+        com.smile.acelib.gui.GuiScope scope = BankGuiTestFixtures.scope();
+        RecordingFoliaContext folia = new RecordingFoliaContext();
+        ConfigLangAdapter messages = Mockito.mock(ConfigLangAdapter.class);
+        Mockito.when(messages.plainMessage(Mockito.anyString(), Mockito.anyMap()))
+                .thenReturn("Bank");
+        Mockito.when(messages.renderMessage(Mockito.anyString(), Mockito.anyMap()))
+                .thenAnswer(invocation -> Component.text("msg:" + invocation.getArgument(0)));
+        StubBankGuiUseCase useCase = new StubBankGuiUseCase();
+        useCase.mode = StubBankGuiUseCase.Mode.INVENTORY_FULL;
+        V2BankGuiSession session = new V2BankGuiSession(scope, folia, useCase,
+                BankGuiTestFixtures.defaultLayout(), messages,
+                null, BankGuiTestFixtures.renderer());
+        Player player = BankGuiTestFixtures.player();
+        assertTrue(session.open(player).success());
+        Mockito.clearInvocations(messages);
+
+        com.smile.acelib.gui.GuiView view = scope.viewOf(player.getUniqueId()).orElseThrow();
+        String buttonId = view.buttons().get(11).id();
+        Thread caller = Thread.currentThread();
+        view.handlers().get(buttonId).accept(new com.smile.acelib.gui.GuiButtonClick(
+                player.getUniqueId(), session.activeSession(player.getUniqueId()).orElseThrow()
+                        .generation(),
+                11, buttonId, java.util.Optional.empty()));
+
+        Mockito.verify(messages).renderMessage(Mockito.eq("general.inventory-full"),
+                Mockito.anyMap());
+        assertTrue(folia.playerCalled(), "the reply must go through the region thread");
+        assertTrue(folia.playerRunnables.size() == 1
+                        && folia.calls.size() == 1,
+                "exactly one region reply per click, on " + caller.getName());
     }
 }

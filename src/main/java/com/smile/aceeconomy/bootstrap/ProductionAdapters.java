@@ -246,6 +246,10 @@ final class ProductionAdapters {
         public CompletableFuture<AuditPage> query(AuditQuery query) {
             return CompletableFuture.supplyAsync(() -> service.query(query), executor);
         }
+        @Override
+        public Executor callbackExecutor() {
+            return executor;
+        }
     }
 
     static final class Rollback implements RollbackCommandService {
@@ -304,85 +308,50 @@ final class ProductionAdapters {
     }
 
     /**
-     * Bank command boundary: opens the GUI through the layout that is current
-     * at open time. The layout is read through a supplier (the successfully
-     * reloaded reference in production), so a reload that swaps the layout
-     * changes what newly opened interfaces show; already-open sessions were
-     * dropped by {@code invalidateAll}, so only new opens matter here.
+     * Bank command boundary: opens the GUI from the layout that is current
+     * at open time through the plugin-owned scope. The layout is read through
+     * a supplier (the successfully reloaded reference in production), so a
+     * reload that swaps the layout changes what newly opened interfaces show;
+     * already-open views were rebuilt in place by the reload itself, so only
+     * new opens matter here.
      *
-     * <p>Open-vs-reload race: the layout generation is sampled before the layout
-     * itself (the reload publishes the layout reference before bumping the
-     * generation), and the bound generation travels into the session open. An
-     * open whose layout read raced a reload is rejected instead of building an
-     * old-version session the invalidation snapshot already missed; it retries
-     * once from the fresh layout so the player still gets the current GUI.
-     *
-     * <p>Click protection split: consumer action slots are guarded by the
-     * consumer click listener (which cancels every bank top click and dispatches
-     * only configured actions), never by AceLib. The AceLib protected set passed
-     * here therefore stays empty: registering an action slot as AceLib-protected
-     * would make {@code validateClick} reject the click before any business logic
-     * runs. After a successful open the configured buttons are painted through
-     * the generation-bound async-update render; the open inventory would otherwise
-     * stay empty because AceLib only creates the shell.
+     * <p>Opens serialize against the reload swap inside the session, so an
+     * open can never leak a stale view past a reload and no retry exists.
+     * The declarative view denies every non-button slot upstream, and every
+     * button is fully built before the scope call: a button that cannot be
+     * built refuses the open and, where the notice can be delivered, tells the
+     * player. Placement after the handoff is not covered by that refusal: if
+     * upstream fails to clone or set one slot, only that slot is skipped and
+     * the interface still opens with that button missing.
      */
     static final class Bank implements BankCommandService {
         private final V2BankGuiSession gui;
         private final Supplier<com.smile.aceeconomy.infrastructure.acelib.BankGuiLayout> layouts;
-        private final java.util.function.LongSupplier layoutGenerations;
-        private final com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter messages;
         private final Executor executor;
         Bank(V2BankGuiSession gui,
              Supplier<com.smile.aceeconomy.infrastructure.acelib.BankGuiLayout> layouts,
-             com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter messages,
-             Executor executor) {
-            this(gui, layouts, gui::layoutGeneration, messages, executor);
-        }
-        Bank(V2BankGuiSession gui,
-             Supplier<com.smile.aceeconomy.infrastructure.acelib.BankGuiLayout> layouts,
-             java.util.function.LongSupplier layoutGenerations,
-             com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter messages,
              Executor executor) {
             this.gui = gui;
             this.layouts = java.util.Objects.requireNonNull(layouts, "layouts");
-            this.layoutGenerations = java.util.Objects.requireNonNull(layoutGenerations, "layoutGenerations");
-            this.messages = messages; this.executor = executor;
+            this.executor = executor;
         }
         Bank(V2BankGuiSession gui,
              com.smile.aceeconomy.infrastructure.acelib.BankGuiLayout layout,
-             com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter messages,
              Executor executor) {
-            this(gui, () -> layout, gui::layoutGeneration, messages, executor);
+            this(gui, () -> layout, executor);
         }
         public void open(UUID id, String name) { executor.execute(() -> {
-            openOnce(id, false);
+            openOnce(id);
         }); }
 
-        private void openOnce(UUID id, boolean isRetry) {
-            long expected = layoutGenerations.getAsLong();
+        private void openOnce(UUID id) {
             com.smile.aceeconomy.infrastructure.acelib.BankGuiLayout layout = layouts.get();
             if (layout == null || !layout.enabled()) {
                 return;
             }
             Player player = Bukkit.getPlayer(id);
             if (player != null) {
-                String title = messages.plainMessage(layout.titleKey(), java.util.Map.of());
-                V2BankGuiSession.OpenOutcome outcome =
-                        gui.open(player, title, layout.size(), java.util.Set.of(), expected);
-                boolean stale = outcome != null && !outcome.success()
-                        && "stale-layout".equals(outcome.errorCode());
-                if (!isRetry && stale) {
-                    openOnce(id, true);
-                    return;
-                }
-                // Paint the configured buttons into the freshly opened shell. The
-                // render re-validates the generation on both begin and apply and
-                // only binds the view tag after every planned button was written,
-                // so a failed paint reports render.failed and leaves the shell
-                // inoperable instead of reporting success with an empty GUI.
-                if (outcome != null && outcome.success() && outcome.session() != null) {
-                    gui.renderLayout(id, outcome.session().generation(), layout, messages);
-                }
+                gui.open(player);
             }
         }
     }

@@ -22,14 +22,18 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -63,6 +67,7 @@ class HistoryCommandTest {
         HistoryQueryService history = mock(HistoryQueryService.class);
         when(history.query(org.mockito.ArgumentMatchers.any(AuditQuery.class)))
                 .thenReturn(CompletableFuture.completedFuture(page));
+        when(history.callbackExecutor()).thenReturn(Runnable::run);
         return history;
     }
 
@@ -304,6 +309,7 @@ class HistoryCommandTest {
         HistoryQueryService history = mock(HistoryQueryService.class);
         when(history.query(org.mockito.ArgumentMatchers.any(AuditQuery.class)))
                 .thenReturn(CompletableFuture.failedFuture(new IllegalStateException("storage boom")));
+        when(history.callbackExecutor()).thenReturn(Runnable::run);
         CommandServices services = services(economy(), mock(PlayerLookupService.class), history);
         ReplySink sink = mock(ReplySink.class);
         CommandRegistryImpl registry = new CommandRegistryImpl(sink);
@@ -336,5 +342,33 @@ class HistoryCommandTest {
         assertEquals("ACELIB-CMD-003", ((CommandException) error.getValue()).getCode());
         verify(history, org.mockito.Mockito.never())
                 .query(org.mockito.ArgumentMatchers.any(AuditQuery.class));
+    }
+
+    @Test
+    void adminHistoryWithPlayerLookupRejectingExecutorIsReported() {
+        UUID account = UUID.randomUUID();
+        HistoryQueryService history = mock(HistoryQueryService.class);
+        when(history.query(org.mockito.ArgumentMatchers.any(AuditQuery.class)))
+                .thenReturn(CompletableFuture.completedFuture(new AuditPage(
+                        List.of(tx(UUID.randomUUID(), account)), 1, 0, 10)));
+        Executor rejecting = command -> {
+            throw new RejectedExecutionException("history io shut down");
+        };
+        when(history.callbackExecutor()).thenReturn(rejecting);
+        CommandServices services = services(economy(),
+                playersResolving("Alex", account), history);
+        ReplySink sink = mock(ReplySink.class);
+        CommandRegistryImpl registry = new CommandRegistryImpl(sink);
+        V2CommandRegistry.create(services).register(registry);
+
+        registry.dispatch(consoleSender(true, true), "aceeco", List.of("history", "Alex"));
+
+        ArgumentCaptor<Throwable> error = ArgumentCaptor.forClass(Throwable.class);
+        verify(sink).sendError(org.mockito.ArgumentMatchers.any(Sender.class), error.capture());
+        assertTrue(error.getValue() instanceof RejectedExecutionException,
+                "shutdown rejection on the async lookup path must stay observable, got: "
+                        + error.getValue());
+        verify(sink, never()).send(org.mockito.ArgumentMatchers.any(Sender.class),
+                org.mockito.ArgumentMatchers.anyString());
     }
 }

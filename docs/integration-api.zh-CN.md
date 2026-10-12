@@ -2,7 +2,7 @@
 
 [English](integration-api.md) · 简体中文 · [繁體中文](integration-api.zh-TW.md)
 
-这份参考是给插件开发者看的。它说明如何不依赖 AceEconomy 的内部类，而是通过标准的 Vault `Economy` 服务和 PlaceholderAPI 的 `aceeco` 命名空间，来读取或修改余额。服务器安装请看[整合](integrations.zh-CN.md)；语言文件语法请看[本地化](localization.zh-CN.md)。
+本文档提供插件开发者整合参考。外部插件无须直接依赖 AceEconomy 内部类，建议通过标准 Vault `Economy` 服务或 PlaceholderAPI 的 `aceeco` 命名空间访问经济数据。服务器安装配置请参阅[整合](integrations.zh-CN.md)；语言文件语法请参阅[本地化](localization.zh-CN.md)。
 
 ## 目录
 
@@ -16,7 +16,7 @@
 
 ## 可用性与兼容性
 
-AceEconomy 运行时需要 AceLib `v1.2.1`。Vault 和 PlaceholderAPI 是可选整合；你的插件应该能处理其中任一公开服务不可用的情况。如果标准整合已经够用，不要把 AceEconomy 的实现类设成硬依赖。
+AceEconomy 运行时需要 AceLib `v1.2.1`。Vault 与 PlaceholderAPI 属于可选整合，外部插件应具备处理整合服务缺失的容错逻辑。若标准 API 已能满足需求，请避免将 AceEconomy 内部实现类声明为硬依赖。
 
 ## Vault 提供者
 

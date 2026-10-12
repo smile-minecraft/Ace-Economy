@@ -16,6 +16,7 @@ AceEconomy v2 的指令一定要接子指令，例如 `/money balance`，不能�
 | 主指令 | 子指令 | 用法 | 执行者 | 权限 | 别名 |
 |---|---|---|---|---|---|
 | `/money` | `balance` | `[player] [currency]` | 玩家或控制台；控制台必须提供 `player` | `aceeconomy.command.money` | `/balance` |
+| `/money` | `history` | `[currency] [page]` | 仅限玩家 | `aceeconomy.command.history` | `/balance` |
 | `/pay` | `send` | `<player> <amount> [currency]` | 仅限玩家 | `aceeconomy.command.pay` | 无 |
 | `/withdraw` | `cash` | `<amount> [currency]` | 仅限玩家 | `aceeconomy.command.withdraw` | 无 |
 | `/baltop` | `top` | `[currency]` | 玩家或控制台 | `aceeconomy.command.baltop` | 无 |
@@ -24,15 +25,15 @@ AceEconomy v2 的指令一定要接子指令，例如 `/money balance`，不能�
 
 `<必填>` 代表必须提供的值；`[可选]` 代表可省略的值。省略 `currency` 时，使用设置的默认货币。货币 ID 不区分大小写。
 
-金额必须是有效数字、大于零、符合该货币的小数位数，而且不得超过 `1,000,000,000,000,000`。打错会直接被拒绝，对照[常见指令错误](#常见指令错误)修正就好。
+金额必须为有效正数、符合该货币定义之小数位数上限，且不得超过 `1,000,000,000,000,000`。格式不符时将拒绝执行，详见[常见指令错误](#常见指令错误)。
 
-v2 指令规格列出的主指令别名只有 `/money` 的 `/balance`。它仍然要接 `balance` 子指令：`/balance balance [player] [currency]`。没有独立的 `/backup` 或 `/restore` 主指令，请使用 `/aceeco` 的管理子指令。
+v2 指令规格列出的主指令别名只有 `/money` 的 `/balance`。它仍然要接 `balance` 子指令：`/balance balance [player] [currency]`。查明细也一样：`/balance history [currency] [page]`。没有独立的 `/backup` 或 `/restore` 主指令，请使用 `/aceeco` 的管理子指令。
 
 ## 玩家用法
 
 ### 查询余额：`/money balance`
 
-想看自己的余额就省略玩家名称，想查别人就加上玩家名称。控制台没有自己的玩家账户，所以一定要用带有 `player` 的完整形式。
+查询自身或指定玩家的账户余额。玩家执行时若省略玩家名称则查询本人；控制台无自身账户，必须明确指定目标玩家。
 
 | 项目 | 说明 |
 |---|---|
@@ -49,9 +50,30 @@ v2 指令规格列出的主指令别名只有 `/money` 的 `/balance`。它仍�
 /balance balance Alex <currency>
 ```
 
+### 查询交易明细：`/money history`
+
+分页检视执行者本人的历史交易记录。仅限玩家执行且仅显示自身账户；不接受玩家参数，传入额外参数将直接拒绝并报错。
+
+| 项目 | 说明 |
+|---|---|
+| 用法 | `/money history [currency] [page]` |
+| 执行者 | 仅限玩家；控制台没有自己的玩家账户 |
+| 权限 | `aceeconomy.command.history`（还需要主权限 `aceeconomy.command.money`） |
+| 别名 | 主指令可用 `/balance`，但仍要保留 `history` 子指令 |
+
+省略 `currency` 时，使用设置的默认货币。`page` 从 0 开始，每页显示 10 条，由新到旧——分页、排序与字段都和 `/aceeco history` 一致。空页会有明确回复。未知的货币与无效的页码会被拒绝并返回错误。
+
+示例：
+
+```text
+/money history
+/money history <currency>
+/money history <currency> 2
+```
+
 ### 转账：`/pay send`
 
-想把钱转给其他玩家就用这个指令，只能在游戏内由玩家执行。
+将指定金额转账至目标玩家账户。此指令仅限游戏内在线玩家执行。
 
 | 项目 | 说明 |
 |---|---|
@@ -64,7 +86,7 @@ v2 指令规格列出的主指令别名只有 `/money` 的 `/balance`。它仍�
 
 ### 提取银行支票：`/withdraw cash`
 
-想把指定金额换成银行支票就用这个指令，只能由玩家执行。动手前先留出一个空背包格，背包满了拿不到支票。
+从账户提取指定金额并转化为实体支票物品。此指令仅限玩家执行；执行前请确认物品栏具备可用空格。
 
 | 项目 | 说明 |
 |---|---|
@@ -77,7 +99,7 @@ v2 指令规格列出的主指令别名只有 `/money` 的 `/balance`。它仍�
 
 ### 查看排行榜：`/baltop top`
 
-想看余额最高的玩家就用这个指令。玩家和控制台都能执行；不想使用默认货币时，再指定货币即可。
+查询服务器财富排行榜。支持玩家与控制台执行；若未指定货币则查询默认货币。
 
 | 项目 | 说明 |
 |---|---|
@@ -95,7 +117,7 @@ v2 指令规格列出的主指令别名只有 `/money` 的 `/balance`。它仍�
 
 ### 打开银行：`/bank open`
 
-想打开 AceEconomy 银行界面就用这个指令。它不接受参数，只能由玩家执行。
+打开银行交互界面。此指令不接受额外参数，仅限玩家执行。
 
 | 项目 | 说明 |
 |---|---|

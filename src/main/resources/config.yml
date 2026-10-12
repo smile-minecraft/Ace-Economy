@@ -92,7 +92,7 @@ currencies:
 #     currency  僅 withdraw 需要，已知幣別 ID；缺省為預設幣別
 #     material  顯示物品材質（type 為 none 時免填；air 會被拒絕）
 #     name-key / lore-keys 按鈕顯示文字的語言鍵
-# 任何格式錯誤都會讓插件啟動失敗且不半套用；合法版面隨 reload 熱套用，已開啟的介面會先關閉；格式錯誤的 reload 整筆拒絕不半套用。bank-gui.enabled 改動只在啟動時生效，仍需重啟。
+# 任何格式錯誤都會讓插件啟動失敗且不半套用；合法版面隨 reload 熱套用，已開啟的介面原地重建並重開，重建或重開失敗才關閉並告知（皆為 best-effort）；格式錯誤的 reload 整筆拒絕不半套用。bank-gui.enabled 改動只在啟動時生效，仍需重啟。
 bank-gui:
   enabled: true
   title-key: "gui.bank-title"

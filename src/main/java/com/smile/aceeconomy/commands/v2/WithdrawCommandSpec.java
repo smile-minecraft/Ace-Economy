@@ -1,12 +1,12 @@
 package com.smile.aceeconomy.commands.v2;
 
-import com.smile.acelib.command.CommandContext;
+import com.smile.acelib.command.CommandArgument;
 import com.smile.acelib.command.CommandSpec;
-import com.smile.acelib.command.SubCommandSpec;
+import com.smile.acelib.command.TypedCommand;
+import com.smile.acelib.command.TypedContext;
+import com.smile.acelib.command.TypedSubCommand;
 import com.smile.aceeconomy.commands.v2.CommandModels.CurrencyInfo;
 import com.smile.aceeconomy.commands.v2.CommandModels.WithdrawReceipt;
-
-import java.util.List;
 
 /** AceLib spec for banknote withdrawal exposed as {@code /withdraw cash}. */
 public final class WithdrawCommandSpec {
@@ -15,31 +15,32 @@ public final class WithdrawCommandSpec {
     }
 
     public static CommandSpec create(CommandServices services) {
-        SubCommandSpec cash = SubCommandSpec.builder("cash")
+        CommandArgument<String> amount = CommandArguments.amountToken(services);
+        CommandArgument<CurrencyInfo> currency = CommandArguments.currency(services);
+        TypedSubCommand cash = TypedSubCommand.builder("cash")
                 .description("Withdraw a banknote")
                 .usage("<amount> [currency]")
                 .permission("aceeconomy.command.withdraw")
                 .playerOnly()
-                .minArgs(1)
-                .maxArgs(2)
-                .args("amount", "currency")
-                .handler(context -> execute(services, context))
-                .completer((context, args) -> CommandCompletion.byPrefix(
-                        services.economy().knownCurrencyIds(), CommandCompletion.last(args)))
+                .argument(amount)
+                .optional(currency, sender -> CommandArguments.defaultCurrency(services))
+                .executes(ctx -> execute(services, ctx, amount, currency))
                 .build();
-        return CommandSpec.builder("withdraw")
+        return TypedCommand.builder("withdraw")
                 .description("Withdraw funds as a banknote")
                 .usage("/withdraw cash <amount> [currency]")
                 .permission("aceeconomy.command.withdraw")
-                .subCommand(cash)
-                .build();
+                .subcommand(cash)
+                .build()
+                .toCommandSpec();
     }
 
-    private static void execute(CommandServices services, CommandContext context) {
+    private static void execute(CommandServices services, TypedContext context,
+                                CommandArgument<String> amountArg,
+                                CommandArgument<CurrencyInfo> currencyArg) {
         var messages = services.messages();
-        String currencyId = context.commandArgs().size() == 2 ? V2CommandSupport.arg(messages, context, 1) : null;
-        CurrencyInfo currency = V2CommandSupport.currency(services, currencyId);
-        var amount = V2CommandSupport.amount(messages, context, currency, 0);
+        CurrencyInfo currency = context.get(currencyArg);
+        var amount = V2CommandSupport.amount(messages, context.get(amountArg), currency);
         var player = context.requireOnlinePlayer();
         V2CommandSupport.replyLocalized(context, messages,
                 services.withdrawals().withdraw(player.getUniqueId(), currency.id(), amount),

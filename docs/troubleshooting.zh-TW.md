@@ -136,7 +136,7 @@ discord:
 - 完整重啟會重新開啟儲存後端，並重新載入插件依賴。
 - `stop` 執行正常的停服；請等保存完成。
 
-**修正：** 改動了 JAR、AceLib、`storage.type`、資料庫連線值或選用插件的可用狀態之後，請完整重啟。重新載入回報點名的 `settings.main-command-alias`、`storage.type`、`leaderboard.enabled` 與結構性貨幣變更也一樣：都要完整重啟才會生效。重新載入成功會關掉已開啟的銀行介面，屬於正常現象；請玩家重開 `/bank` 就好。不要用 Bukkit 的 `/reload` 來做正式升級或復原。
+**修正：** 改動了 JAR、AceLib、`storage.type`、資料庫連線值或選用插件的可用狀態之後，請完整重啟。重新載入回報點名的 `settings.main-command-alias`、`storage.type`、`leaderboard.enabled` 與結構性貨幣變更也一樣：都要完整重啟才會生效。重新載入成功會把已開啟的銀行介面用新版面原地重開；只有重建或重開失敗的介面才會關閉並告知玩家（關閉與告知皆為 best-effort），這時玩家才需要重開 `/bank`。不要用 Bukkit 的 `/reload` 來做正式升級或復原。
 
 ## 餘額或交易結果不對
 

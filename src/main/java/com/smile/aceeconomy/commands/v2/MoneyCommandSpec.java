@@ -1,40 +1,57 @@
 package com.smile.aceeconomy.commands.v2;
 
-import com.smile.acelib.command.CommandContext;
+import com.smile.acelib.command.CommandArgument;
 import com.smile.acelib.command.CommandSpec;
-import com.smile.acelib.command.SubCommandSpec;
+import com.smile.acelib.command.TypedCommand;
+import com.smile.acelib.command.TypedContext;
+import com.smile.acelib.command.TypedSubCommand;
 import com.smile.aceeconomy.commands.v2.CommandModels.CurrencyInfo;
 import com.smile.aceeconomy.commands.v2.CommandModels.PlayerIdentity;
 
 import java.util.List;
 
-/** AceLib spec for balance queries exposed as {@code /money balance}. */
+/** AceLib spec for balance queries and self history exposed as {@code /money}. */
 public final class MoneyCommandSpec {
 
     private MoneyCommandSpec() {
     }
 
     public static CommandSpec create(CommandServices services) {
-        SubCommandSpec balance = SubCommandSpec.builder("balance")
+        CommandArgument<String> player = CommandArguments.optionalPlayerName(services);
+        CommandArgument<CurrencyInfo> currency = CommandArguments.currency(services);
+        TypedSubCommand balance = TypedSubCommand.builder("balance")
                 .description("Show a player's balance")
                 .usage("[player] [currency]")
                 .permission("aceeconomy.command.money")
-                .minArgs(0)
-                .maxArgs(2)
-                .args("player", "currency")
-                .handler(context -> execute(services, context))
-                .completer((context, args) -> complete(services, args))
+                .optional(player, sender -> "")
+                .optional(currency, sender -> CommandArguments.defaultCurrency(services))
+                .executes(ctx -> execute(services, ctx, player, currency))
                 .build();
-        return CommandSpec.builder("money")
+        CommandArgument<CurrencyInfo> historyCurrency = CommandArguments.currency(services);
+        CommandArgument<Integer> historyPage = CommandArguments.page(services);
+        TypedSubCommand history = TypedSubCommand.builder("history")
+                .description("Show your own transaction history")
+                .usage("[currency] [page]")
+                .permission("aceeconomy.command.history")
+                .playerOnly()
+                .optional(historyCurrency, sender -> CommandArguments.defaultCurrency(services))
+                .optional(historyPage, sender -> 0)
+                .executes(ctx -> executeHistory(services, ctx, historyCurrency, historyPage))
+                .build();
+        return TypedCommand.builder("money")
                 .aliases("balance")
                 .description("View an economy balance")
                 .usage("/money balance [player] [currency]")
                 .permission("aceeconomy.command.money")
-                .subCommand(balance)
-                .build();
+                .subcommand(balance)
+                .subcommand(history)
+                .build()
+                .toCommandSpec();
     }
 
-    private static void execute(CommandServices services, CommandContext context) {
+    private static void execute(CommandServices services, TypedContext context,
+                                CommandArgument<String> playerArg,
+                                CommandArgument<CurrencyInfo> currencyArg) {
         var messages = services.messages();
         List<String> args = context.commandArgs();
         if (args.size() > 2) {
@@ -45,15 +62,14 @@ public final class MoneyCommandSpec {
         }
         if (args.isEmpty()) {
             var player = context.requireOnlinePlayer();
-            CurrencyInfo currency = V2CommandSupport.currency(services, null);
+            CurrencyInfo currency = context.get(currencyArg);
             V2CommandSupport.replyLocalized(context, messages,
                     services.economy().getBalance(player.getUniqueId(), currency.id()),
                     value -> balanceComponent(messages, currency, value, player.getName(), true));
             return;
         }
-        String playerName = V2CommandSupport.arg(messages, context, 0);
-        String currencyId = args.size() == 2 ? V2CommandSupport.arg(messages, context, 1) : null;
-        CurrencyInfo currency = V2CommandSupport.currency(services, currencyId);
+        String playerName = context.get(playerArg);
+        CurrencyInfo currency = context.get(currencyArg);
         services.players().resolve(playerName).whenComplete((target, failure) -> {
             if (failure != null) {
                 V2CommandSupport.replyFailure(context, failure);
@@ -70,6 +86,31 @@ public final class MoneyCommandSpec {
                         value -> balanceComponent(messages, currency, value, identity.name(), false));
             }
         });
+    }
+
+    /**
+     * Player self-history: the queried account is always the executor. There is
+     * deliberately no player argument, so no token can ever address another
+     * account — an unknown first token fails as an unknown currency at parse
+     * time. Like the balance path, a trailing surplus is rejected explicitly
+     * instead of being silently ignored.
+     */
+    private static void executeHistory(CommandServices services, TypedContext context,
+                                       CommandArgument<CurrencyInfo> currencyArg,
+                                       CommandArgument<Integer> pageArg) {
+        var messages = services.messages();
+        List<String> args = context.commandArgs();
+        if (args.size() > 2) {
+            String msg = messages != null
+                    ? messages.plainMessage("command.missing-argument", java.util.Map.of("index", "3"))
+                    : "command.missing-argument";
+            throw com.smile.acelib.command.CommandException.custom("ACELIB-CMD-INVALID-ARGUMENTS", msg);
+        }
+        var player = context.requireOnlinePlayer();
+        CurrencyInfo currency = context.get(currencyArg);
+        int page = context.get(pageArg);
+        PlayerIdentity self = new PlayerIdentity(player.getUniqueId(), player.getName(), true);
+        HistoryReply.queryAndReply(services, context, self, currency, page);
     }
 
     private static net.kyori.adventure.text.Component balanceComponent(
@@ -97,12 +138,5 @@ public final class MoneyCommandSpec {
                         java.util.Map.of("player", playerName, "balance", amountStr, "currency_name", currency.displayName()));
             }
         }
-    }
-
-    private static List<String> complete(CommandServices services, List<String> args) {
-        if (args.size() >= 3) {
-            return CommandCompletion.byPrefix(services.economy().knownCurrencyIds(), CommandCompletion.last(args));
-        }
-        return CommandCompletion.byPrefix(services.players().onlinePlayerNames(), CommandCompletion.last(args));
     }
 }

@@ -61,7 +61,34 @@ public final class CommandReply {
         }
     }
 
+    /**
+     * Typed-context variant of {@link #reply(CommandContext, String)} with identical
+     * routing: players answer on their region thread, console answers synchronously.
+     */
+    public static void reply(com.smile.acelib.command.TypedContext ctx, String message) {
+        if (ctx.sender().isPlayer()) {
+            ctx.replyPlayerAsync(message);
+        } else {
+            ctx.reply(message);
+        }
+    }
+
     public static void replyLocalized(CommandContext ctx, ConfigLangAdapter messages,
+                                      String key, Map<String, Object> vars) {
+        if (messages == null) {
+            reply(ctx, key);
+            return;
+        }
+        if (ctx.sender().isPlayer()) {
+            replyComponent(ctx, messages, messages.renderMessage(key, vars));
+        } else {
+            String plain = messages.plainMessage(key, vars);
+            ctx.reply(plain);
+        }
+    }
+
+    /** Typed-context variant of {@link #replyLocalized(CommandContext, ConfigLangAdapter, String, Map)}. */
+    public static void replyLocalized(com.smile.acelib.command.TypedContext ctx, ConfigLangAdapter messages,
                                       String key, Map<String, Object> vars) {
         if (messages == null) {
             reply(ctx, key);
@@ -104,7 +131,48 @@ public final class CommandReply {
         });
     }
 
+    /**
+     * Typed-context variant of {@link #replyComponent(CommandContext, ConfigLangAdapter, Component)}
+     * with identical routing and the same region-dispatch seam. The player id is read through
+     * {@code sender().asPlayer()} exactly like the legacy variant, so a stale offline handle
+     * behaves the same way (best-effort dispatch, never a reply-time player check).
+     */
+    public static void replyComponent(com.smile.acelib.command.TypedContext ctx, ConfigLangAdapter messages,
+                                      Component component) {
+        if (messages == null) {
+            String fallback = PlainTextComponentSerializer.plainText().serialize(component);
+            reply(ctx, fallback);
+            return;
+        }
+        if (!ctx.sender().isPlayer()) {
+            ctx.reply(PlainTextComponentSerializer.plainText().serialize(component));
+            return;
+        }
+        String fallback = PlainTextComponentSerializer.plainText().serialize(component);
+        RegionDispatch dispatch = regionDispatch;
+        if (dispatch == null) {
+            // No seam installed (offline tests / pre-wiring): degrade to the plain-string
+            // async path instead of resolving a Bukkit Player on the calling thread.
+            ctx.replyPlayerAsync(fallback);
+            return;
+        }
+        // Component delivery runs on the player's region thread; the calling thread (an IO
+        // completion thread for async commands) never resolves or touches a Bukkit Player.
+        dispatch.runForPlayer(ctx.sender().asPlayer().getUniqueId(), player -> {
+            try {
+                messages.sendChatWithFallback(player, component, null);
+            } catch (IllegalStateException | UnsupportedOperationException ignored) {
+                ctx.replyPlayerAsync(fallback);
+            }
+        });
+    }
+
     public static void replyError(CommandContext ctx, Throwable error) {
+        ctx.replyError(error);
+    }
+
+    /** Typed-context variant of {@link #replyError(CommandContext, Throwable)}. */
+    public static void replyError(com.smile.acelib.command.TypedContext ctx, Throwable error) {
         ctx.replyError(error);
     }
 }

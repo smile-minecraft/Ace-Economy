@@ -1,52 +1,41 @@
 package com.smile.aceeconomy.gui.v2;
 
-import com.smile.aceeconomy.infrastructure.acelib.FakeGuiService;
+import com.smile.acelib.gui.GuiButtonClick;
+import com.smile.acelib.gui.GuiScope;
+import com.smile.acelib.gui.GuiView;
 import com.smile.aceeconomy.infrastructure.acelib.RecordingFoliaContext;
 
 import org.bukkit.entity.Player;
-import org.bukkit.inventory.ItemStack;
-import org.bukkit.inventory.PlayerInventory;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
-import java.util.HashMap;
-import java.util.Set;
+import java.util.Optional;
 import java.util.UUID;
-import java.util.function.Function;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Reload invalidation contract for {@link V2BankGuiSession}: a reload must be able
- * to drop every open session (so no pre-reload generation can act under post-reload
- * rules) and to hot-swap the layout resolver for sessions opened afterwards.
+ * Reload invalidation contract for {@link V2BankGuiSession}: invalidation
+ * must drop every tracked view (so no pre-reload click can act under
+ * post-reload rules), while a reload itself reopens tracked views with the
+ * new layout instead of dropping them.
  */
 class V2BankGuiSessionInvalidationTest {
 
-    private static final Set<Integer> PROTECTED = Set.of();
-
-    private Player mockPlayer() {
-        Player p = Mockito.mock(Player.class);
-        PlayerInventory inv = Mockito.mock(PlayerInventory.class);
-        Mockito.when(p.getUniqueId()).thenReturn(UUID.randomUUID());
-        Mockito.when(p.getInventory()).thenReturn(inv);
-        Mockito.when(inv.firstEmpty()).thenReturn(0);
-        Mockito.when(inv.addItem(Mockito.any(ItemStack.class))).thenReturn(new HashMap<Integer, ItemStack>());
-        return p;
-    }
-
     @Test
-    void invalidateAllClosesOpenSessionsAndRejectsOldGenerations() {
-        FakeGuiService gui = FakeGuiService.available();
+    void invalidateAllClosesTrackedViewsAndRejectsOldClicks() {
+        GuiScope scope = BankGuiTestFixtures.scope();
         RecordingFoliaContext folia = new RecordingFoliaContext();
         StubBankGuiUseCase useCase = new StubBankGuiUseCase();
-        Function<Integer, BankGuiAction> resolver = slot -> BankGuiAction.withdraw(100);
-        V2BankGuiSession session = new V2BankGuiSession(gui, folia, useCase, resolver);
+        V2BankGuiSession session = new V2BankGuiSession(scope, folia, useCase,
+                BankGuiTestFixtures.defaultLayout(), BankGuiTestFixtures.messages(),
+                null, BankGuiTestFixtures.renderer());
 
-        Player first = mockPlayer();
-        Player second = mockPlayer();
-        V2BankGuiSession.OpenOutcome open1 = session.open(first, "Bank", 27, PROTECTED);
-        V2BankGuiSession.OpenOutcome open2 = session.open(second, "Bank", 27, PROTECTED);
+        Player first = BankGuiTestFixtures.player();
+        Player second = BankGuiTestFixtures.player();
+        V2BankGuiSession.OpenOutcome open1 = session.open(first);
+        V2BankGuiSession.OpenOutcome open2 = session.open(second);
         assertTrue(open1.success());
         assertTrue(open2.success());
         long staleGen = open1.session().generation();
@@ -54,59 +43,78 @@ class V2BankGuiSessionInvalidationTest {
         int closed = session.invalidateAll();
 
         assertEquals(2, closed);
-        V2BankGuiSession.ClickOutcome click =
-                session.handleClick(first.getUniqueId(), staleGen, 0);
-        assertTrue(click.isRejected(),
-                "pre-reload generation must not act after invalidation, got " + click.reason());
-        assertFalse(gui.getActiveSession(first.getUniqueId()).isSuccess(),
-                "underlying GUI session must be closed");
-        assertFalse(gui.getActiveSession(second.getUniqueId()).isSuccess(),
-                "underlying GUI session must be closed");
+        assertTrue(session.activeSession(first.getUniqueId()).isEmpty());
+        assertTrue(session.activeSession(second.getUniqueId()).isEmpty());
+        assertTrue(scope.viewOf(first.getUniqueId()).isEmpty(),
+                "the underlying scope view must be closed");
+        assertTrue(scope.viewOf(second.getUniqueId()).isEmpty(),
+                "the underlying scope view must be closed");
+
+        // The old generation is dead: it no longer counts as current, so a
+        // replayed click replies cancelled without touching the ledger.
+        assertTrue(!session.isClickStillCurrent(first.getUniqueId(), staleGen),
+                "pre-reload generation must not act after invalidation");
+        assertEquals(0, useCase.withdrawCalls + useCase.depositCalls);
     }
 
     @Test
     void reopenAfterInvalidateGetsFreshSession() {
-        FakeGuiService gui = FakeGuiService.available();
-        RecordingFoliaContext folia = new RecordingFoliaContext();
-        StubBankGuiUseCase useCase = new StubBankGuiUseCase();
-        V2BankGuiSession session = new V2BankGuiSession(
-                gui, folia, useCase, slot -> BankGuiAction.none());
+        GuiScope scope = BankGuiTestFixtures.scope();
+        V2BankGuiSession session = new V2BankGuiSession(scope, new RecordingFoliaContext(),
+                new StubBankGuiUseCase(), BankGuiTestFixtures.defaultLayout(),
+                BankGuiTestFixtures.messages(),
+                null, BankGuiTestFixtures.renderer());
 
-        Player player = mockPlayer();
-        V2BankGuiSession.OpenOutcome before = session.open(player, "Bank", 27, PROTECTED);
+        Player player = BankGuiTestFixtures.player();
+        V2BankGuiSession.OpenOutcome before = session.open(player);
         assertTrue(before.success());
         session.invalidateAll();
 
-        V2BankGuiSession.OpenOutcome after = session.open(player, "Bank", 27, PROTECTED);
+        V2BankGuiSession.OpenOutcome after = session.open(player);
         assertTrue(after.success());
-        assertNotEquals(before.session().generation(), after.session().generation());
-        V2BankGuiSession.ClickOutcome click = session.handleClick(
-                player.getUniqueId(), after.session().generation(), 0);
-        assertTrue(click.isAllowed(), "fresh generation must act normally");
+        assertTrue(before.session().generation() != after.session().generation());
+        assertTrue(session.activeSession(player.getUniqueId()).isPresent());
     }
 
     @Test
-    void replaceLayoutSwapsResolverForNewSessions() {
-        FakeGuiService gui = FakeGuiService.available();
-        RecordingFoliaContext folia = new RecordingFoliaContext();
+    void reloadReopensInsteadOfInvalidating() {
+        GuiScope scope = BankGuiTestFixtures.scope();
         StubBankGuiUseCase useCase = new StubBankGuiUseCase();
-        V2BankGuiSession session = new V2BankGuiSession(
-                gui, folia, useCase, slot -> BankGuiAction.none());
+        V2BankGuiSession session = new V2BankGuiSession(scope, new RecordingFoliaContext(),
+                useCase, BankGuiTestFixtures.defaultLayout(), BankGuiTestFixtures.messages(),
+                null, BankGuiTestFixtures.renderer());
 
-        Player player = mockPlayer();
-        V2BankGuiSession.OpenOutcome open = session.open(player, "Bank", 27, PROTECTED);
+        Player player = BankGuiTestFixtures.player();
+        V2BankGuiSession.OpenOutcome open = session.open(player);
         assertTrue(open.success());
-        // Slot resolves to none: sync click is allowed without business action.
-        assertTrue(session.handleClick(player.getUniqueId(), open.session().generation(), 0).isAllowed());
 
-        session.replaceLayout(slot -> BankGuiAction.close());
+        session.applyLayout(BankGuiTestFixtures.defaultLayout());
 
-        V2BankGuiSession.OpenOutcome reopened = session.open(player, "Bank", 27, PROTECTED);
-        assertTrue(reopened.success());
-        V2BankGuiSession.ClickOutcome close = session.handleClick(
-                player.getUniqueId(), reopened.session().generation(), 5);
-        assertTrue(close.isAllowed());
-        assertFalse(gui.getActiveSession(player.getUniqueId()).isSuccess(),
-                "close action from the replaced layout must close the session");
+        assertTrue(session.activeSession(player.getUniqueId()).isPresent(),
+                "a reload must reopen, not drop, the tracked view");
+        GuiView view = scope.viewOf(player.getUniqueId()).orElseThrow();
+        long generation = session.activeSession(player.getUniqueId()).orElseThrow().generation();
+        String buttonId = view.buttons().get(11).id();
+        view.handlers().get(buttonId).accept(new GuiButtonClick(
+                player.getUniqueId(), generation, 11, buttonId, Optional.empty()));
+        assertEquals(100L, useCase.lastAmount,
+                "the reopened view must act under the current layout");
+        Mockito.verify(scope, Mockito.never()).close(Mockito.eq(player.getUniqueId()));
+    }
+
+    @Test
+    void repeatedInvalidationIsStable() {
+        GuiScope scope = BankGuiTestFixtures.scope();
+        V2BankGuiSession session = new V2BankGuiSession(scope, new RecordingFoliaContext(),
+                new StubBankGuiUseCase(), BankGuiTestFixtures.defaultLayout(),
+                BankGuiTestFixtures.messages(),
+                null, BankGuiTestFixtures.renderer());
+        Player player = BankGuiTestFixtures.player();
+        assertTrue(session.open(player).success());
+
+        assertEquals(1, session.invalidateAll());
+        assertEquals(0, session.invalidateAll());
+        assertEquals(0, session.invalidateAll());
+        assertTrue(session.activeSession(UUID.randomUUID()).isEmpty());
     }
 }

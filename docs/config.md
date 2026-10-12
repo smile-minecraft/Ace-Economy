@@ -260,7 +260,7 @@ bank-gui:
 
 A config that violates these rules stops the plugin at startup with an error naming the exact path (for example `bank-gui.actions.withdraw100.amount`); nothing is partially applied. A config without `bank-gui` keeps loading under schema `2.0` and receives the legacy slot behaviour.
 
-A valid `bank-gui` candidate is accepted as part of the reload: open bank sessions are closed first so no click can run with half old, half new rules, and sessions opened afterwards resolve clicks against the new layout. An invalid layout refuses the whole reload and leaves the previous configuration untouched. The `bank-gui.enabled` toggle itself still takes effect only at startup; restart after changing it.
+A valid `bank-gui` candidate is accepted as part of the reload: open bank views are rebuilt with the new layout and reopened in place so no click can run with half old, half new rules, and views opened afterwards build from the new layout. A view whose rebuild or reopen fails is closed and its player is told, both on a best-effort basis. Every button is built before a view opens: if any button cannot be built, the open is refused with an error instead of opening an incompletely assembled view. This refusal covers assembly failures only: once the view is handed to the upstream scope, a per-slot icon placement (`clone()`/`setItem()`) failure skips only that slot and the view still opens. An invalid layout refuses the whole reload and leaves the previous configuration untouched. The `bank-gui.enabled` toggle itself still takes effect only at startup; restart after changing it.
 
 ## Withdraw dispatch timeout
 

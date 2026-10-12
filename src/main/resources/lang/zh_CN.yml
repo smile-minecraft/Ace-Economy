@@ -44,9 +44,9 @@ economy:
   payment-received: "<green>已收到来自 <aqua>{player}</aqua> 的 <yellow>{amount}</yellow>！</green>"
   payment-sent-currency: "<green>已发送 <yellow>{amount}</yellow> {currency_name} 给 <aqua>{player}</aqua>！</green>"
   payment-received-currency: "<green>已收到来自 <aqua>{player}</aqua> 的 <yellow>{amount}</yellow> {currency_name}！</green>"
-  cannot-pay-self: "<red>你不能转账给自己！</red>"
+  cannot-pay-self: "<red>您不能转账给自己！</red>"
   insufficient-funds: "<red>余额不足！</red>"
-  insufficient-funds-currency: "<red>你的 {currency_name} 余额不足 (需要: {amount})！</red>"
+  insufficient-funds-currency: "<red>您的 {currency_name} 余额不足 (需要: {amount})！</red>"
   insufficient-funds-debt: "<red>余额不足！您的账户最多只能透支 <gold>{limit}</gold> (当前: <yellow>{balance}</yellow>)。<reset>"
   debt-status: "<gray>(信用额度: <gold>{limit}</gold>)</gray>"
   withdraw-success: "<green>已提取支票：<yellow>{amount}</yellow></green>"
@@ -63,12 +63,12 @@ admin:
   give-currency: "<green>已给予 <aqua>{player}</aqua> <yellow>{amount}</yellow> {currency_name}</green>"
   take-currency: "<green>已从 <aqua>{player}</aqua> 扣除 <yellow>{amount}</yellow> {currency_name}</green>"
   set-currency: "<green>已将 <aqua>{player}</aqua> 的 {currency_name} 余额设为 <yellow>{amount}</yellow></green>"
-  notify-give: "<green>管理员给予你 <yellow>{amount}</yellow></green>"
-  notify-take: "<green>管理员扣除了你 <yellow>{amount}</yellow></green>"
-  notify-set: "<green>管理员将你的余额设为 <yellow>{amount}</yellow></green>"
-  notify-give-currency: "<green>管理员给予你 <yellow>{amount}</yellow> {currency_name}</green>"
-  notify-take-currency: "<green>管理员扣除了你 <yellow>{amount}</yellow> {currency_name}</green>"
-  notify-set-currency: "<green>管理员将你的 {currency_name} 余额设为 <yellow>{amount}</yellow></green>"
+  notify-give: "<green>管理员给予您 <yellow>{amount}</yellow></green>"
+  notify-take: "<green>管理员已从您的账户扣除 <yellow>{amount}</yellow></green>"
+  notify-set: "<green>管理员将您的余额设为 <yellow>{amount}</yellow></green>"
+  notify-give-currency: "<green>管理员给予您 <yellow>{amount}</yellow> {currency_name}</green>"
+  notify-take-currency: "<green>管理员已从您的账户扣除 <yellow>{amount}</yellow> {currency_name}</green>"
+  notify-set-currency: "<green>管理员将您的 {currency_name} 余额设为 <yellow>{amount}</yellow></green>"
   admin-action-failed: "<red>操作失败！</red>"
   admin-taking-failed: "<red>操作失败！可能余额不足。</red>"
   backup-success: "<green>备份已建立：<white>{backup_id}</white>（v2 逻辑快照）</green>"
@@ -114,12 +114,12 @@ command:
   empty-future: "<red>命令服务未返回异步结果</red>"
   empty-result: "<red>命令服务未返回结果</red>"
   missing-argument: "<red>缺少参数 {index}</red>"
-  usage-pay: '<gray>用法：<white>/pay \<玩家> \<金额> [货币]</white></gray>'
-  usage-withdraw: '<gray>用法：<white>/withdraw \<金额></white></gray>'
-  usage-balance: "<gray>用法：<white>/balance [玩家] [货币]</white></gray>"
-  usage-baltop: "<gray>用法：<white>/baltop [货币] [页码]</white></gray>"
+  usage-pay: '<gray>用法：<white>/pay send \<玩家> \<金额> [货币]</white></gray>'
+  usage-withdraw: '<gray>用法：<white>/withdraw cash \<金额> [货币]</white></gray>'
+  usage-balance: "<gray>用法：<white>/money balance [玩家] [货币]</white></gray>"
+  usage-baltop: "<gray>用法：<white>/baltop top [货币]</white></gray>"
   usage-history: '<gray>用法：<white>/aceeco history \<玩家> [页码]</white></gray>'
-  usage-rollback: '<gray>用法：<white>/aceeco rollback \<玩家> \<时间> [类别]</white></gray>'
+  usage-rollback: '<gray>用法：<white>/aceeco rollback \<交易ID></white></gray>'
   invalid-uuid: "<red>交易 ID 必须为有效 UUID：<white>{raw}</white></red>"
   invalid-page: "<red>页码必须为非负整数：<white>{raw}</white></red>"
   restore-confirm-required: "<red>还原是破坏性操作。请完全依照此格式重新执行：<white>/aceeco restore {backup_id} confirm</white></red>"
@@ -157,19 +157,19 @@ rollback:
   already-reverted: "<yellow>交易 {transaction_id} 已被回滚；未做任何变更</yellow>"
   invalid-result: "<red>回滚服务返回失败但缺乏类型化错误；请检查日志且勿盲目重试 — {details}</red>"
   success: "<green>已回滚交易 {transaction_id}；反向审计记录 ({count})：{ids}</green>"
-  usage: '<gray>用法：<white>/aceeco rollback \<玩家> \<时间> [类别]</white></gray>'
+  usage: '<gray>用法：<white>/aceeco rollback \<交易ID></white></gray>'
   searching: "<yellow>正在搜索并回滚交易...</yellow>"
   none-found: "<red>找不到符合条件的可回滚交易。</red>"
   complete: "<green>回滚完成！成功：{success}，失败：{fail}</green>"
   error: "<red>执行回滚时发生错误。</red>"
 
 usage:
-  pay: '<gray>用法：<white>/pay \<玩家> \<金额> [货币]</white></gray>'
-  withdraw: '<gray>用法：<white>/withdraw \<金额></white></gray>'
-  balance: "<gray>用法：<white>/balance [玩家] [货币]</white></gray>"
-  baltop: "<gray>用法：<white>/baltop [货币] [页码]</white></gray>"
+  pay: '<gray>用法：<white>/pay send \<玩家> \<金额> [货币]</white></gray>'
+  withdraw: '<gray>用法：<white>/withdraw cash \<金额> [货币]</white></gray>'
+  balance: "<gray>用法：<white>/money balance [玩家] [货币]</white></gray>"
+  baltop: "<gray>用法：<white>/baltop top [货币]</white></gray>"
   history: '<gray>用法：<white>/aceeco history \<玩家> [页码]</white></gray>'
-  rollback: '<gray>用法：<white>/aceeco rollback \<玩家> \<时间> [类别]</white></gray>'
+  rollback: '<gray>用法：<white>/aceeco rollback \<交易ID></white></gray>'
 
 console:
   start: "AceEconomy {version} 已启用！"
@@ -222,7 +222,7 @@ banknote:
   voided: "<red>此支票已被银行注销 (Voided Check)！</red>"
   redeem-success: "<green>已兑换支票：<yellow>{amount}</yellow> <gray>(签发人：{issuer})</gray></green>"
   redeem-failed: "<red>兑换失败，交易被取消！</red>"
-  redeem-retained: "<yellow>支票已入账 <yellow>{amount}</yellow>，但物品无法移除。请保留支票并联系管理员。</yellow>"
+  redeem-retained: "<yellow>支票已入账 <gold>{amount}</gold>，但物品无法移除。请保留支票并联系管理员。</yellow>"
   redeem-replay: "<red>这张支票已经兑换过了！</red>"
   redeem-mismatch: "<yellow>支票已入账，但手上的物品已被更换，因此未移除任何物品。若物品还在请保留并联系管理员。</yellow>"
   withdraw-pending: "<yellow>取款结果不确定，扣款、交付与退款皆尚未确认。请勿重复尝试并联系管理员。</yellow>"

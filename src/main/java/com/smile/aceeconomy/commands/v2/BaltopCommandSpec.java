@@ -1,13 +1,14 @@
 package com.smile.aceeconomy.commands.v2;
 
-import com.smile.acelib.command.CommandContext;
+import com.smile.acelib.command.CommandArgument;
 import com.smile.acelib.command.CommandSpec;
-import com.smile.acelib.command.SubCommandSpec;
+import com.smile.acelib.command.TypedCommand;
+import com.smile.acelib.command.TypedContext;
+import com.smile.acelib.command.TypedSubCommand;
 import com.smile.aceeconomy.commands.v2.CommandModels.CurrencyInfo;
 import com.smile.aceeconomy.commands.v2.CommandModels.LeaderboardEntry;
 
 import java.util.List;
-import java.util.stream.Collectors;
 
 /** AceLib spec for deterministic leaderboard queries exposed as {@code /baltop top}. */
 public final class BaltopCommandSpec {
@@ -16,29 +17,27 @@ public final class BaltopCommandSpec {
     }
 
     public static CommandSpec create(CommandServices services) {
-        SubCommandSpec top = SubCommandSpec.builder("top")
+        CommandArgument<CurrencyInfo> currency = CommandArguments.currency(services);
+        TypedSubCommand top = TypedSubCommand.builder("top")
                 .description("Show the richest players")
                 .usage("[currency]")
                 .permission("aceeconomy.command.baltop")
-                .minArgs(0)
-                .maxArgs(1)
-                .args("currency")
-                .handler(context -> execute(services, context))
-                .completer((context, args) -> CommandCompletion.byPrefix(
-                        services.economy().knownCurrencyIds(), CommandCompletion.last(args)))
+                .optional(currency, sender -> CommandArguments.defaultCurrency(services))
+                .executes(ctx -> execute(services, ctx, currency))
                 .build();
-        return CommandSpec.builder("baltop")
+        return TypedCommand.builder("baltop")
                 .description("Show the balance leaderboard")
                 .usage("/baltop top [currency]")
                 .permission("aceeconomy.command.baltop")
-                .subCommand(top)
-                .build();
+                .subcommand(top)
+                .build()
+                .toCommandSpec();
     }
 
-    private static void execute(CommandServices services, CommandContext context) {
+    private static void execute(CommandServices services, TypedContext context,
+                                CommandArgument<CurrencyInfo> currencyArg) {
         var messages = services.messages();
-        String rawCurrency = context.commandArgs().isEmpty() ? null : V2CommandSupport.arg(messages, context, 0);
-        CurrencyInfo currency = V2CommandSupport.currency(services, rawCurrency);
+        CurrencyInfo currency = context.get(currencyArg);
         V2CommandSupport.replyValueLocalized(context, messages,
                 services.leaderboard().top(currency.id(), 0, services.leaderboard().pageSize()),
                 value -> formatComponent(messages, currency, value));

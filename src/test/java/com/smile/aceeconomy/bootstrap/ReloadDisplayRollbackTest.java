@@ -9,6 +9,7 @@ import com.smile.aceeconomy.domain.CurrencyRegistry;
 import com.smile.aceeconomy.domain.DebtPolicy;
 import com.smile.aceeconomy.gui.v2.BankGuiAction;
 import com.smile.aceeconomy.gui.v2.BankGuiActions;
+import com.smile.aceeconomy.gui.v2.BankGuiTestFixtures;
 import com.smile.aceeconomy.gui.v2.StubBankGuiUseCase;
 import com.smile.aceeconomy.gui.v2.V2BankGuiSession;
 import com.smile.aceeconomy.infrastructure.acelib.BankGuiConfigParser;
@@ -144,7 +145,7 @@ class ReloadDisplayRollbackTest {
         V2BankGuiSession failingGui = Mockito.mock(V2BankGuiSession.class);
         Mockito.doThrow(new RuntimeException("gui down"))
                 .when(failingGui)
-                .replaceLayout(Mockito.any());
+                .applyLayout(Mockito.any());
         BankGuiLayout oldLayout =
                 BankGuiConfigParser.parse(null, Set.of("dollar", "token"));
         BankGuiLayout newLayout =
@@ -174,18 +175,18 @@ class ReloadDisplayRollbackTest {
     }
 
     /**
-     * Post-swap rollback with a real session: the layout resolver is exchanged
-     * successfully and only the later {@code invalidateAll} throws. The holder,
-     * the real economy copy and the layout reference must all return to the
-     * pre-publish snapshots, and the original failure must propagate so the
+     * Post-swap rollback with a real session: the layout swap reopens tracked
+     * views successfully and only the later form invalidation throws. The
+     * holder, the real economy copy and the layout reference must all return
+     * to the pre-publish snapshots, tracked views must be reopened with the
+     * restored old layout, and the original failure must propagate so the
      * outer reload reports failure instead of running mixed versions.
      *
-     * <p>The session is real (only {@code invalidateAll} is forced to throw on a
-     * spy), and the old/new layouts are distinguishable (27 slots with
-     * withdraw-500 on slot 13 versus 36 slots with close on slot 13 and
-     * withdraw-500 moved to slot 20). The two captured resolvers must behave
-     * like the new layout first and the old layout second, and a click after
-     * the rollback must follow the old rules end to end.
+     * <p>The old/new layouts are distinguishable (27 slots with withdraw-500
+     * on slot 13 versus 36 slots with close on slot 13 and withdraw-500 moved
+     * to slot 20). The two reopened views must be new-size first and old-size
+     * second, and a click after the rollback must follow the old rules end
+     * to end.
      */
     @Test
     void invalidateAllFailureAfterLayoutSwapRollsBackAllWithRealEconomy() throws Exception {
@@ -198,23 +199,29 @@ class ReloadDisplayRollbackTest {
                 Currency.define("token", "Token", "T", 0, false)));
         CurrencyDisplayHolder holder = new CurrencyDisplayHolder(oldReg);
         EconomyService realEconomy = harness.service();
-        FakeGuiService guiService = FakeGuiService.available();
+        com.smile.acelib.gui.GuiScope scope = BankGuiTestFixtures.scope();
         RecordingFoliaContext folia = new RecordingFoliaContext();
         StubBankGuiUseCase useCase = new StubBankGuiUseCase();
         BankGuiLayout oldLayout =
                 BankGuiConfigParser.parse(null, Set.of("dollar", "token"));
         BankGuiLayout newLayout = new36Layout();
-        V2BankGuiSession gui = Mockito.spy(new V2BankGuiSession(
-                guiService, folia, useCase, BankGuiActions.resolver(oldLayout)));
+        V2BankGuiSession gui = new V2BankGuiSession(scope, folia, useCase, oldLayout,
+                BankGuiTestFixtures.messages(), null, BankGuiTestFixtures.renderer());
+        com.smile.aceeconomy.gui.v2.BankFormSession bankForms =
+                Mockito.mock(com.smile.aceeconomy.gui.v2.BankFormSession.class);
         Mockito.doThrow(new RuntimeException("invalidate down"))
-                .when(gui)
+                .when(bankForms)
                 .invalidateAll();
 
         setField(root, "currencies", oldReg);
         setField(root, "displayHolder", holder);
         setField(root, "economy", realEconomy);
         setField(root, "bankGui", gui);
+        setField(root, "bankForms", bankForms);
         setField(root, "currentLayout", oldLayout);
+
+        Player player = BankGuiTestFixtures.player();
+        assertTrue(gui.open(player).success(), "setup open must succeed");
 
         ReloadRuntime runtime = runtimeOf(root);
         RuntimeException thrown = assertThrows(RuntimeException.class,
@@ -232,37 +239,23 @@ class ReloadDisplayRollbackTest {
                 "real economy state must return to the pre-publish registry");
         assertSame(oldLayout, getField(root, "currentLayout"),
                 "layout reference must return to the pre-publish version");
-        assertEquals(2L, gui.layoutGeneration(),
-                "both resolver swaps (new, then restore) must land on the real session");
 
-        ArgumentCaptor<Function<Integer, BankGuiAction>> swaps =
-                ArgumentCaptor.forClass(Function.class);
-        Mockito.verify(gui, Mockito.times(2)).replaceLayout(swaps.capture());
-        BankGuiAction firstOn13 = swaps.getAllValues().get(0).apply(13);
-        BankGuiAction secondOn13 = swaps.getAllValues().get(1).apply(13);
-        assertEquals(BankGuiAction.Type.CLOSE, firstOn13.type(),
-                "the first swap must install the new layout (slot 13 closes)");
-        assertEquals(BankGuiAction.Type.WITHDRAW, secondOn13.type(),
-                "the rollback swap must restore the old layout (slot 13 withdraws)");
-        assertEquals(500L, secondOn13.amount());
-        assertEquals(BankGuiAction.Type.WITHDRAW,
-                swaps.getAllValues().get(0).apply(20).type(),
-                "the first swap must install the new layout (slot 20 withdraws)");
-        assertEquals(BankGuiAction.Type.NONE,
-                swaps.getAllValues().get(1).apply(20).type(),
-                "the rollback swap must restore the old layout (slot 20 empty)");
+        ArgumentCaptor<com.smile.acelib.gui.GuiView> views =
+                ArgumentCaptor.forClass(com.smile.acelib.gui.GuiView.class);
+        Mockito.verify(scope, Mockito.times(2))
+                .replaceView(Mockito.eq(player.getUniqueId()), views.capture());
+        assertEquals(36, views.getAllValues().get(0).size(),
+                "the first reopen must install the new layout");
+        assertEquals(27, views.getAllValues().get(1).size(),
+                "the rollback reopen must restore the old layout");
 
-        Player player = mockPlayer();
-        // Production wiring keeps the AceLib protected set empty (action slots are
-        // guarded by the consumer listener); the open below mirrors that path.
-        V2BankGuiSession.OpenOutcome opened =
-                gui.open(player, "Bank", oldLayout.size(), Set.of());
-        assertTrue(opened.success(), "a post-rollback open must succeed");
-        V2BankGuiSession.ClickOutcome click = gui.handleClick(
-                player.getUniqueId(), opened.session().generation(), 13);
-        assertTrue(click.isSuccess(),
-                "slot 13 must withdraw under the restored old layout, got " + click.reason());
-        assertEquals(500L, useCase.lastAmount);
+        com.smile.acelib.gui.GuiView current = scope.viewOf(player.getUniqueId()).orElseThrow();
+        long generation = gui.activeSession(player.getUniqueId()).orElseThrow().generation();
+        String buttonId = current.buttons().get(13).id();
+        current.handlers().get(buttonId).accept(new com.smile.acelib.gui.GuiButtonClick(
+                player.getUniqueId(), generation, 13, buttonId, java.util.Optional.empty()));
+        assertEquals(500L, useCase.lastAmount,
+                "slot 13 must withdraw under the restored old layout");
     }
 
     private static BankGuiLayout new36Layout() {
@@ -297,14 +290,14 @@ class ReloadDisplayRollbackTest {
     }
 
     /**
-     * Rollback interleave: a session built from the failed candidate after the
-     * layout swap but before the failing {@code invalidateAll} finishes must
-     * not survive the rollback. Otherwise a new-size session keeps acting
-     * under the restored old resolver. Sessions proven to predate the swap
-     * stay untouched.
+     * Post-rollback opens: after a failed reload restores every reference, a
+     * newly opened view must build from the restored old layout and act
+     * under the old rules. Opens serialize against the swap inside the
+     * session, so no interleaved open can leak a failed-candidate view past
+     * the rollback.
      */
     @Test
-    void rollbackDropsSessionOpenedAfterSwapWhenInvalidateFails() throws Exception {
+    void postRollbackOpensUseRestoredLayout() throws Exception {
         CompositionRoot root = newRoot();
         EconomyTestHarness harness =
                 new EconomyTestHarness(DebtPolicy.disabled(), Amount.zero(2));
@@ -314,85 +307,44 @@ class ReloadDisplayRollbackTest {
                 Currency.define("token", "Token", "T", 0, false)));
         CurrencyDisplayHolder holder = new CurrencyDisplayHolder(oldReg);
         EconomyService realEconomy = harness.service();
-        FakeGuiService guiService = FakeGuiService.available();
-        RecordingFoliaContext folia = new RecordingFoliaContext();
+        com.smile.acelib.gui.GuiScope scope = BankGuiTestFixtures.scope();
         StubBankGuiUseCase useCase = new StubBankGuiUseCase();
         BankGuiLayout oldLayout =
                 BankGuiConfigParser.parse(null, Set.of("dollar", "token"));
         BankGuiLayout newLayout = new36Layout();
-        V2BankGuiSession gui = Mockito.spy(new V2BankGuiSession(
-                guiService, folia, useCase, BankGuiActions.resolver(oldLayout)));
-        CountDownLatch invalidateEntered = new CountDownLatch(1);
-        CountDownLatch invalidateRelease = new CountDownLatch(1);
-        Mockito.doAnswer(invocation -> {
-            invalidateEntered.countDown();
-            assertTrue(invalidateRelease.await(10, TimeUnit.SECONDS),
-                    "the post-swap open must land while invalidateAll is parked");
-            throw new RuntimeException("invalidate down");
-        }).when(gui).invalidateAll();
+        V2BankGuiSession gui = new V2BankGuiSession(scope, new RecordingFoliaContext(),
+                useCase, oldLayout, BankGuiTestFixtures.messages(), null,
+                BankGuiTestFixtures.renderer());
+        com.smile.aceeconomy.gui.v2.BankFormSession bankForms =
+                Mockito.mock(com.smile.aceeconomy.gui.v2.BankFormSession.class);
+        Mockito.doThrow(new RuntimeException("invalidate down"))
+                .when(bankForms)
+                .invalidateAll();
 
         setField(root, "currencies", oldReg);
         setField(root, "displayHolder", holder);
         setField(root, "economy", realEconomy);
         setField(root, "bankGui", gui);
+        setField(root, "bankForms", bankForms);
         setField(root, "currentLayout", oldLayout);
 
-        // A pre-reload session proven to predate the swap.
-        Player oldPlayer = mockPlayer();
-        V2BankGuiSession.OpenOutcome oldOpen = gui.open(
-                oldPlayer, "Bank", oldLayout.size(), Set.of());
-        assertTrue(oldOpen.success());
-
         ReloadRuntime runtime = runtimeOf(root);
-        ExecutorService reloader = Executors.newSingleThreadExecutor();
-        AtomicReference<Throwable> reloadError = new AtomicReference<>();
-        try {
-            Future<?> reloading = reloader.submit(() -> {
-                try {
-                    runtime.applyApproved(displayOnlyPlan(newReg), newLayout);
-                } catch (Throwable t) {
-                    reloadError.compareAndSet(null, t);
-                }
-                return null;
-            });
-            assertTrue(invalidateEntered.await(10, TimeUnit.SECONDS),
-                    "reload must reach invalidateAll");
+        RuntimeException reloadError = assertThrows(RuntimeException.class,
+                () -> runtime.applyApproved(displayOnlyPlan(newReg), newLayout));
+        assertEquals("invalidate down", reloadError.getMessage());
+        assertSame(oldLayout, getField(root, "currentLayout"));
 
-            // The interleaved open binds the swapped (failed) generation and
-            // completes after the invalidation snapshot but before its failure.
-            Player newPlayer = mockPlayer();
-            V2BankGuiSession.OpenOutcome leaked = gui.open(
-                    newPlayer, "Bank", newLayout.size(), Set.of(),
-                    gui.layoutGeneration());
-            assertTrue(leaked.success(), "the interleaved open binds the swapped layout");
-            assertEquals(36, leaked.session().size());
-
-            invalidateRelease.countDown();
-            reloading.get(10, TimeUnit.SECONDS);
-            assertTrue(reloadError.get() instanceof RuntimeException
-                            && "invalidate down".equals(reloadError.get().getMessage()),
-                    "the post-swap failure must propagate, got " + reloadError.get());
-
-            // The rollback restores every reference and drops the leaked
-            // new-size session, while the pre-swap session keeps working under
-            // the restored old rules.
-            assertSame(oldReg, holder.get());
-            assertSame(oldReg, getField(root, "currencies"));
-            assertSame(oldLayout, getField(root, "currentLayout"));
-            assertFalse(guiService.getActiveSession(newPlayer.getUniqueId()).isSuccess(),
-                    "the session built from the failed candidate must be closed by the rollback");
-            V2BankGuiSession.ClickOutcome leakedClick = gui.handleClick(
-                    newPlayer.getUniqueId(), leaked.session().generation(), 13);
-            assertTrue(leakedClick.isRejected(),
-                    "the leaked generation must no longer act, got " + leakedClick.reason());
-            V2BankGuiSession.ClickOutcome oldClick = gui.handleClick(
-                    oldPlayer.getUniqueId(), oldOpen.session().generation(), 13);
-            assertTrue(oldClick.isSuccess(),
-                    "the pre-swap session must keep working under the restored layout, got "
-                            + oldClick.reason());
-            assertEquals(500L, useCase.lastAmount);
-        } finally {
-            reloader.shutdownNow();
-        }
+        Player player = BankGuiTestFixtures.player();
+        V2BankGuiSession.OpenOutcome opened = gui.open(player);
+        assertTrue(opened.success(), "a post-rollback open must succeed");
+        assertEquals(27, opened.session().size(),
+                "a post-rollback open must build from the restored old layout");
+        com.smile.acelib.gui.GuiView current = scope.viewOf(player.getUniqueId()).orElseThrow();
+        String buttonId = current.buttons().get(13).id();
+        current.handlers().get(buttonId).accept(new com.smile.acelib.gui.GuiButtonClick(
+                player.getUniqueId(), opened.session().generation(), 13, buttonId,
+                java.util.Optional.empty()));
+        assertEquals(500L, useCase.lastAmount,
+                "slot 13 must withdraw under the restored old layout");
     }
 }

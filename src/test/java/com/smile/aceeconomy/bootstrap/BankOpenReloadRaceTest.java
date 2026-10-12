@@ -1,23 +1,24 @@
 package com.smile.aceeconomy.bootstrap;
 
+import com.smile.acelib.gui.GuiResult;
+import com.smile.acelib.gui.GuiScope;
+import com.smile.acelib.gui.GuiSession;
+import com.smile.acelib.gui.GuiView;
 import com.smile.aceeconomy.application.EconomyTestHarness;
 import com.smile.aceeconomy.domain.Amount;
 import com.smile.aceeconomy.domain.Currency;
 import com.smile.aceeconomy.domain.CurrencyDisplayHolder;
 import com.smile.aceeconomy.domain.CurrencyRegistry;
 import com.smile.aceeconomy.domain.DebtPolicy;
-import com.smile.aceeconomy.gui.v2.BankGuiActions;
+import com.smile.aceeconomy.gui.v2.BankGuiTestFixtures;
 import com.smile.aceeconomy.gui.v2.StubBankGuiUseCase;
 import com.smile.aceeconomy.gui.v2.V2BankGuiSession;
 import com.smile.aceeconomy.infrastructure.acelib.BankGuiConfigParser;
 import com.smile.aceeconomy.infrastructure.acelib.BankGuiLayout;
-import com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter;
 import com.smile.aceeconomy.infrastructure.acelib.CurrencyReloadPlan;
-import com.smile.aceeconomy.infrastructure.acelib.FakeGuiService;
 import com.smile.aceeconomy.infrastructure.acelib.RecordingFoliaContext;
 import com.smile.aceeconomy.infrastructure.acelib.ReloadRuntime;
 
-import com.smile.acelib.gui.GuiResult;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -30,14 +31,16 @@ import java.lang.reflect.Method;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
@@ -45,10 +48,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Open-vs-reload race: an open that has already read the old layout must not
- * build an old-version session after a reload swaps the layout and drops open
- * sessions. The queued open is either rejected or rebuilt from the new layout;
- * it must never leave an old-size session behind.
+ * Open-vs-reload race: opens serialize against the reload swap inside the
+ * session, so a queued open either completes fully before the swap (and is
+ * then rebuilt by it) or reads the new layout. The converged view always
+ * matches the current layout; a stale view can never leak past the reload
+ * and no retry exists.
  */
 class BankOpenReloadRaceTest {
 
@@ -100,19 +104,50 @@ class BankOpenReloadRaceTest {
         return (ReloadRuntime) m.invoke(root);
     }
 
+    /** Scope miniature that records the size of every opened and replaced view. */
+    private static final class RecordingScope {
+        final GuiScope scope = Mockito.mock(GuiScope.class);
+        final AtomicLong generations = new AtomicLong(200L);
+        final Map<UUID, Integer> openSizes = new ConcurrentHashMap<>();
+        final Map<UUID, Integer> replaceSizes = new ConcurrentHashMap<>();
+
+        RecordingScope() {
+            Mockito.when(scope.openView(Mockito.any(UUID.class), Mockito.any(GuiView.class)))
+                    .thenAnswer(invocation -> {
+                        UUID uuid = invocation.getArgument(0);
+                        GuiView view = invocation.getArgument(1);
+                        openSizes.put(uuid, view.size());
+                        return GuiResult.success(new GuiSession(uuid,
+                                generations.getAndIncrement(), "bank-test",
+                                view.title(), view.size(), Set.of()));
+                    });
+            Mockito.when(scope.replaceView(Mockito.any(UUID.class), Mockito.any(GuiView.class)))
+                    .thenAnswer(invocation -> {
+                        UUID uuid = invocation.getArgument(0);
+                        GuiView view = invocation.getArgument(1);
+                        replaceSizes.put(uuid, view.size());
+                        return GuiResult.success(new GuiSession(uuid,
+                                generations.getAndIncrement(), "bank-test",
+                                view.title(), view.size(), Set.of()));
+                    });
+            Mockito.when(scope.viewOf(Mockito.any(UUID.class)))
+                    .thenAnswer(invocation -> Optional.empty());
+        }
+    }
+
     @Test
-    void queuedOpenReadingOldLayoutMustNotBuildOldSessionAfterReload() throws Exception {
+    void queuedOpenReadingOldLayoutConvergesOnNewLayoutAfterReload() throws Exception {
         EconomyTestHarness harness =
                 new EconomyTestHarness(DebtPolicy.disabled(), Amount.zero(2));
         CurrencyRegistry oldReg = harness.currencies();
         CurrencyDisplayHolder holder = new CurrencyDisplayHolder(oldReg);
-        FakeGuiService guiService = FakeGuiService.available();
+        RecordingScope recording = new RecordingScope();
         RecordingFoliaContext folia = new RecordingFoliaContext();
         StubBankGuiUseCase useCase = new StubBankGuiUseCase();
         BankGuiLayout oldLayout = oldLayout();
         BankGuiLayout newLayout = newLayout();
-        V2BankGuiSession session = new V2BankGuiSession(
-                guiService, folia, useCase, BankGuiActions.resolver(oldLayout));
+        V2BankGuiSession session = new V2BankGuiSession(recording.scope, folia, useCase,
+                oldLayout, BankGuiTestFixtures.messages(), null, BankGuiTestFixtures.renderer());
 
         CompositionRoot root = new CompositionRoot(Mockito.mock(JavaPlugin.class));
         setField(root, "currencies", oldReg);
@@ -123,7 +158,7 @@ class BankOpenReloadRaceTest {
         ReloadRuntime runtime = runtimeOf(root);
 
         // The queued open reads whatever layout is current, then pauses so the
-        // reload lands strictly between the layout read and the session build.
+        // reload lands strictly between the layout read and the view build.
         CountDownLatch layoutRead = new CountDownLatch(1);
         CountDownLatch releaseOpen = new CountDownLatch(1);
         Supplier<BankGuiLayout> layouts = () -> {
@@ -146,9 +181,6 @@ class BankOpenReloadRaceTest {
             return seen;
         };
 
-        ConfigLangAdapter messages = Mockito.mock(ConfigLangAdapter.class);
-        Mockito.when(messages.plainMessage(Mockito.anyString(), Mockito.anyMap()))
-                .thenReturn("Bank");
         UUID id = UUID.randomUUID();
         Player player = Mockito.mock(Player.class);
         Mockito.when(player.getUniqueId()).thenReturn(id);
@@ -162,7 +194,7 @@ class BankOpenReloadRaceTest {
             // layout; the reload runs on the worker thread, which never touches
             // Bukkit. The interleaving is the same queued-open race.
             ProductionAdapters.Bank bank =
-                    new ProductionAdapters.Bank(session, layouts, messages, Runnable::run);
+                    new ProductionAdapters.Bank(session, layouts, Runnable::run);
             Future<?> reloading = reloader.submit(() -> {
                 try {
                     assertTrue(layoutRead.await(10, TimeUnit.SECONDS));
@@ -184,115 +216,81 @@ class BankOpenReloadRaceTest {
             assertTrue(reloadError.get() == null,
                     "reload must succeed, got " + reloadError.get());
 
-            GuiResult active = guiService.getActiveSession(id);
-            assertTrue(active.isSuccess() && active.session() != null,
-                    "the queued open must converge on the new layout instead of vanishing");
-            assertEquals(36, active.session().size(),
-                    "the queued open read the old 27-slot layout but ran after the reload: "
-                            + "it must not build an old-version session");
+            // Either the open completed first (old 27, then rebuilt to 36 by
+            // the reload) or it waited and built 36 directly. Both converge.
+            Integer replaced = recording.replaceSizes.get(id);
+            Integer opened = recording.openSizes.get(id);
+            assertTrue(opened != null, "the queued open must converge instead of vanishing");
+            if (replaced != null) {
+                assertEquals(36, replaced,
+                        "the reload must rebuild the raced open with the new layout");
+            } else {
+                assertEquals(36, opened,
+                        "an open that waited out the swap must build from the new layout");
+            }
         } finally {
             reloader.shutdownNow();
         }
     }
 
-    /**
-     * Post-check path: the reload lands while {@code openInventory} is still
-     * running, so the pre-check cannot see it. The just-created stale session
-     * must be dropped instead of left behind, and the single retry from the
-     * fresh layout must converge on the new size.
-     */
     @Test
-    void openInventoryInFlightReloadIsDroppedAndRetriedFromFreshLayout() throws Exception {
-        EconomyTestHarness harness =
-                new EconomyTestHarness(DebtPolicy.disabled(), Amount.zero(2));
-        CurrencyRegistry oldReg = harness.currencies();
-        CurrencyDisplayHolder holder = new CurrencyDisplayHolder(oldReg);
-        FakeGuiService guiService = Mockito.spy(FakeGuiService.available());
-        // Park the first openInventory AFTER the session is created, so the
-        // reload lands strictly between session creation and the post-check.
-        CountDownLatch entered = new CountDownLatch(1);
-        CountDownLatch release = new CountDownLatch(1);
-        AtomicBoolean first = new AtomicBoolean(true);
-        Mockito.doAnswer(invocation -> {
-            GuiResult result = (GuiResult) invocation.callRealMethod();
-            if (first.getAndSet(false)) {
-                entered.countDown();
-                assertTrue(release.await(10, TimeUnit.SECONDS),
-                        "reload must run while openInventory is in flight");
-            }
-            return result;
-        }).when(guiService).openInventory(Mockito.any());
-        RecordingFoliaContext folia = new RecordingFoliaContext();
-        StubBankGuiUseCase useCase = new StubBankGuiUseCase();
+    void openDuringReloadRebuildWaitsAndUsesNewLayout() throws Exception {
+        RecordingScope recording = new RecordingScope();
+        CountDownLatch replaceEntered = new CountDownLatch(1);
+        CountDownLatch replaceRelease = new CountDownLatch(1);
+        Mockito.when(recording.scope.replaceView(Mockito.any(UUID.class),
+                        Mockito.any(GuiView.class)))
+                .thenAnswer(invocation -> {
+                    replaceEntered.countDown();
+                    assertTrue(replaceRelease.await(10, TimeUnit.SECONDS),
+                            "the racing open must land while the rebuild is parked");
+                    UUID uuid = invocation.getArgument(0);
+                    GuiView view = invocation.getArgument(1);
+                    recording.replaceSizes.put(uuid, view.size());
+                    return GuiResult.success(new GuiSession(uuid,
+                            recording.generations.getAndIncrement(), "bank-test",
+                            view.title(), view.size(), Set.of()));
+                });
         BankGuiLayout oldLayout = oldLayout();
         BankGuiLayout newLayout = newLayout();
-        V2BankGuiSession session = new V2BankGuiSession(
-                guiService, folia, useCase, BankGuiActions.resolver(oldLayout));
+        V2BankGuiSession session = new V2BankGuiSession(recording.scope,
+                new RecordingFoliaContext(), new StubBankGuiUseCase(), oldLayout, BankGuiTestFixtures.messages(),
+                null, BankGuiTestFixtures.renderer());
 
-        CompositionRoot root = new CompositionRoot(Mockito.mock(JavaPlugin.class));
-        setField(root, "currencies", oldReg);
-        setField(root, "displayHolder", holder);
-        setField(root, "economy", harness.service());
-        setField(root, "bankGui", session);
-        setField(root, "currentLayout", oldLayout);
-        ReloadRuntime runtime = runtimeOf(root);
+        Player first = Mockito.mock(Player.class);
+        UUID firstId = UUID.randomUUID();
+        Mockito.when(first.getUniqueId()).thenReturn(firstId);
+        assertTrue(session.open(first).success());
 
-        Supplier<BankGuiLayout> layouts = () -> {
-            try {
-                return (BankGuiLayout) getField(root, "currentLayout");
-            } catch (Exception e) {
-                throw new RuntimeException(e);
-            }
-        };
+        Player late = Mockito.mock(Player.class);
+        UUID lateId = UUID.randomUUID();
+        Mockito.when(late.getUniqueId()).thenReturn(lateId);
+        ExecutorService worker = Executors.newSingleThreadExecutor();
+        ExecutorService opener = Executors.newSingleThreadExecutor();
+        try {
+            // The rebuild runs on a worker and parks inside replaceView; the
+            // racing open must then wait on the session lock instead of
+            // leaking a stale view past the swap.
+            Future<Integer> rebuilding = worker.submit(() -> session.applyLayout(newLayout));
+            assertTrue(replaceEntered.await(10, TimeUnit.SECONDS));
+            Future<V2BankGuiSession.OpenOutcome> racing =
+                    opener.submit(() -> session.open(late));
+            Thread.sleep(200);
+            assertTrue(!racing.isDone(),
+                    "an open racing the rebuild must wait instead of building stale");
+            replaceRelease.countDown();
 
-        ConfigLangAdapter messages = Mockito.mock(ConfigLangAdapter.class);
-        Mockito.when(messages.plainMessage(Mockito.anyString(), Mockito.anyMap()))
-                .thenReturn("Bank");
-        UUID id = UUID.randomUUID();
-        Player player = Mockito.mock(Player.class);
-        Mockito.when(player.getUniqueId()).thenReturn(id);
-
-        ExecutorService reloader = Executors.newSingleThreadExecutor();
-        AtomicReference<Throwable> reloadError = new AtomicReference<>();
-        try (MockedStatic<Bukkit> bukkit = Mockito.mockStatic(Bukkit.class)) {
-            bukkit.when(() -> Bukkit.getPlayer(id)).thenReturn(player);
-            // Direct executor: the open runs on the test thread (where the
-            // static Bukkit stub is visible) and parks inside openInventory;
-            // the reload runs on the worker thread, which never touches
-            // Bukkit. The interleaving is the in-flight-open race.
-            ProductionAdapters.Bank bank =
-                    new ProductionAdapters.Bank(session, layouts, messages, Runnable::run);
-            Future<?> reloading = reloader.submit(() -> {
-                try {
-                    assertTrue(entered.await(10, TimeUnit.SECONDS));
-                    runtime.applyApproved(
-                            new CurrencyReloadPlan.Classification(
-                                    CurrencyReloadPlan.Disposition.DISPLAY_ONLY, newRegistry(),
-                                    List.of("currency display changed: dollar")),
-                            newLayout);
-                } catch (Throwable t) {
-                    reloadError.compareAndSet(null, t);
-                } finally {
-                    release.countDown();
-                }
-                return null;
-            });
-
-            bank.open(id, "someone");
-            reloading.get(10, TimeUnit.SECONDS);
-            assertTrue(reloadError.get() == null,
-                    "reload must succeed, got " + reloadError.get());
-
-            GuiResult active = guiService.getActiveSession(id);
-            assertTrue(active.isSuccess() && active.session() != null,
-                    "the retried open must converge on the new layout instead of vanishing");
-            assertEquals(36, active.session().size(),
-                    "the open was in flight when the reload swapped 27 slots for 36: "
-                            + "the stale session must be dropped and the retry must build new");
-            Mockito.verify(guiService, Mockito.times(2))
-                    .openInventory(Mockito.any());
+            assertEquals(1, rebuilding.get(10, TimeUnit.SECONDS));
+            V2BankGuiSession.OpenOutcome outcome = racing.get(10, TimeUnit.SECONDS);
+            assertTrue(outcome.success(), "the racing open must converge: " + outcome.errorCode());
+            assertEquals(36, recording.openSizes.get(lateId),
+                    "an open racing the rebuild must build from the new layout");
+            assertEquals(36, recording.replaceSizes.get(firstId),
+                    "the tracked view must be rebuilt with the new layout");
         } finally {
-            reloader.shutdownNow();
+            replaceRelease.countDown();
+            worker.shutdownNow();
+            opener.shutdownNow();
         }
     }
 }

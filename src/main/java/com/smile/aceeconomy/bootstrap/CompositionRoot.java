@@ -8,6 +8,8 @@ import com.smile.acelib.command.BukkitReplySink;
 import com.smile.acelib.command.CommandRegistry;
 import com.smile.acelib.command.CommandRegistryImpl;
 import com.smile.acelib.event.SafeEventRegistry;
+import com.smile.acelib.gui.GuiScope;
+import com.smile.acelib.gui.GuiScopes;
 import com.smile.acelib.gui.GuiService;
 import com.smile.acelib.scheduler.SafeScheduler;
 import com.smile.aceeconomy.acelib.AceLibAccess;
@@ -30,7 +32,6 @@ import com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter;
 import com.smile.aceeconomy.infrastructure.acelib.CurrencyConfigParser;
 import com.smile.aceeconomy.infrastructure.acelib.SafeSchedulerFoliaContext;
 import com.smile.aceeconomy.gui.v2.BankFormSession;
-import com.smile.aceeconomy.gui.v2.BankGuiActions;
 import com.smile.aceeconomy.gui.v2.BankOpenRouter;
 import com.smile.aceeconomy.infrastructure.integration.acelib.AceLibExternalServiceReadiness;
 import com.smile.aceeconomy.infrastructure.integration.acelib.ExternalIntegrationCoordinator;
@@ -129,6 +130,10 @@ public final class CompositionRoot {
     private PlayerSessionManager sessions;
     private V2BankGuiSession bankGui;
     private BankFormSession bankForms;
+    // Plugin-owned GUI scope for the bank surfaces. Created with the
+    // presentation slice and closed on its stop; it never reaches the shared
+    // service or its AceLib-owned listener.
+    private GuiScope bankGuiScope;
     private com.smile.aceeconomy.infrastructure.banknote.BanknoteFlow banknoteFlow;
     private CommandRegistry commandRegistry;
     // Bound to the transaction publisher and dropped on presentation stop. Every committed
@@ -189,7 +194,7 @@ public final class CompositionRoot {
         // Ids are namespaced per plugin so a second consumer sharing the same AceLib host
         // can never collide with (or be torn down by) this graph.
         lifecycle.add("aceeconomy:configuration", Set.of(),
-                new NamedModule("configuration", resources -> config.load(), resources -> { }));
+                new NamedModule("configuration", resources -> config.load(), resources -> config.close()));
         lifecycle.add("aceeconomy:persistence", Set.of("aceeconomy:configuration"),
                 new NamedModule("persistence", this::startPersistence, resources -> stopPersistence()));
         lifecycle.add("aceeconomy:application", Set.of("aceeconomy:persistence"),
@@ -378,8 +383,16 @@ public final class CompositionRoot {
         BankGuiLayout bankGuiLayout = BankGuiConfigParser.parse(
                 value("bank-gui"), Set.copyOf(currencies.all().stream().map(Currency::id).toList()));
         GuiService guiService = requireApi().getGuiService();
-        bankGui = new V2BankGuiSession(guiService, folia, bankUseCase,
-                BankGuiActions.resolver(bankGuiLayout), banknoteFlow);
+        // Plugin-owned GUI scope: the single handle this plugin opens bank
+        // views through and closes on stop. The bank screen below opens only
+        // through this scope, so the shared service and its AceLib-owned
+        // listener are never shut down or removed here. Click protection,
+        // stale-click rejection and drag protection are owned upstream; the
+        // tracked views are still drained explicitly on stop.
+        bankGuiScope = GuiScopes.create(plugin, guiService);
+        resources.register(this::dropBankGuiScope);
+        bankGui = new V2BankGuiSession(bankGuiScope, folia, bankUseCase,
+                bankGuiLayout, config, banknoteFlow);
         currentLayout = bankGuiLayout;
         // Right-click redemption reuses the same atomic bank use case as the GUI deposit button
         // (durable nonce consumption + credit commit together); the listener owns its click-time
@@ -388,14 +401,6 @@ public final class CompositionRoot {
                 bankUseCase, banknotes, folia, config, plugin.getLogger(), banknoteFlow);
         Bukkit.getPluginManager().registerEvents(redeemListener, plugin);
         resources.register(() -> HandlerList.unregisterAll(redeemListener));
-        // Consumer-side bank click/drag/close wiring: AceLib validates generations but
-        // never calls consumer business logic, so this listener bridges Bukkit inventory
-        // events into the session above. It runs with ignoreCancelled=false, so an event
-        // AceLib already cancelled still reaches the action dispatch.
-        com.smile.aceeconomy.gui.v2.BankGuiClickListener bankClickListener =
-                new com.smile.aceeconomy.gui.v2.BankGuiClickListener(bankGui, folia, config);
-        Bukkit.getPluginManager().registerEvents(bankClickListener, plugin);
-        resources.register(() -> HandlerList.unregisterAll(bankClickListener));
 
         ProductionAdapters.Economy economyCommands =
                 new ProductionAdapters.Economy(api, displayHolder, ioExecutor);
@@ -419,7 +424,7 @@ public final class CompositionRoot {
         // committing thread; it is unregistered with the presentation slice below.
         leaderboardInvalidationListener = wireLeaderboardInvalidation(publisher, leaderboardService);
         ProductionAdapters.Bank javaBankCommands =
-                new ProductionAdapters.Bank(bankGui, () -> currentLayout, config, ioExecutor);
+                new ProductionAdapters.Bank(bankGui, () -> currentLayout, ioExecutor);
         // Bedrock native-form bank surface. The form service is resolved
         // defensively: an unavailable Bedrock facade (Floodgate absent) leaves
         // a null transport, and the session fails closed at send time while
@@ -554,6 +559,10 @@ public final class CompositionRoot {
             publisher.unregisterPostCommit(discordPostCommitListener);
             discordPostCommitListener = null;
         }
+        // Close the plugin-owned scope first (it ends every bank view it
+        // opened), then drop the locally tracked views and form entries.
+        // Both steps are idempotent, so a repeated stop is a no-op.
+        dropBankGuiScope();
         invalidateBankSessions(bankGui, bankForms);
         if (commandRegistry != null) {
             commandRegistry.onPluginDisable();
@@ -561,14 +570,40 @@ public final class CompositionRoot {
     }
 
     /**
-     * Drop every self-owned bank session so no pre-disable generation can act afterwards.
+     * Release the plugin-owned GUI scope created with the presentation slice.
      *
-     * <p>Each chest session is closed through the shared service's per-session close and each
+     * <p>Only this plugin's scope is closed; the shared {@code GuiService}
+     * and its AceLib-owned listener stay untouched, so other consumers of
+     * the same AceLib instance are unaffected. Null-safe and idempotent:
+     * the field is cleared first, so a repeated call — from a second stop
+     * or from resource compensation after a failed start — closes nothing.
+     */
+    private void dropBankGuiScope() {
+        GuiScope scope = bankGuiScope;
+        bankGuiScope = null;
+        if (scope == null) {
+            return;
+        }
+        try {
+            scope.close();
+        } catch (Throwable failure) {
+            plugin.getLogger().warning("Bank GUI scope close completed with errors: "
+                    + failure.getClass().getSimpleName());
+        }
+    }
+
+    /**
+     * Drop every self-owned bank view so no pre-disable click can act afterwards.
+     *
+     * <p>Each tracked chest view is closed through the owning scope and each
      * form entry is discarded locally; the shared {@code GuiService} itself is never shut down
      * or released, so other consumers of the same AceLib instance are unaffected. Null-safe
-     * and idempotent: a repeated call finds no tracked sessions and drops nothing.
+     * and idempotent: a repeated call finds no tracked views and drops nothing. A scope
+     * close that throws still clears tracking, and the warning is already logged
+     * by the scope release above, so later clicks find no entry instead of a
+     * dead one.
      *
-     * @return the number of locally tracked sessions dropped
+     * @return the number of locally tracked views dropped
      */
     static int invalidateBankSessions(V2BankGuiSession bankGui, BankFormSession bankForms) {
         int dropped = 0;
@@ -669,7 +704,6 @@ public final class CompositionRoot {
                 CurrencyRegistry oldDisplay = displayHolder.get();
                 CurrencyRegistry oldCurrencies = currencies;
                 BankGuiLayout oldLayout = currentLayout;
-                long layoutGenerationBefore = bankGui != null ? bankGui.layoutGeneration() : 0L;
                 boolean displaySwapped = false;
                 boolean economySwapped = false;
                 boolean layoutSwapped = false;
@@ -693,17 +727,17 @@ public final class CompositionRoot {
                         economySwapped = true;
                         currencies = candidate;
                     }
-                    // The layout candidate was fully parsed before the swap window: publish the
-                    // new reference BEFORE bumping the session generation (inside replaceLayout),
-                    // then drop every open session so no pre-reload generation can act under the
-                    // new rules. Open readers sample the generation first and the layout second,
-                    // so this order guarantees they never observe a stale layout with a matching
-                    // generation: at worst they see the new generation and retry from fresh state.
+                    // The layout candidate was fully parsed before the swap window.
+                    // Every tracked view is rebuilt from the new layout and reopened
+                    // in place, so a player with a bank view open sees the new layout
+                    // without reopening it. A view that cannot be rebuilt or reopened
+                    // is closed and its player is told, both on a best-effort basis.
+                    // Opens serialize against the swap inside the session, so no open
+                    // can leak a stale view past it.
                     if (bankGui != null && layout != null) {
                         currentLayout = layout;
                         layoutSwapped = true;
-                        bankGui.replaceLayout(BankGuiActions.resolver(layout));
-                        bankGui.invalidateAll();
+                        bankGui.applyLayout(layout);
                         if (bankForms != null) {
                             bankForms.invalidateAll();
                         }
@@ -716,31 +750,20 @@ public final class CompositionRoot {
                     // back throws, the layout reference is still restored so later opens
                     // cannot keep reading the failed candidate.
                     if (layoutSwapped && bankGui != null && oldLayout != null) {
-                        // The failed candidate bumped the generation before it
-                        // failed; capture it now so the cleanup below can tell
-                        // candidate sessions apart from pre-swap ones.
-                        long failedGeneration = bankGui.layoutGeneration();
+                        // Restore the previous reference first so later opens
+                        // cannot keep reading the failed candidate, then reopen
+                        // every tracked view with it. The reopen is tolerant:
+                        // a view that cannot be rebuilt has its tracking dropped
+                        // and is closed on a best-effort basis. Best-effort: it
+                        // never masks the original failure, which stays recorded below.
                         currentLayout = oldLayout;
                         try {
-                            bankGui.replaceLayout(BankGuiActions.resolver(oldLayout));
+                            bankGui.applyLayout(oldLayout);
                         } catch (Throwable rollbackFailure) {
                             // A stubbed test double may throw the same instance twice;
                             // self-suppression is illegal, so only attach distinct causes.
                             if (rollbackFailure != failure) {
                                 failure.addSuppressed(rollbackFailure);
-                            }
-                        }
-                        // Sessions opened from the failed candidate after the
-                        // swap (in particular after the invalidation snapshot)
-                        // must not survive under the restored resolver with
-                        // their new size. Best-effort: it never masks the
-                        // original failure, which stays recorded below.
-                        try {
-                            bankGui.dropSessionsAfterFailedSwap(
-                                    layoutGenerationBefore, failedGeneration);
-                        } catch (Throwable cleanupFailure) {
-                            if (cleanupFailure != failure) {
-                                failure.addSuppressed(cleanupFailure);
                             }
                         }
                     }

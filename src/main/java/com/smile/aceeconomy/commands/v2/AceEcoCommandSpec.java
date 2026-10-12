@@ -1,18 +1,16 @@
 package com.smile.aceeconomy.commands.v2;
 
-import com.smile.acelib.command.CommandContext;
+import com.smile.acelib.command.CommandArgument;
 import com.smile.acelib.command.CommandException;
 import com.smile.acelib.command.CommandSpec;
-import com.smile.acelib.command.SubCommandSpec;
+import com.smile.acelib.command.TypedCommand;
+import com.smile.acelib.command.TypedContext;
+import com.smile.acelib.command.TypedSubCommand;
 import com.smile.aceeconomy.commands.v2.CommandModels.CurrencyInfo;
 import com.smile.aceeconomy.commands.v2.CommandModels.PlayerIdentity;
-import com.smile.aceeconomy.domain.Transaction;
 import com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter;
 import com.smile.aceeconomy.operations.AuditPage;
-import com.smile.aceeconomy.operations.AuditQuery;
 import com.smile.aceeconomy.operations.BackupResult;
-import com.smile.aceeconomy.operations.ImportException;
-import com.smile.aceeconomy.operations.ImportFailureReason;
 import com.smile.aceeconomy.operations.ImportOutcome;
 import com.smile.aceeconomy.operations.RestoreResult;
 import com.smile.aceeconomy.operations.RollbackResult;
@@ -27,9 +25,6 @@ import java.util.concurrent.CompletableFuture;
 
 /** AceLib spec for administrative economy operations exposed as {@code /aceeco}. */
 public final class AceEcoCommandSpec {
-
-    /** Fixed page size for history replies; pagination stays 0-based like {@code AuditQuery}. */
-    private static final int HISTORY_PAGE_SIZE = 10;
 
     private AceEcoCommandSpec() {
     }
@@ -52,31 +47,29 @@ public final class AceEcoCommandSpec {
                         .distinct()
                         .toList();
         var messages = services.messages();
-        CommandSpec.Builder builder = CommandSpec.builder("aceeco")
+        TypedCommand.Builder builder = TypedCommand.builder("aceeco")
                 .description("Administrative economy commands")
                 .usage("/aceeco <give|take|set|history|reload|rollback|backup|restore|import>")
                 .permission("aceeconomy.admin")
-                .subCommand(mutation(services, "give"))
-                .subCommand(mutation(services, "take"))
-                .subCommand(mutation(services, "set"))
-                .subCommand(history(services))
-                .subCommand(rollback(services))
-                .subCommand(backup(services))
-                .subCommand(restore(services))
-                .subCommand(importBalances(services))
-                .subCommand(SubCommandSpec.builder("reload")
+                .subcommand(mutation(services, "give"))
+                .subcommand(mutation(services, "take"))
+                .subcommand(mutation(services, "set"))
+                .subcommand(history(services))
+                .subcommand(rollback(services))
+                .subcommand(backup(services))
+                .subcommand(restore(services))
+                .subcommand(importBalances(services))
+                .subcommand(TypedSubCommand.builder("reload")
                         .description("Reload economy configuration")
                         .usage("")
                         .permission("aceeconomy.admin.reload")
                         .consoleOnly()
-                        .minArgs(0)
-                        .maxArgs(0)
-                        .handler(context -> reloadWithReport(context, services, messages))
+                        .executes(context -> reloadWithReport(context, services, messages))
                         .build());
         if (!effective.isEmpty()) {
             builder.aliases(effective.toArray(String[]::new));
         }
-        return builder.build();
+        return builder.build().toCommandSpec();
     }
 
     /**
@@ -85,7 +78,7 @@ public final class AceEcoCommandSpec {
      * error; successes append hot-applied and restart-deferred notes as plain text so
      * operator-controlled values are never re-parsed as MiniMessage.
      */
-    private static void reloadWithReport(CommandContext context, CommandServices services,
+    private static void reloadWithReport(TypedContext context, CommandServices services,
                                          ConfigLangAdapter messages) {
         services.admin().reload().whenComplete((result, failure) -> {
             if (failure != null) {
@@ -116,80 +109,90 @@ public final class AceEcoCommandSpec {
         });
     }
 
-    private static SubCommandSpec mutation(CommandServices services, String operation) {        return SubCommandSpec.builder(operation)
+    private static TypedSubCommand mutation(CommandServices services, String operation) {
+        CommandArgument<String> player = CommandArguments.playerName(services);
+        CommandArgument<String> amount = CommandArguments.amountToken(services);
+        CommandArgument<CurrencyInfo> currency = CommandArguments.currency(services);
+        return TypedSubCommand.builder(operation)
                 .description(operation + " a player's balance")
                 .usage("<player> <amount> [currency]")
                 .permission("aceeconomy.admin." + operation)
-                .minArgs(2)
-                .maxArgs(3)
-                .args("player", "amount", "currency")
-                .handler(context -> executeMutation(services, context, operation))
-                .completer((context, args) -> complete(services, args))
+                .argument(player)
+                .argument(amount)
+                .optional(currency, sender -> CommandArguments.defaultCurrency(services))
+                .executes(context -> executeMutation(services, context, operation, player, amount, currency))
                 .build();
     }
 
-    private static SubCommandSpec history(CommandServices services) {
-        return SubCommandSpec.builder("history")
+    private static TypedSubCommand history(CommandServices services) {
+        CommandArgument<String> player = CommandArguments.optionalPlayerName(services);
+        CommandArgument<CurrencyInfo> currency = CommandArguments.currency(services);
+        CommandArgument<Integer> page = CommandArguments.page(services);
+        return TypedSubCommand.builder("history")
                 .description("Query the transaction history")
                 .usage("[player] [currency] [page]")
                 .permission("aceeconomy.admin.history")
-                .minArgs(0)
-                .maxArgs(3)
-                .args("player", "currency", "page")
-                .handler(context -> executeHistory(services, context))
-                .completer((context, args) -> completeHistory(services, args))
+                .optional(player, sender -> "")
+                .optional(currency, sender -> CommandArguments.defaultCurrency(services))
+                .optional(page, sender -> 0)
+                .executes(context -> executeHistory(services, context, player, currency, page))
                 .build();
     }
 
-    private static SubCommandSpec rollback(CommandServices services) {
-        return SubCommandSpec.builder("rollback")
+    private static TypedSubCommand rollback(CommandServices services) {
+        CommandArgument<UUID> transactionId = CommandArguments.transactionId(services);
+        return TypedSubCommand.builder("rollback")
                 .description("Roll back a transaction by id (destructive, console only)")
                 .usage("<transaction-id>")
                 .permission("aceeconomy.admin.rollback")
                 .consoleOnly()
-                .minArgs(1)
-                .maxArgs(1)
-                .args("transaction-id")
-                .handler(context -> executeRollback(services, context))
+                .argument(transactionId)
+                .executes(context -> executeRollback(services, context, transactionId))
                 .build();
     }
 
-    private static SubCommandSpec backup(CommandServices services) {
-        return SubCommandSpec.builder("backup")
+    private static TypedSubCommand backup(CommandServices services) {
+        CommandArgument<String> label = CommandArguments.token("label", "[label]");
+        return TypedSubCommand.builder("backup")
                 .description("Create a logical v2 snapshot under the managed backups folder")
                 .usage("[label]")
                 .permission("aceeconomy.admin.backup")
-                .minArgs(0)
-                .maxArgs(1)
-                .args("label")
-                .handler(context -> executeBackup(services, context))
+                .optional(label, sender -> "")
+                .executes(context -> executeBackup(services, context, label))
                 .build();
     }
 
-    private static SubCommandSpec restore(CommandServices services) {
-        return SubCommandSpec.builder("restore")
+    private static TypedSubCommand restore(CommandServices services) {
+        CommandArgument<String> backupId = CommandArguments.token("backup-id", "<backup-id>");
+        CommandArgument<String> confirm = CommandArguments.token("confirm", "<confirm>");
+        return TypedSubCommand.builder("restore")
                 .description("Restore live economy state from a backup (destructive, console only)")
                 .usage("<backup-id> confirm")
                 .permission("aceeconomy.admin.restore")
                 .consoleOnly()
-                .minArgs(2)
-                .maxArgs(2)
-                .args("backup-id", "confirm")
-                .handler(context -> executeRestore(services, context))
+                .argument(backupId)
+                .argument(confirm)
+                .executes(context -> executeRestore(services, context, backupId, confirm))
                 .build();
     }
 
-    private static SubCommandSpec importBalances(CommandServices services) {
-        return SubCommandSpec.builder("import")
+    private static TypedSubCommand importBalances(CommandServices services) {
+        CommandArgument<ImportSource> source = CommandArguments.importSource(services);
+        CommandArgument<String> path = CommandArguments.importPath(services);
+        CommandArgument<String> third = CommandArguments.importCurrencySlot();
+        CommandArgument<String> fourth = CommandArguments.importApplySlot();
+        CommandArgument<String> fifth = CommandArguments.importConfirmSlot();
+        return TypedSubCommand.builder("import")
                 .description("Preview or apply an Essentials/CMI balance import (console only, dry-run by default)")
                 .usage("<essentials|cmi> <path> [currency] [apply confirm]")
                 .permission("aceeconomy.admin.import")
                 .consoleOnly()
-                .minArgs(2)
-                .maxArgs(5)
-                .args("source", "path", "currency", "apply", "confirm")
-                .handler(context -> executeImport(services, context))
-                .completer((context, args) -> completeImport(services, args))
+                .argument(source)
+                .argument(path)
+                .optional(third, sender -> "")
+                .optional(fourth, sender -> "")
+                .optional(fifth, sender -> "")
+                .executes(context -> executeImport(services, context, source, path))
                 .build();
     }
 
@@ -202,10 +205,12 @@ public final class AceEcoCommandSpec {
      * the restore confirmation; {@code apply} is matched case-insensitively
      * unless it is a known currency id.
      */
-    private static void executeImport(CommandServices services, CommandContext context) {
+    private static void executeImport(CommandServices services, TypedContext context,
+                                      CommandArgument<ImportSource> sourceArg,
+                                      CommandArgument<String> pathArg) {
         var messages = services.messages();
-        ImportSource source = parseImportSource(messages, V2CommandSupport.arg(messages, context, 0));
-        String path = V2CommandSupport.arg(messages, context, 1);
+        ImportSource source = context.get(sourceArg);
+        String path = context.get(pathArg);
         List<String> rest = context.commandArgs().subList(2, context.commandArgs().size());
         String rawCurrency = null;
         boolean apply = false;
@@ -269,19 +274,6 @@ public final class AceEcoCommandSpec {
                         formatImport(messages, source, currencyForReply, path, result));
             }
         });
-    }
-
-    private static ImportSource parseImportSource(ConfigLangAdapter messages, String raw) {
-        if ("essentials".equalsIgnoreCase(raw)) {
-            return ImportSource.ESSENTIALS;
-        }
-        if ("cmi".equalsIgnoreCase(raw)) {
-            return ImportSource.CMI;
-        }
-        String msg = messages != null
-                ? messages.plainMessage("command.import-unknown-source", Map.of("raw", raw))
-                : "command.import-unknown-source:" + raw;
-        throw CommandException.custom("ACELIB-CMD-IMPORT-SOURCE-UNKNOWN", msg);
     }
 
     private static boolean isApplyWord(String token) {
@@ -366,29 +358,11 @@ public final class AceEcoCommandSpec {
         return all.size() > shown ? " [" + joined + "; and " + (all.size() - shown) + " more]" : " [" + joined + "]";
     }
 
-    private static List<String> completeImport(CommandServices services, List<String> args) {
-        int position = args.size() - 1;
-        if (position == 0) {
-            return CommandCompletion.byPrefix(List.of("essentials", "cmi"), CommandCompletion.last(args));
-        }
-        if (position == 2) {
-            List<String> base = new java.util.ArrayList<>(services.economy().knownCurrencyIds());
-            base.add("apply");
-            return CommandCompletion.byPrefix(base, CommandCompletion.last(args));
-        }
-        if (position == 3) {
-            return CommandCompletion.byPrefix(List.of("apply", "confirm"), CommandCompletion.last(args));
-        }
-        if (position == 4) {
-            return CommandCompletion.byPrefix(List.of("confirm"), CommandCompletion.last(args));
-        }
-        return List.of();
-    }
-
-    private static void executeBackup(CommandServices services, CommandContext context) {
+    private static void executeBackup(CommandServices services, TypedContext context,
+                                      CommandArgument<String> labelArg) {
         var messages = services.messages();
         List<String> args = context.commandArgs();
-        String label = args.isEmpty() ? null : V2CommandSupport.arg(messages, context, 0);
+        String label = args.isEmpty() ? null : context.get(labelArg);
         CompletableFuture<BackupResult> pending;
         try {
             pending = services.backupRestore().createBackup(label);
@@ -418,10 +392,12 @@ public final class AceEcoCommandSpec {
         });
     }
 
-    private static void executeRestore(CommandServices services, CommandContext context) {
+    private static void executeRestore(CommandServices services, TypedContext context,
+                                       CommandArgument<String> backupIdArg,
+                                       CommandArgument<String> confirmArg) {
         var messages = services.messages();
-        String backupId = V2CommandSupport.arg(messages, context, 0);
-        String confirmation = V2CommandSupport.arg(messages, context, 1);
+        String backupId = context.get(backupIdArg);
+        String confirmation = context.get(confirmArg);
         if (!"confirm".equals(confirmation)) {
             String msg = messages != null
                     ? messages.plainMessage("command.restore-confirm-required", Map.of("backup_id", backupId))
@@ -458,9 +434,10 @@ public final class AceEcoCommandSpec {
         });
     }
 
-    private static void executeRollback(CommandServices services, CommandContext context) {
+    private static void executeRollback(CommandServices services, TypedContext context,
+                                        CommandArgument<UUID> transactionIdArg) {
         var messages = services.messages();
-        UUID transactionId = parseTransactionId(messages, V2CommandSupport.arg(messages, context, 0));
+        UUID transactionId = context.get(transactionIdArg);
         CompletableFuture<RollbackResult> pending;
         try {
             pending = services.rollback().rollback(transactionId);
@@ -500,24 +477,15 @@ public final class AceEcoCommandSpec {
         });
     }
 
-    private static UUID parseTransactionId(ConfigLangAdapter messages, String raw) {
-        try {
-            return UUID.fromString(raw);
-        } catch (IllegalArgumentException ignored) {
-            String msg = messages != null
-                    ? messages.plainMessage("command.invalid-uuid", Map.of("raw", raw))
-                    : "command.invalid-uuid";
-            throw CommandException.custom("ACELIB-CMD-INVALID-UUID", msg);
-        }
-    }
-
-    private static void executeHistory(CommandServices services, CommandContext context) {
+    private static void executeHistory(CommandServices services, TypedContext context,
+                                       CommandArgument<String> playerArg,
+                                       CommandArgument<CurrencyInfo> currencyArg,
+                                       CommandArgument<Integer> pageArg) {
         var messages = services.messages();
         List<String> args = context.commandArgs();
-        String playerName = args.isEmpty() ? null : V2CommandSupport.arg(messages, context, 0);
-        String rawCurrency = args.size() >= 2 ? V2CommandSupport.arg(messages, context, 1) : null;
-        int page = args.size() >= 3 ? parsePage(messages, V2CommandSupport.arg(messages, context, 2)) : 0;
-        CurrencyInfo currency = V2CommandSupport.currency(services, rawCurrency);
+        String playerName = args.isEmpty() ? null : context.get(playerArg);
+        int page = context.get(pageArg);
+        CurrencyInfo currency = context.get(currencyArg);
         if (playerName == null) {
             queryAndReply(services, context, null, currency, page);
             return;
@@ -536,107 +504,24 @@ public final class AceEcoCommandSpec {
         });
     }
 
-    private static void queryAndReply(CommandServices services, CommandContext context,
+    private static void queryAndReply(CommandServices services, TypedContext context,
                                       PlayerIdentity target, CurrencyInfo currency, int page) {
-        var messages = services.messages();
-        AuditQuery query = AuditQuery.builder()
-                .accountId(target == null ? null : target.uuid())
-                .currencyId(currency.id())
-                .page(page)
-                .limit(HISTORY_PAGE_SIZE)
-                .build();
-        V2CommandSupport.replyValueLocalized(context, messages, services.history().query(query),
-                value -> formatComponent(messages, target, currency, value));
-    }
-
-    private static int parsePage(ConfigLangAdapter messages, String raw) {
-        try {
-            int page = Integer.parseInt(raw);
-            if (page >= 0) {
-                return page;
-            }
-        } catch (NumberFormatException ignored) {
-        }
-        String msg = messages != null
-                ? messages.plainMessage("command.invalid-page", Map.of("raw", raw))
-                : "command.invalid-page";
-        throw CommandException.custom("ACELIB-CMD-INVALID-PAGE", msg);
+        HistoryReply.queryAndReply(services, context, target, currency, page);
     }
 
     private static Component formatComponent(ConfigLangAdapter messages, PlayerIdentity target,
                                              CurrencyInfo currency, AuditPage result) {
-        if (messages == null) {
-            String who = target == null ? "" : ":" + target.name();
-            if (result.entries().isEmpty()) {
-                return Component.text("history.empty" + who + ":" + result.page() + ":" + result.total());
-            }
-            StringBuilder sb = new StringBuilder("history.header").append(who)
-                    .append(":").append(currency.displayName()).append(":").append(result.page())
-                    .append(":").append(result.total());
-            int index = 1;
-            for (Transaction tx : result.entries()) {
-                sb.append('\n').append(index++).append(".").append(tx.type())
-                        .append(':').append(CommandFormat.formatAmount(currency, tx.amount()))
-                        .append(':').append(CommandFormat.formatAmount(currency, tx.balanceAfter()));
-                if (tx.reason() != null && !tx.reason().isBlank()) {
-                    sb.append(":").append(tx.reason());
-                }
-            }
-            return Component.text(sb.toString());
-        }
-        if (result.entries().isEmpty()) {
-            String who = target == null ? "" : target.name();
-            if (who.isEmpty()) {
-                return messages.renderMessage("history.empty", Map.of());
-            }
-            return messages.renderMessage("history.empty", Map.of("player", who));
-        }
-        // Header
-        String who = target == null ? "" : target.name();
-        Component header = who.isEmpty()
-                ? messages.renderMessage("history.header", Map.of("player", "Server", "page", String.valueOf(result.page())))
-                : messages.renderMessage("history.header", Map.of("player", who, "page", String.valueOf(result.page())));
-        Component body = header;
-        int index = 1;
-        for (Transaction tx : result.entries()) {
-            String amountStr = CommandFormat.formatAmount(messages, currency, tx.amount());
-            String balanceStr = CommandFormat.formatAmount(messages, currency, tx.balanceAfter());
-            Map<String, Object> vars = Map.of(
-                    "time", tx.timestamp() == null ? "" : tx.timestamp().toString(),
-                    "type", tx.type().toString(),
-                    "amount", amountStr,
-                    "currency", currency.displayName(),
-                    "partner", tx.counterparty() == null ? "" : tx.counterparty().toString(),
-                    "old_balance", balanceStr,
-                    "new_balance", balanceStr);
-            Component line = messages.renderMessage("history.entry-normal", vars);
-            body = body.append(Component.text("\n")).append(Component.text(index++ + ". ")).append(line);
-            if (tx.reason() != null && !tx.reason().isBlank()) {
-                body = body.append(Component.text(" | ")).append(Component.text(tx.reason()));
-            }
-        }
-        return body;
+        return HistoryReply.format(messages, target, currency, result);
     }
 
-    private static List<String> completeHistory(CommandServices services, List<String> args) {
-        int position = args.size() - 1;
-        if (position == 2) {
-            return CommandCompletion.byPrefix(
-                    services.economy().knownCurrencyIds(), CommandCompletion.last(args));
-        }
-        if (position <= 1) {
-            return CommandCompletion.byPrefix(
-                    services.players().onlinePlayerNames(), CommandCompletion.last(args));
-        }
-        return List.of();
-    }
-
-    private static void executeMutation(CommandServices services, CommandContext context, String operation) {
+    private static void executeMutation(CommandServices services, TypedContext context, String operation,
+                                        CommandArgument<String> playerArg,
+                                        CommandArgument<String> amountArg,
+                                        CommandArgument<CurrencyInfo> currencyArg) {
         var messages = services.messages();
-        String name = V2CommandSupport.arg(messages, context, 0);
-        String rawCurrency = context.commandArgs().size() == 3 ? V2CommandSupport.arg(messages, context, 2) : null;
-        CurrencyInfo currency = V2CommandSupport.currency(services, rawCurrency);
-        var amount = V2CommandSupport.amount(messages, context, currency, 1);
+        String name = context.get(playerArg);
+        CurrencyInfo currency = context.get(currencyArg);
+        var amount = V2CommandSupport.amount(messages, context.get(amountArg), currency);
         services.players().resolve(name).whenComplete((target, failure) -> {
             if (failure != null) {
                 V2CommandSupport.replyFailure(context, failure);
@@ -671,12 +556,5 @@ public final class AceEcoCommandSpec {
                 });
             }
         });
-    }
-
-    private static List<String> complete(CommandServices services, List<String> args) {
-        if (args.size() >= 3) {
-            return CommandCompletion.byPrefix(services.economy().knownCurrencyIds(), CommandCompletion.last(args));
-        }
-        return CommandCompletion.byPrefix(services.players().onlinePlayerNames(), CommandCompletion.last(args));
     }
 }

@@ -82,6 +82,8 @@ economy:
 
 重新加载会在同一个配置转接器的锁内再次读取配置与语言快照。有效修改会在下一条用到该键的消息中以新语言显示。当前语言由 `config.yml` 经 `ConfigLangAdapter` 与 `LangManager` 解析；构造时的默认值（`zh_TW`）仅在首次加载前 `settings.locale` 缺失时作为回退——若值无效（非 `en_US`/`zh_TW`/`zh_CN`），首次 `load()` 会直接失败，不会退回默认语言；`reload()` 则保留上一份有效快照。
 
+所有渲染都使用这个全局语系。配置转接器经由单个插件作用域的消息范围渲染，其解析器固定为当前语系——即使玩家的客户端语系不同，看到的仍是同一种语言；刻意不跟随个别玩家的语系。若渲染时指定了明确语系，`message.prefix` 取自该语系（该语系没有前缀时退回默认语系）；缺键仍返回 `Missing translation: <key>` 并记录 `WARNING`。
+
 ## 安全地修改翻译
 
 请从要编辑的语言所对应的 v2 文件开始，只修改 YAML 的值：
@@ -103,13 +105,26 @@ general:
 
 ## 重新加载与恢复
 
-从服务器控制台执行 `/aceeco reload`，会通过候选管理器原子地重新加载 v2 配置与选中的语言资源。配置转接器会先用 `new ConfigManager(...).load()` 验证 `config.yml`，对每个已声明的 v2 字段采用严格类型规则并在交换前完成：整数类型（`storage.mysql.port` 1–65535、`storage.mysql.pool-size` 1–1000、`leaderboard.cache-time-seconds` 1–86400、`leaderboard.page-size` 1–100、`storage.mysql.max-lifetime` ≥1）必须为有限整数——小数如 `3306.5`、非有限 `NaN`/`Infinity` 与数字字符串如 `"3306"` 会被拒绝且不截断；布尔类型（`economy.allow-negative-balance`、`discord.enabled`、`leaderboard.enabled`）必须为 YAML Boolean（字符串 `"true"`/`"false"` 会被拒绝）；字符串类型（`settings.locale` 仅 `en_US`/`zh_TW`/`zh_CN`、`settings.main-command-alias`、`storage.sqlite.path`、`storage.mysql.host`/`database`/`username`/`password`、`discord.webhook-url`）必须为 String 类型（空 `password`/`webhook-url` 仍合法，`storage.sqlite.path` 指向插件数据目录之外会被拒绝，并检查 storage/MySQL 跨字段规则）。诊断永远不回显原始配置、用户或异常消息——校验失败仅用固定 `invalid <path>: must be …` 或 `must be one of …`，加载/IO 失败仅用异常类别；不支持的 `settings.locale` 会发出固定 `WARNING`，不回显原始 code。接着对选中的 `lang/<locale>.yml` 先做预检（必须存在、是常规文件、而且不是空的；缺失、空文件、非常规文件、是目录、或无法读取，都视为失败，不会静默回退到默认语言），再用 `new LangManager(...).load(locale)` 验证内容；仅当两个候选都成功时，才在同一把锁内一次性交换 `ConfigManager`/`LangManager`/`MessageService`。任何失败（YAML 损坏、类型/范围违规如 `storage.mysql.port: not-a-number` 或 `3306.5`、不支持的 `settings.locale` 如 `ja_JP`、或选中的 `lang/<locale>.yml` 缺失/空文件/非 regular/损坏）都会保留上一份完整快照，`getConfig("settings.locale")`、当前语言与所有渲染输出均不变——不会出现半套用状态，且文件保留/还原失败会并入诊断。
+在控制台执行 `/aceeco reload` 时，插件会原子化加载配置与语言资源。整个过程分为三个验证阶段，任一阶段失败均保留原快照，绝不应用残缺配置：
 
-失败会返回 `ReloadResult{config=failed/lang=failed, configError/langError}`，携带非敏感诊断（固定 `invalid <path>: …` 或异常类别；密码、webhook 网址与任意用户值永不回显）并通过插件 logger 发出 `WARNING`；`diagnostics()` 始终包含失败侧的原因。成功则返回 `config=ok, lang=ok`。错误的修改永远不会覆盖当前内存中的语言。
+### 1. 配置文件验证（`config.yml`）
+适配器通过 `ConfigManager.load()` 执行严格类型检查：
+- **整数字段：** 必须为有限整数。包括 `storage.mysql.port`（1–65535）、`storage.mysql.pool-size`（1–1000）、`leaderboard.cache-time-seconds`（1–86400）、`leaderboard.page-size`（1–100）及 `storage.mysql.max-lifetime`（≥1）。浮点数（如 `3306.5`）、`NaN`/`Infinity` 或数字字符串（`"3306"`）均直接拒绝。
+- **布尔字段：** 必须为原生 YAML Boolean（`economy.allow-negative-balance`、`discord.enabled`、`leaderboard.enabled`），字符串 `"true"`/`"false"` 会被拒绝。
+- **字符串字段：** 包括 `settings.locale`（仅限 `en_US`、`zh_TW`、`zh_CN`）、路径与凭据。`storage.sqlite.path` 若超出插件数据目录会被阻止。
+- **脱敏防护：** 诊断日志绝不回显密码、Webhook 或用户原始输入，仅输出固定格式消息（如 `invalid <path>: must be …`）或异常类别。
 
-缺键会产生非空回退 `Missing translation: <key>`（不泄露用户提供的值）并记录诊断 `WARNING`。用户提供的值中若包含 MiniMessage 标签（如 `<red>`、`<bold>`、`<click:...>`、`<hover:...>`、`<insertion>`、`<font>`），会在解析前被转义，因此在组件与纯文本投影中均以字面文本出现，不会产生颜色、装饰、点击/悬停、insertion 或 font 注入。
+### 2. 语言文件预检与加载
+适配器会检查选定的 `lang/<locale>.yml`：
+- 目标文件必须存在、为普通文件且非空文件。若缺失、为目录或不可读取，立即视为失败，绝不静默回退。
+- 通过文件预检后，由 `LangManager.load(locale)` 解析内容与 MiniMessage 标签。
 
-请修正报告里指出的 YAML 问题（检查有效的 `{placeholder}` 名称、成对的 MiniMessage 标签、命令示例的转义 `\<literal>` 以及正确的 `settings.locale`）、保存文件，再执行一次 `/aceeco reload`。如果还是失败，就还原到最后一份有效的副本，并检查键的缩进、引号和 MiniMessage 标签。
+### 3. 原子交换与失败防护
+仅当配置与语言两者均通过验证，才会在单把锁保护下原子交换 `ConfigManager`、`LangManager`、`MessageService` 与渲染范围。退役的旧范围随即关闭，避免出现半应用或撕裂状态。
+
+若加载失败，系统返回包含非敏感原因的 `ReloadResult` 并输出 `WARNING`。内存中维持原配置与语言输出不变。修正文件问题后重新执行 `/aceeco reload` 即可。
+
+缺键时回退显示 `Missing translation: <key>`，并记录 `WARNING` 日志。所有传入变量中的 MiniMessage 标签（如 `<red>`、`<click>`）均会在渲染前转义，防范颜色与点击事件注入。
 
 ## 相关指南
 

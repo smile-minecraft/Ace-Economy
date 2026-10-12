@@ -39,7 +39,7 @@ class BanknoteMessageWordingTest {
 
     @Test
     void mismatchMapsToMismatchKey() {
-        BankGuiClickListener.Reply reply = BankGuiClickListener.replyFor(
+        V2BankGuiSession.Reply reply = V2BankGuiSession.replyFor(
                 V2BankGuiSession.ClickOutcome.itemMismatch(), null);
         assertNotNull(reply, "a swapped hand must reply, never stay silent");
         assertTrue(reply.key().equals("banknote.redeem-mismatch"),
@@ -71,7 +71,7 @@ class BanknoteMessageWordingTest {
         for (String reason : new String[]{
                 com.smile.aceeconomy.infrastructure.banknote.BanknoteFlow.PENDING_WITHDRAW_INDETERMINATE,
                 com.smile.aceeconomy.infrastructure.banknote.BanknoteFlow.PENDING_DELIVERY_UNCERTAIN}) {
-            BankGuiClickListener.Reply reply = BankGuiClickListener.replyFor(
+            V2BankGuiSession.Reply reply = V2BankGuiSession.replyFor(
                     V2BankGuiSession.ClickOutcome.pending(reason), null);
             assertNotNull(reply, "pending " + reason + " must reply");
             assertTrue(reply.key().equals("banknote.withdraw-pending"),

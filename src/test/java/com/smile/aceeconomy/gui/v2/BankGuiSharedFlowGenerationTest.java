@@ -1,5 +1,10 @@
 package com.smile.aceeconomy.gui.v2;
 
+import com.smile.acelib.gui.GuiButtonClick;
+import com.smile.acelib.gui.GuiResult;
+import com.smile.acelib.gui.GuiScope;
+import com.smile.acelib.gui.GuiSession;
+import com.smile.acelib.gui.GuiView;
 import com.smile.aceeconomy.api.v2.EconomyApi;
 import com.smile.aceeconomy.api.v2.InMemoryTransactionEventPublisher;
 import com.smile.aceeconomy.application.EconomyService;
@@ -9,7 +14,8 @@ import com.smile.aceeconomy.domain.CurrencyDisplayHolder;
 import com.smile.aceeconomy.domain.CurrencyRegistry;
 import com.smile.aceeconomy.domain.DebtPolicy;
 import com.smile.aceeconomy.domain.EconomyResult;
-import com.smile.aceeconomy.infrastructure.acelib.FakeGuiService;
+import com.smile.aceeconomy.infrastructure.acelib.BankGuiLayout;
+import com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter;
 import com.smile.aceeconomy.infrastructure.banknote.BanknoteFlow;
 import com.smile.aceeconomy.infrastructure.item.FakeBanknoteFactory;
 import com.smile.aceeconomy.ports.FoliaContextExecutor;
@@ -31,10 +37,13 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledFuture;
@@ -45,16 +54,18 @@ import java.util.function.Consumer;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * The shared-flow click path must carry the session generation into the
- * flow: a reload that drops the backend session while the handover is still
- * queued refunds instead of delivering, and a click that arrives already
- * stale never reaches the ledger.
+ * The shared-flow click path must carry the click liveness into the flow:
+ * a reload that reopens the view while the handover is still queued refunds
+ * instead of delivering, and a click that arrives already stale never
+ * reaches the ledger.
  */
 class BankGuiSharedFlowGenerationTest {
 
@@ -62,6 +73,7 @@ class BankGuiSharedFlowGenerationTest {
         Player player;
         Integer captureDispatchAt;
         final List<Consumer<Player>> captured = new ArrayList<>();
+        final CountDownLatch captureLatch = new CountDownLatch(1);
         int dispatches;
 
         @Override
@@ -93,6 +105,7 @@ class BankGuiSharedFlowGenerationTest {
             dispatches++;
             if (captureDispatchAt != null && dispatches == captureDispatchAt) {
                 captured.add(action);
+                captureLatch.countDown();
                 return true;
             }
             action.accept(player);
@@ -155,37 +168,69 @@ class BankGuiSharedFlowGenerationTest {
         io.shutdownNow();
     }
 
-    private V2BankGuiSession sessionWithFlow(FakeGuiService gui) {
-        BanknoteFlow flow = new BanknoteFlow(api, economy, mock(AtomicRedemptionStore.class),
-                banknotes, display, folia, io, watchdogs, Duration.ofMillis(200));
-        return new V2BankGuiSession(gui, folia, new StubBankGuiUseCase(),
-                slot -> BankGuiAction.withdraw(100L), flow);
+    private static BankGuiLayout size36Layout() {
+        Map<String, BankGuiLayout.SlotConfig> actions = new LinkedHashMap<>();
+        actions.put("deposit", new BankGuiLayout.SlotConfig(
+                "deposit", 4, BankGuiLayout.ActionType.DEPOSIT, 0L, null,
+                "CHEST", "gui.bank-deposit-name", List.of("gui.bank-deposit-lore")));
+        actions.put("withdraw100", new BankGuiLayout.SlotConfig(
+                "withdraw100", 11, BankGuiLayout.ActionType.WITHDRAW, 100L, null,
+                "PAPER", "gui.bank-withdraw-name", List.of("gui.bank-withdraw-lore")));
+        actions.put("close", new BankGuiLayout.SlotConfig(
+                "close", 13, BankGuiLayout.ActionType.CLOSE, 0L, null,
+                "BARRIER", "gui.bank-close-name", List.of()));
+        return BankGuiLayout.of(true, "gui.bank-title", 36, actions);
     }
 
-    private static V2BankGuiSession.ClickOutcome join(
-            CompletableFuture<V2BankGuiSession.ClickOutcome> future) {
-        try {
-            return future.get(10, TimeUnit.SECONDS);
-        } catch (Exception e) {
-            throw new AssertionError("shared-flow click must complete bounded", e);
+    private V2BankGuiSession sessionWithFlow(GuiScope scope, ConfigLangAdapter messages,
+                                             BankGuiLayout layout) {
+        BanknoteFlow flow = new BanknoteFlow(api, economy, mock(AtomicRedemptionStore.class),
+                banknotes, display, folia, io, watchdogs, Duration.ofMillis(200));
+        return new V2BankGuiSession(scope, folia, new StubBankGuiUseCase(), layout, messages,
+                flow, BankGuiTestFixtures.renderer());
+    }
+
+    private static void clickButton(GuiView view, UUID uuid, long generation, int slot) {
+        String buttonId = view.buttons().get(slot).id();
+        view.handlers().get(buttonId).accept(
+                new GuiButtonClick(uuid, generation, slot, buttonId, Optional.empty()));
+    }
+
+    private static void awaitKey(ConfigLangAdapter messages, String key) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (System.nanoTime() < deadline) {
+            try {
+                verify(messages, Mockito.timeout(50).times(1)).renderMessage(eq(key), anyMap());
+                return;
+            } catch (Throwable ignored) {
+                // Retry until the async reply arrives.
+            }
         }
+        verify(messages).renderMessage(eq(key), anyMap());
     }
 
     @Test
     void reloadBeforeLateDeliveryRefundsInsteadOfDelivering() {
-        FakeGuiService gui = FakeGuiService.available();
+        GuiScope scope = BankGuiTestFixtures.scope();
+        ConfigLangAdapter messages = BankGuiTestFixtures.messages();
+        BankGuiLayout layout = BankGuiTestFixtures.defaultLayout();
         folia.captureDispatchAt = 2; // probe runs; the delivery dispatch is retired
-        V2BankGuiSession session = sessionWithFlow(gui);
-        V2BankGuiSession.OpenOutcome open = session.open(player, "Bank", 27, Set.of());
-        assertTrue(open.success());
+        V2BankGuiSession session = sessionWithFlow(scope, messages, layout);
+        // The tracked player is the click-time reader; the scope fixture and
+        // the flow share the same player id.
+        Player opener = Mockito.mock(Player.class);
+        Mockito.when(opener.getUniqueId()).thenReturn(playerId);
+        Mockito.when(opener.getInventory()).thenReturn(inventory);
+        V2BankGuiSession.OpenOutcome open = session.open(opener);
+        assertTrue(open.success(), "setup open must succeed: " + open.errorCode());
         long generation = open.session().generation();
+        GuiView view = scope.viewOf(playerId).orElseThrow();
 
         Amount amount = Amount.of(100L, 2);
         when(api.withdraw(playerId, "dollar", amount)).thenReturn(EconomyResult.success(amount));
         when(api.deposit(playerId, "dollar", amount)).thenReturn(EconomyResult.success(amount));
 
-        CompletableFuture<V2BankGuiSession.ClickOutcome> future =
-                session.handleClickAsync(playerId, generation, 0);
+        clickButton(view, playerId, generation, 11);
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
         while (folia.captured.isEmpty() && System.nanoTime() < deadline) {
             try {
@@ -196,29 +241,87 @@ class BankGuiSharedFlowGenerationTest {
             }
         }
         assertEquals(1, folia.captured.size(), "the delivery dispatch must be captured");
-        // A reload drops the backend session while the handover is queued.
-        gui.closeInventory(playerId, generation);
+        // A reload reopens the view with a fresh generation while the
+        // handover is still queued.
+        assertEquals(1, session.applyLayout(size36Layout()));
         folia.captured.get(0).accept(player);
 
-        V2BankGuiSession.ClickOutcome outcome = join(future);
-        assertTrue(outcome.isRejected(), "a stale delivery must not succeed: " + outcome);
-        assertEquals("stale.generation", outcome.reason());
+        awaitKey(messages, "general.transaction-cancelled");
         verify(inventory, never()).addItem(any());
         verify(api).deposit(playerId, "dollar", amount);
     }
 
     @Test
     void alreadyStaleClickNeverReachesTheLedger() {
-        FakeGuiService gui = FakeGuiService.available();
-        V2BankGuiSession session = sessionWithFlow(gui);
-        V2BankGuiSession.OpenOutcome open = session.open(player, "Bank", 27, Set.of());
+        GuiScope scope = BankGuiTestFixtures.scope();
+        ConfigLangAdapter messages = BankGuiTestFixtures.messages();
+        V2BankGuiSession session = sessionWithFlow(scope, messages,
+                BankGuiTestFixtures.defaultLayout());
+        Player opener = Mockito.mock(Player.class);
+        Mockito.when(opener.getUniqueId()).thenReturn(playerId);
+        Mockito.when(opener.getInventory()).thenReturn(inventory);
+        V2BankGuiSession.OpenOutcome open = session.open(opener);
         assertTrue(open.success());
+        GuiView view = scope.viewOf(playerId).orElseThrow();
 
-        V2BankGuiSession.ClickOutcome outcome =
-                join(session.handleClickAsync(playerId, open.session().generation() + 1, 0));
+        clickButton(view, playerId, open.session().generation() + 1, 11);
 
-        assertTrue(outcome.isRejected());
+        awaitKey(messages, "general.transaction-cancelled");
         verify(api, never()).withdraw(any(), any(), any());
         assertTrue(banknotes.minted().isEmpty());
+    }
+
+    @Test
+    void deliveryDuringReplaceViewWindowRefundsInsteadOfDelivering() throws Exception {
+        GuiScope scope = BankGuiTestFixtures.scope();
+        ConfigLangAdapter messages = BankGuiTestFixtures.messages();
+        BankGuiLayout layout = BankGuiTestFixtures.defaultLayout();
+        folia.captureDispatchAt = 2; // probe runs; the delivery dispatch is captured
+        V2BankGuiSession session = sessionWithFlow(scope, messages, layout);
+
+        Player opener = Mockito.mock(Player.class);
+        Mockito.when(opener.getUniqueId()).thenReturn(playerId);
+        Mockito.when(opener.getInventory()).thenReturn(inventory);
+        V2BankGuiSession.OpenOutcome open = session.open(opener);
+        assertTrue(open.success(), "setup open must succeed: " + open.errorCode());
+        long generation = open.session().generation();
+        GuiView view = scope.viewOf(playerId).orElseThrow();
+
+        Amount amount = Amount.of(100L, 2);
+        when(api.withdraw(playerId, "dollar", amount)).thenReturn(EconomyResult.success(amount));
+        when(api.deposit(playerId, "dollar", amount)).thenReturn(EconomyResult.success(amount));
+
+        clickButton(view, playerId, generation, 11);
+        assertTrue(folia.captureLatch.await(10, TimeUnit.SECONDS), "delivery dispatch must be captured");
+        assertEquals(1, folia.captured.size(), "the delivery dispatch must be captured");
+
+        // When replaceView is called, simulate upstream scope having replaced the view,
+        // and trigger the delivery dispatch before V2BankGuiSession receives the result.
+        Mockito.when(scope.replaceView(Mockito.eq(playerId), Mockito.any(GuiView.class)))
+                .thenAnswer(invocation -> {
+                    UUID uuid = invocation.getArgument(0);
+                    GuiView newView = invocation.getArgument(1);
+                    GuiSession newSession = new GuiSession(uuid, generation + 1,
+                            "bank-test", newView.title(), newView.size(), Set.of());
+                    Mockito.when(scope.viewOf(uuid)).thenReturn(Optional.of(newView));
+                    folia.captured.get(0).accept(player);
+                    return GuiResult.success(newSession);
+                });
+
+        assertEquals(1, session.applyLayout(size36Layout()));
+
+        awaitKey(messages, "general.transaction-cancelled");
+        verify(inventory, never()).addItem(any());
+        verify(api).deposit(playerId, "dollar", amount);
+
+        // Subsequent click with the newly published generation delivers normally:
+        GuiSession newSession = session.activeSession(playerId).orElseThrow();
+        assertEquals(generation + 1, newSession.generation());
+        GuiView newView = scope.viewOf(playerId).orElseThrow();
+        folia.captured.clear();
+        folia.captureDispatchAt = null;
+
+        clickButton(newView, playerId, newSession.generation(), 11);
+        verify(inventory, Mockito.timeout(10_000).times(1)).addItem(any());
     }
 }

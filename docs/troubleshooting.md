@@ -136,7 +136,7 @@ Distinguish the three operations:
 - A full server restart reopens the storage backend and reloads plugin dependencies.
 - `stop` performs a normal server shutdown; allow saving to finish.
 
-**Fix:** use a full restart after changing JARs, AceLib, `storage.type`, database connection values, or optional plugin availability. The same applies to `settings.main-command-alias`, `storage.type`, `leaderboard.enabled`, and structural currency changes flagged in the reload reply: they only take effect after a full restart. Expect open bank sessions to be closed by a successful reload; players reopen `/bank` to continue. Do not use Bukkit `/reload` for a production upgrade or recovery.
+**Fix:** use a full restart after changing JARs, AceLib, `storage.type`, database connection values, or optional plugin availability. The same applies to `settings.main-command-alias`, `storage.type`, `leaderboard.enabled`, and structural currency changes flagged in the reload reply: they only take effect after a full restart. A successful reload reopens open bank views with the new layout in place; players do not need to run `/bank` again. A view whose rebuild or reopen fails is closed and its player is told, both on a best-effort basis, and only then does the player need to open `/bank` again. Do not use Bukkit `/reload` for a production upgrade or recovery.
 
 ## A balance or transaction looks wrong
 

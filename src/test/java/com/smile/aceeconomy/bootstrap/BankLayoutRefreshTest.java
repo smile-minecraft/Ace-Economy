@@ -1,13 +1,18 @@
 package com.smile.aceeconomy.bootstrap;
 
+import com.smile.acelib.gui.GuiScope;
+import com.smile.acelib.gui.GuiView;
+import com.smile.aceeconomy.gui.v2.BankGuiTestFixtures;
+import com.smile.aceeconomy.gui.v2.StubBankGuiUseCase;
 import com.smile.aceeconomy.gui.v2.V2BankGuiSession;
 import com.smile.aceeconomy.infrastructure.acelib.BankGuiConfigParser;
 import com.smile.aceeconomy.infrastructure.acelib.BankGuiLayout;
-import com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter;
+import com.smile.aceeconomy.infrastructure.acelib.RecordingFoliaContext;
 
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 
@@ -18,19 +23,17 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.Mockito.mockStatic;
 
 /**
  * Command-surface / GUI-surface consistency: {@code /bank open} must resolve
  * the currently active layout on every open, so a successful reload that swaps
- * the layout changes what newly opened interfaces show. Already-open sessions
- * were dropped by {@code invalidateAll}, so only new opens matter here.
+ * the layout changes what newly opened interfaces show. Already-open views
+ * were rebuilt in place by the reload itself, so only new opens matter here.
  *
- * <p>Wiring contract: consumer action slots are guarded by the consumer click
- * listener, never by AceLib. The production open therefore passes an empty
- * AceLib protected set (an action slot registered as AceLib-protected would be
- * rejected by {@code validateClick}), then renders the configured buttons
- * through the generation-bound async-update path.
+ * <p>Opens serialize against the reload swap inside the session, so no open
+ * can leak a stale view past a reload and no retry exists.
  */
 class BankLayoutRefreshTest {
 
@@ -60,12 +63,12 @@ class BankLayoutRefreshTest {
         BankGuiLayout oldLayout = oldLayout();
         BankGuiLayout newLayout = newLayout();
         AtomicReference<BankGuiLayout> current = new AtomicReference<>(oldLayout);
-        V2BankGuiSession gui = Mockito.mock(V2BankGuiSession.class);
-        ConfigLangAdapter messages = Mockito.mock(ConfigLangAdapter.class);
-        Mockito.when(messages.plainMessage(Mockito.anyString(), Mockito.anyMap()))
-                .thenReturn("Bank");
+        GuiScope scope = BankGuiTestFixtures.scope();
+        V2BankGuiSession session = new V2BankGuiSession(scope, new RecordingFoliaContext(),
+                new StubBankGuiUseCase(), oldLayout, BankGuiTestFixtures.messages(),
+                null, BankGuiTestFixtures.renderer());
         ProductionAdapters.Bank bank =
-                new ProductionAdapters.Bank(gui, current::get, messages, Runnable::run);
+                new ProductionAdapters.Bank(session, current::get, Runnable::run);
 
         UUID id = UUID.randomUUID();
         Player player = Mockito.mock(Player.class);
@@ -74,35 +77,31 @@ class BankLayoutRefreshTest {
             bukkit.when(() -> Bukkit.getPlayer(id)).thenReturn(player);
 
             bank.open(id, "someone");
-            // Action slots stay out of the AceLib protected set; the consumer
-            // listener owns click protection for them.
-            Mockito.verify(gui).open(player, "Bank", 27, Set.of(), 0L);
+            ArgumentCaptor<GuiView> views = ArgumentCaptor.forClass(GuiView.class);
+            Mockito.verify(scope).openView(Mockito.eq(id), views.capture());
+            assertEquals(27, views.getValue().size(),
+                    "the first open must build from the old layout");
 
-            // A successful reload swaps the reference the supplier reads.
+            // A successful reload swaps the reference the supplier reads and
+            // reopens tracked views; the session below follows the swap for
+            // the already-open view.
             current.set(newLayout);
+            assertEquals(1, session.applyLayout(newLayout));
+
             bank.open(id, "someone");
-            Mockito.verify(gui).open(player, "Bank", 36, Set.of(), 0L);
+            Mockito.verify(scope, Mockito.times(2)).openView(Mockito.eq(id), views.capture());
+            assertEquals(36, views.getValue().size(),
+                    "opens after the swap must build from the new layout");
         }
     }
 
     @Test
-    void openRendersConfiguredButtonsAfterOpen() {
-        BankGuiLayout layout = newLayout();
-        AtomicReference<BankGuiLayout> current = new AtomicReference<>(layout);
+    void disabledLayoutOpensNothing() {
+        AtomicReference<BankGuiLayout> current = new AtomicReference<>(BankGuiLayout.of(
+                false, oldLayout().titleKey(), oldLayout().size(), oldLayout().actions()));
         V2BankGuiSession gui = Mockito.mock(V2BankGuiSession.class);
-        ConfigLangAdapter messages = Mockito.mock(ConfigLangAdapter.class);
-        Mockito.when(messages.plainMessage(Mockito.anyString(), Mockito.anyMap()))
-                .thenReturn("Bank");
-        V2BankGuiSession.OpenOutcome opened = Mockito.mock(V2BankGuiSession.OpenOutcome.class);
-        Mockito.when(opened.success()).thenReturn(true);
-        com.smile.acelib.gui.GuiSession aceSession = new com.smile.acelib.gui.GuiSession(
-                UUID.randomUUID(), 7L, "v2-bank", "Bank", 36, Set.of());
-        Mockito.when(opened.session()).thenReturn(aceSession);
-        Mockito.when(gui.open(Mockito.any(), Mockito.anyString(), Mockito.anyInt(),
-                        Mockito.anySet(), Mockito.anyLong()))
-                .thenReturn(opened);
         ProductionAdapters.Bank bank =
-                new ProductionAdapters.Bank(gui, current::get, messages, Runnable::run);
+                new ProductionAdapters.Bank(gui, current::get, Runnable::run);
 
         UUID id = UUID.randomUUID();
         Player player = Mockito.mock(Player.class);
@@ -111,9 +110,43 @@ class BankLayoutRefreshTest {
             bukkit.when(() -> Bukkit.getPlayer(id)).thenReturn(player);
 
             bank.open(id, "someone");
-            Mockito.verify(gui).renderLayout(
-                    Mockito.eq(id), Mockito.eq(7L),
-                    Mockito.same(layout), Mockito.same(messages));
+            Mockito.verify(gui, Mockito.never()).open(Mockito.any());
+        }
+    }
+
+    @Test
+    void offlinePlayerOpensNothing() {
+        AtomicReference<BankGuiLayout> current = new AtomicReference<>(oldLayout());
+        V2BankGuiSession gui = Mockito.mock(V2BankGuiSession.class);
+        ProductionAdapters.Bank bank =
+                new ProductionAdapters.Bank(gui, current::get, Runnable::run);
+
+        UUID id = UUID.randomUUID();
+        try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+            bukkit.when(() -> Bukkit.getPlayer(id)).thenReturn(null);
+
+            bank.open(id, "someone");
+            Mockito.verify(gui, Mockito.never()).open(Mockito.any());
+        }
+    }
+
+    @Test
+    void everyOpenDispatchesExactlyOnce() {
+        AtomicReference<BankGuiLayout> current = new AtomicReference<>(oldLayout());
+        V2BankGuiSession gui = Mockito.mock(V2BankGuiSession.class);
+        ProductionAdapters.Bank bank =
+                new ProductionAdapters.Bank(gui, current::get, Runnable::run);
+
+        UUID id = UUID.randomUUID();
+        Player player = Mockito.mock(Player.class);
+        Mockito.when(player.getUniqueId()).thenReturn(id);
+        try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+            bukkit.when(() -> Bukkit.getPlayer(id)).thenReturn(player);
+
+            bank.open(id, "someone");
+            // No stale-retry exists: opens serialize against the swap inside
+            // the session, so one command is exactly one open.
+            Mockito.verify(gui, Mockito.times(1)).open(player);
         }
     }
 }

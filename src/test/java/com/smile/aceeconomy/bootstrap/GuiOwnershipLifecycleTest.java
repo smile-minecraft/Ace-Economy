@@ -247,8 +247,14 @@ class GuiOwnershipLifecycleTest {
 
     // ---- self-owned bank sessions: disable seam ----------------------------
 
-    private static Function<Integer, BankGuiAction> withdrawResolver(long amount) {
-        return slot -> BankGuiAction.withdraw(amount);
+    private static V2BankGuiSession trackedSession(
+            com.smile.acelib.gui.GuiScope scope, StubBankGuiUseCase useCase, Player player) {
+        V2BankGuiSession bankGui = new V2BankGuiSession(scope, new RecordingFoliaContext(),
+                useCase, com.smile.aceeconomy.gui.v2.BankGuiTestFixtures.defaultLayout(),
+                com.smile.aceeconomy.gui.v2.BankGuiTestFixtures.messages(),
+                null, com.smile.aceeconomy.gui.v2.BankGuiTestFixtures.renderer());
+        assertTrue(bankGui.open(player).success(), "bank must open before a disable-style test");
+        return bankGui;
     }
 
     private static Player mockPlayer() {
@@ -276,13 +282,11 @@ class GuiOwnershipLifecycleTest {
 
     @Test
     void disableCleansOwnedBankSessionsOnceAndLeavesSharedServiceUsable() {
-        FakeGuiService gui = FakeGuiService.available();
-        V2BankGuiSession bankGui = new V2BankGuiSession(
-                gui, new RecordingFoliaContext(), new StubBankGuiUseCase(), withdrawResolver(100));
+        com.smile.acelib.gui.GuiScope scope =
+                com.smile.aceeconomy.gui.v2.BankGuiTestFixtures.scope();
+        StubBankGuiUseCase useCase = new StubBankGuiUseCase();
         Player player = mockPlayer();
-
-        V2BankGuiSession.OpenOutcome open = bankGui.open(player, "Bank", 27, Set.of());
-        assertTrue(open.success(), "bank must open before a disable-style invalidation");
+        V2BankGuiSession bankGui = trackedSession(scope, useCase, player);
         assertTrue(bankGui.activeSession(player.getUniqueId()).isPresent());
 
         BankFormSession bankForms = Mockito.mock(BankFormSession.class);
@@ -291,20 +295,20 @@ class GuiOwnershipLifecycleTest {
         int dropped = runDisableSeam(bankGui, bankForms);
         assertTrue(dropped >= 1, "disable must drop the tracked bank session, got " + dropped);
         Mockito.verify(bankForms, Mockito.times(1)).invalidateAll();
-        assertEquals("READY", gui.getModuleStatus(),
-                "disable must never shut down or release the shared GuiService");
 
         int second = runDisableSeam(bankGui, bankForms);
         assertEquals(0, second, "repeated disable must be a no-op for already-dropped sessions");
         Mockito.verify(bankForms, Mockito.times(2)).invalidateAll();
-        assertEquals("READY", gui.getModuleStatus());
 
-        V2BankGuiSession.OpenOutcome reopen = bankGui.open(player, "Bank", 27, Set.of());
+        V2BankGuiSession.OpenOutcome reopen = bankGui.open(player);
         assertTrue(reopen.success(), "bank must still open after a disable-style invalidation");
-        V2BankGuiSession.ClickOutcome click = bankGui.handleClick(
-                player.getUniqueId(), reopen.session().generation(), 0);
-        assertTrue(click.isSuccess(), "bank must still operate after a disable-style invalidation");
-        assertEquals("READY", gui.getModuleStatus());
+        com.smile.acelib.gui.GuiView view = scope.viewOf(player.getUniqueId()).orElseThrow();
+        long generation = reopen.session().generation();
+        String buttonId = view.buttons().get(11).id();
+        view.handlers().get(buttonId).accept(new com.smile.acelib.gui.GuiButtonClick(
+                player.getUniqueId(), generation, 11, buttonId, java.util.Optional.empty()));
+        assertEquals(100L, useCase.lastAmount,
+                "bank must still operate after a disable-style invalidation");
     }
 
     // ---- shared service contract: no shutdown surface, never released ------
