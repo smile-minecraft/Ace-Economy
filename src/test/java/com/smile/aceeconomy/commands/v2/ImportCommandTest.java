@@ -8,6 +8,7 @@ import com.smile.acelib.command.ReplySink;
 import com.smile.acelib.command.Sender;
 import com.smile.aceeconomy.commands.v2.ports.EconomyCommandService;
 import com.smile.aceeconomy.commands.v2.ports.ImportCommandService;
+import com.smile.aceeconomy.domain.AdminAudit;
 import com.smile.aceeconomy.operations.ImportOutcome;
 import com.smile.aceeconomy.operations.ImportReport;
 import org.junit.jupiter.api.Test;
@@ -122,7 +123,7 @@ class ImportCommandTest {
         assertNotNull(importSpec, "/aceeco must expose an import subcommand");
         assertEquals("aceeconomy.admin.import", importSpec.permission());
         assertEquals(2, importSpec.minArgs(), "import requires <source> <path>");
-        assertEquals(5, importSpec.maxArgs(), "import accepts <source> <path> [currency] [apply confirm]");
+        assertEquals(6, importSpec.maxArgs(), "import accepts <source> <path> [currency] [apply confirm] [reason]");
         assertTrue(importSpec.consoleOnly(), "import writes balances and must be console-only");
 
         CommandSpec registered = V2CommandRegistry.create(services).specs().stream()
@@ -145,6 +146,7 @@ class ImportCommandTest {
         assertEquals("ACELIB-CMD-005", ((CommandException) capturedError(sink)).getCode());
         verify(importFacade, never()).preview(any(), anyString(), anyString());
         verify(importFacade, never()).apply(any(), anyString(), anyString());
+        verify(importFacade, never()).apply(any(), anyString(), anyString(), any(AdminAudit.class));
     }
 
     @Test
@@ -159,6 +161,7 @@ class ImportCommandTest {
         assertEquals("ACELIB-CMD-003", ((CommandException) capturedError(sink)).getCode());
         verify(importFacade, never()).preview(any(), anyString(), anyString());
         verify(importFacade, never()).apply(any(), anyString(), anyString());
+        verify(importFacade, never()).apply(any(), anyString(), anyString(), any(AdminAudit.class));
     }
 
     // ---------------- source / confirmation gates ----------------
@@ -176,6 +179,7 @@ class ImportCommandTest {
                 ((CommandException) capturedError(sink)).getCode());
         verify(importFacade, never()).preview(any(), anyString(), anyString());
         verify(importFacade, never()).apply(any(), anyString(), anyString());
+        verify(importFacade, never()).apply(any(), anyString(), anyString(), any(AdminAudit.class));
     }
 
     @Test
@@ -191,6 +195,7 @@ class ImportCommandTest {
                 ((CommandException) capturedError(sink)).getCode());
         verify(importFacade, never()).preview(any(), anyString(), anyString());
         verify(importFacade, never()).apply(any(), anyString(), anyString());
+        verify(importFacade, never()).apply(any(), anyString(), anyString(), any(AdminAudit.class));
     }
 
     @Test
@@ -205,6 +210,7 @@ class ImportCommandTest {
         assertEquals("ACELIB-CMD-IMPORT-CONFIRM-REQUIRED",
                 ((CommandException) capturedError(sink)).getCode());
         verify(importFacade, never()).apply(any(), anyString(), anyString());
+        verify(importFacade, never()).apply(any(), anyString(), anyString(), any(AdminAudit.class));
     }
 
     // ---------------- dry-run by default ----------------
@@ -225,6 +231,7 @@ class ImportCommandTest {
         verify(importFacade).preview(
                 com.smile.aceeconomy.ports.operations.ImportSource.ESSENTIALS, "userdata", "coin");
         verify(importFacade, never()).apply(any(), anyString(), anyString());
+        verify(importFacade, never()).apply(any(), anyString(), anyString(), any(AdminAudit.class));
         assertTrue(capturedReply(sink).contains("2"), "preview reply must carry counts");
         verify(sink, never()).sendError(any(Sender.class), any(Throwable.class));
     }
@@ -244,6 +251,7 @@ class ImportCommandTest {
         verify(importFacade).preview(
                 com.smile.aceeconomy.ports.operations.ImportSource.CMI, "balances.csv", "coin");
         verify(importFacade, never()).apply(any(), anyString(), anyString());
+        verify(importFacade, never()).apply(any(), anyString(), anyString(), any(AdminAudit.class));
     }
 
     @Test
@@ -253,14 +261,20 @@ class ImportCommandTest {
         CommandRegistryImpl registry = registryFor(services, sink);
         when(importFacade.apply(
                 eq(com.smile.aceeconomy.ports.operations.ImportSource.ESSENTIALS),
-                eq("userdata"), eq("coin")))
+                eq("userdata"), eq("coin"), any(AdminAudit.class)))
                 .thenReturn(CompletableFuture.completedFuture(appliedOutcome()));
 
         registry.dispatch(consoleSender(true, true), "aceeco",
                 List.of("import", "essentials", "userdata", "apply", "confirm"));
 
+        ArgumentCaptor<AdminAudit> audit = ArgumentCaptor.forClass(AdminAudit.class);
         verify(importFacade).apply(
-                com.smile.aceeconomy.ports.operations.ImportSource.ESSENTIALS, "userdata", "coin");
+                eq(com.smile.aceeconomy.ports.operations.ImportSource.ESSENTIALS), eq("userdata"),
+                eq("coin"), audit.capture());
+        assertEquals(AdminAudit.CONSOLE_OPERATOR_NAME, audit.getValue().operatorName(),
+                "a console dispatch without a reason still files a console audit");
+        assertEquals(AdminAudit.DEFAULT_REASON, audit.getValue().reason(),
+                "an omitted import reason falls back to the default");
         verify(importFacade, never()).preview(any(), anyString(), anyString());
         String reply = capturedReply(sink);
         assertTrue(reply.contains("pre-import-id"), "apply reply must name the safety backup: " + reply);
@@ -272,14 +286,15 @@ class ImportCommandTest {
         CommandServices services = services(economy());
         ReplySink sink = mock(ReplySink.class);
         CommandRegistryImpl registry = registryFor(services, sink);
-        when(importFacade.apply(any(), anyString(), eq("coin")))
+        when(importFacade.apply(any(), anyString(), eq("coin"), any(AdminAudit.class)))
                 .thenReturn(CompletableFuture.completedFuture(appliedOutcome()));
 
         registry.dispatch(consoleSender(true, true), "aceeco",
                 List.of("import", "cmi", "balances.csv", "coin", "apply", "confirm"));
 
         verify(importFacade).apply(
-                com.smile.aceeconomy.ports.operations.ImportSource.CMI, "balances.csv", "coin");
+                eq(com.smile.aceeconomy.ports.operations.ImportSource.CMI), eq("balances.csv"),
+                eq("coin"), any(AdminAudit.class));
     }
 
     // ---------------- typed failures ----------------
@@ -300,5 +315,23 @@ class ImportCommandTest {
         assertEquals("ACELIB-CMD-IMPORT-PATH-REJECTED",
                 ((CommandException) capturedError(sink)).getCode());
         verify(sink, never()).send(any(Sender.class), anyString());
+    }
+
+    @Test
+    void importWithExtraArgumentsNeverReachesTheFacade() {
+        CommandServices services = services(economy());
+        ReplySink sink = mock(ReplySink.class);
+        CommandRegistryImpl registry = registryFor(services, sink);
+
+        registry.dispatch(consoleSender(true, true), "aceeco",
+                List.of("import", "cmi", "balances.csv", "coin",
+                        "apply", "confirm", "harbor-import", "extra"));
+
+        Throwable error = capturedError(sink);
+        assertTrue(error instanceof CommandException,
+                "the dispatcher must reject extra arguments as a typed error");
+        verify(importFacade, never()).preview(any(), anyString(), anyString());
+        verify(importFacade, never()).apply(any(), anyString(), anyString());
+        verify(importFacade, never()).apply(any(), anyString(), anyString(), any(AdminAudit.class));
     }
 }

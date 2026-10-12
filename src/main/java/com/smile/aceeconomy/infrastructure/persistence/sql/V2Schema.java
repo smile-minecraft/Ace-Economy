@@ -38,6 +38,16 @@ public final class V2Schema {
     public static final String BALANCES_TABLE = "ace_v2_balances";
     public static final String TRANSACTIONS_TABLE = "ace_v2_transactions";
     public static final String NONCES_TABLE = "ace_v2_nonces";
+    /**
+     * Independent restore-audit table. Additive: databases initialized by older
+     * builds gain it on the next start without a version bump, initialization
+     * stays repeatable, and old builds never query this table so they ignore
+     * it harmlessly.
+     */
+    public static final String OPERATION_AUDITS_TABLE = "ace_v2_operation_audits";
+
+    /** Reason width for the MySQL transactions table: policy max plus machine prefix. */
+    public static final int MYSQL_REASON_WIDTH = 512;
 
     private V2Schema() {
     }
@@ -76,7 +86,9 @@ public final class V2Schema {
                         balance_before VARCHAR(64),
                         balance_after VARCHAR(64),
                         timestamp VARCHAR(64) NOT NULL,
-                        reason VARCHAR(255),
+                        reason VARCHAR(512),
+                        operator_id VARCHAR(36),
+                        operator_name VARCHAR(255),
                         reverted BOOLEAN NOT NULL DEFAULT FALSE,
                         INDEX idx_tx_account (account_id),
                         INDEX idx_tx_reverted (reverted)
@@ -88,6 +100,18 @@ public final class V2Schema {
                         consumed_at VARCHAR(64) NOT NULL
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                     """.formatted(NONCES_TABLE));
+            stmts.add("""
+                    CREATE TABLE IF NOT EXISTS %s (
+                        id VARCHAR(36) PRIMARY KEY,
+                        operation VARCHAR(32) NOT NULL,
+                        operator_id VARCHAR(36),
+                        operator_name VARCHAR(255) NOT NULL,
+                        reason VARCHAR(512) NOT NULL,
+                        timestamp VARCHAR(64) NOT NULL,
+                        source_backup_id VARCHAR(128) NOT NULL,
+                        safety_backup_id VARCHAR(128) NOT NULL
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                    """.formatted(OPERATION_AUDITS_TABLE));
         } else {
             stmts.add("""
                     CREATE TABLE IF NOT EXISTS %s (
@@ -121,6 +145,8 @@ public final class V2Schema {
                         balance_after TEXT,
                         timestamp TEXT NOT NULL,
                         reason TEXT,
+                        operator_id TEXT,
+                        operator_name TEXT,
                         reverted INTEGER NOT NULL DEFAULT 0
                     )
                     """.formatted(TRANSACTIONS_TABLE));
@@ -130,6 +156,18 @@ public final class V2Schema {
                         consumed_at TEXT NOT NULL
                     )
                     """.formatted(NONCES_TABLE));
+            stmts.add("""
+                    CREATE TABLE IF NOT EXISTS %s (
+                        id TEXT PRIMARY KEY,
+                        operation TEXT NOT NULL,
+                        operator_id TEXT,
+                        operator_name TEXT NOT NULL,
+                        reason TEXT NOT NULL,
+                        timestamp TEXT NOT NULL,
+                        source_backup_id TEXT NOT NULL,
+                        safety_backup_id TEXT NOT NULL
+                    )
+                    """.formatted(OPERATION_AUDITS_TABLE));
         }
         return stmts;
     }
@@ -165,5 +203,9 @@ public final class V2Schema {
 
     public static String noncesTable() {
         return NONCES_TABLE;
+    }
+
+    public static String operationAuditsTable() {
+        return OPERATION_AUDITS_TABLE;
     }
 }

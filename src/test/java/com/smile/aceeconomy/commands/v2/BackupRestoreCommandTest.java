@@ -8,6 +8,7 @@ import com.smile.acelib.command.ReplySink;
 import com.smile.acelib.command.Sender;
 import com.smile.aceeconomy.commands.v2.ports.BackupCommandService;
 import com.smile.aceeconomy.commands.v2.ports.EconomyCommandService;
+import com.smile.aceeconomy.domain.AdminAudit;
 import com.smile.aceeconomy.operations.BackupRestoreError;
 import com.smile.aceeconomy.operations.BackupResult;
 import com.smile.aceeconomy.operations.RestoreResult;
@@ -24,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
@@ -115,7 +117,7 @@ class BackupRestoreCommandTest {
         assertNotNull(restore, "/aceeco must expose a restore subcommand");
         assertEquals("aceeconomy.admin.restore", restore.permission());
         assertEquals(2, restore.minArgs(), "restore requires <backup-id> confirm");
-        assertEquals(2, restore.maxArgs(), "restore accepts no extra arguments");
+        assertEquals(3, restore.maxArgs(), "restore accepts one optional reason");
         assertTrue(restore.consoleOnly(),
                 "restore is destructive and must be console-only");
 
@@ -140,6 +142,7 @@ class BackupRestoreCommandTest {
         assertEquals("ACELIB-CMD-005", ((CommandException) capturedError(sink)).getCode(),
                 "a player invoking console-only restore must hit PLAYER_NOT_ALLOWED");
         verify(backupFacade, never()).restore(anyString());
+        verify(backupFacade, never()).restore(anyString(), any(AdminAudit.class));
     }
 
     @Test
@@ -156,6 +159,7 @@ class BackupRestoreCommandTest {
         assertEquals("ACELIB-CMD-003", ((CommandException) capturedError(sink)).getCode());
         verify(backupFacade, never()).createBackup(any());
         verify(backupFacade, never()).restore(anyString());
+        verify(backupFacade, never()).restore(anyString(), any(AdminAudit.class));
     }
 
     // ---------------- confirmation gate ----------------
@@ -179,6 +183,7 @@ class BackupRestoreCommandTest {
                     "confirmation must match exactly: '" + wrong + "'");
         }
         verify(backupFacade, never()).restore(anyString());
+        verify(backupFacade, never()).restore(anyString(), any(AdminAudit.class));
     }
 
     @Test
@@ -194,6 +199,7 @@ class BackupRestoreCommandTest {
         assertTrue(error instanceof CommandException,
                 "the dispatcher must reject the missing argument as a typed error");
         verify(backupFacade, never()).restore(anyString());
+        verify(backupFacade, never()).restore(anyString(), any(AdminAudit.class));
     }
 
     @Test
@@ -203,12 +209,14 @@ class BackupRestoreCommandTest {
         CommandRegistryImpl registry = registryFor(services, sink);
 
         registry.dispatch(consoleSender(true, true), "aceeco",
-                List.of("restore", "20260824T093000-aaaa1111", "confirm", "extra"));
+                List.of("restore", "20260824T093000-aaaa1111", "confirm",
+                        "harbor-restore", "extra"));
 
         Throwable error = capturedError(sink);
         assertTrue(error instanceof CommandException,
                 "the dispatcher must reject extra arguments as a typed error");
         verify(backupFacade, never()).restore(anyString());
+        verify(backupFacade, never()).restore(anyString(), any(AdminAudit.class));
     }
 
     // ---------------- success replies ----------------
@@ -248,7 +256,7 @@ class BackupRestoreCommandTest {
         CommandServices services = services();
         ReplySink sink = mock(ReplySink.class);
         CommandRegistryImpl registry = registryFor(services, sink);
-        when(backupFacade.restore("20260824T093000-aaaa1111"))
+        when(backupFacade.restore(eq("20260824T093000-aaaa1111"), any(AdminAudit.class)))
                 .thenReturn(CompletableFuture.completedFuture(
                         RestoreResult.success("20260824T093000-aaaa1111",
                                 "20260824T093001-bbbb2222-pre-restore")));
@@ -260,6 +268,12 @@ class BackupRestoreCommandTest {
         assertTrue(reply.contains("20260824T093000-aaaa1111"), reply);
         assertTrue(reply.contains("20260824T093001-bbbb2222-pre-restore"),
                 "success reply must report the safety backup id: " + reply);
+        ArgumentCaptor<AdminAudit> audit = ArgumentCaptor.forClass(AdminAudit.class);
+        verify(backupFacade).restore(eq("20260824T093000-aaaa1111"), audit.capture());
+        assertEquals(AdminAudit.CONSOLE_OPERATOR_NAME, audit.getValue().operatorName(),
+                "a console dispatch without a reason still files a console audit");
+        assertEquals(AdminAudit.DEFAULT_REASON, audit.getValue().reason(),
+                "an omitted restore reason falls back to the default");
         // With localized messages==null fallback, reply is identifier + ids; with mocked messages it contains restart wording.
         // Offline test uses null messages -> identifier path, so verify ids present rather than English restart wording.
         assertTrue(reply.contains("20260824T093000-aaaa1111"),
@@ -274,7 +288,7 @@ class BackupRestoreCommandTest {
         CommandServices services = services();
         ReplySink sink = mock(ReplySink.class);
         CommandRegistryImpl registry = registryFor(services, sink);
-        when(backupFacade.restore("id-1")).thenReturn(CompletableFuture.completedFuture(
+        when(backupFacade.restore(eq("id-1"), any(AdminAudit.class))).thenReturn(CompletableFuture.completedFuture(
                 RestoreResult.failure(BackupRestoreError.PLAYERS_ONLINE,
                         "players are still online; ask everyone to leave first")));
 
@@ -311,7 +325,7 @@ class BackupRestoreCommandTest {
         CommandServices services = services();
         ReplySink sink = mock(ReplySink.class);
         CommandRegistryImpl registry = registryFor(services, sink);
-        when(backupFacade.restore("id-2")).thenReturn(CompletableFuture.completedFuture(
+        when(backupFacade.restore(eq("id-2"), any(AdminAudit.class))).thenReturn(CompletableFuture.completedFuture(
                 RestoreResult.failure(BackupRestoreError.SAFETY_BACKUP_FAILED,
                         "safety snapshot failed: disk full; live state untouched")));
 
@@ -331,7 +345,7 @@ class BackupRestoreCommandTest {
         CommandServices services = services();
         ReplySink sink = mock(ReplySink.class);
         CommandRegistryImpl registry = registryFor(services, sink);
-        when(backupFacade.restore("id-3"))
+        when(backupFacade.restore(eq("id-3"), any(AdminAudit.class)))
                 .thenReturn(CompletableFuture.failedFuture(new IllegalStateException("storage boom")));
 
         registry.dispatch(consoleSender(true, true), "aceeco",

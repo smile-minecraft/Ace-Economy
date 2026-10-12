@@ -1,6 +1,7 @@
 package com.smile.aceeconomy.infrastructure.operations;
 
 import com.smile.aceeconomy.domain.Account;
+import com.smile.aceeconomy.domain.AdminAudit;
 import com.smile.aceeconomy.domain.Amount;
 import com.smile.aceeconomy.domain.Currency;
 import com.smile.aceeconomy.domain.DebtPolicy;
@@ -102,6 +103,20 @@ public final class StorageReversalExecutor implements ReversalExecutor {
 
     @Override
     public ReversalOutcome execute(ReversalPlan plan) {
+        return execute(plan, null);
+    }
+
+    /**
+     * Audited execution. Every appended reversal record carries the operator
+     * identity seen at command time and the reason composed after the
+     * {@code rollback:<category>} machine prefix, so the operator reason stays
+     * discoverable while the machine prefix keeps its leading position. A null
+     * or unrecorded audit keeps the bare machine prefix, exactly like records
+     * written before operator tracking. Balance effects, records and markers
+     * still commit as one unit either way.
+     */
+    @Override
+    public ReversalOutcome execute(ReversalPlan plan, AdminAudit audit) {
         // Apply the deltas sequentially to a per-account working state: repeated deltas on
         // the same account/currency accumulate (100 -> 90 -> 80) instead of each recomputing
         // from the original balance and overwriting the previous mutation. The audit record
@@ -155,7 +170,10 @@ public final class StorageReversalExecutor implements ReversalExecutor {
                     UUID.randomUUID(), d.accountId(), deltaCounterparty.get(d.accountId()),
                     Currency.normalizeId(d.currencyId()), recordedAmount, type,
                     before, after, clock.instant(),
-                    "rollback:" + plan.category().name().toLowerCase()));
+                    AdminAudit.composeReason(
+                            "rollback:" + plan.category().name().toLowerCase(), audit),
+                    audit == null ? null : audit.operatorId(),
+                    audit == null ? null : audit.operatorName()));
         }
 
         // Commit balances + reversal records + reverted markers as ONE storage transaction.

@@ -19,7 +19,7 @@ final class V2SchemaContractTest {
     @Test
     void sqliteDdlUsesTextStorageAndNoEngineClause() {
         List<String> ddl = V2Schema.ddlStatements(new SqliteDialect());
-        assertEquals(5, ddl.size());
+        assertEquals(6, ddl.size());
         for (String stmt : ddl) {
             assertTrue(stmt.contains("CREATE TABLE IF NOT EXISTS"),
                     "SQLite DDL must be idempotent (IF NOT EXISTS): " + stmt);
@@ -33,12 +33,17 @@ final class V2SchemaContractTest {
                 "SQLite DDL must create the durable nonce table: " + nonceTable);
         assertTrue(nonceTable.contains("nonce TEXT PRIMARY KEY"),
                 "SQLite nonce table keys on the nonce itself: " + nonceTable);
+        String operationTable = ddl.get(5);
+        assertTrue(operationTable.contains(V2Schema.operationAuditsTable()),
+                "SQLite DDL must create the independent operation audit table: " + operationTable);
+        assertTrue(operationTable.contains("operation TEXT NOT NULL"),
+                "SQLite operation audit table records the operation: " + operationTable);
     }
 
     @Test
     void mysqlDdlUsesInnoDBAndVarcharBoolean() {
         List<String> ddl = V2Schema.ddlStatements(new MySqlDialect());
-        assertEquals(5, ddl.size());
+        assertEquals(6, ddl.size());
         for (String stmt : ddl) {
             assertTrue(stmt.contains("CREATE TABLE IF NOT EXISTS"),
                     "MySQL DDL must be idempotent (IF NOT EXISTS): " + stmt);
@@ -54,6 +59,11 @@ final class V2SchemaContractTest {
                 "MySQL DDL must create the durable nonce table: " + nonceTable);
         assertTrue(nonceTable.contains("nonce VARCHAR(36) PRIMARY KEY"),
                 "MySQL nonce table keys on the nonce itself: " + nonceTable);
+        String operationTable = ddl.get(5);
+        assertTrue(operationTable.contains(V2Schema.operationAuditsTable()),
+                "MySQL DDL must create the independent operation audit table: " + operationTable);
+        assertTrue(operationTable.contains("operation VARCHAR(32) NOT NULL"),
+                "MySQL operation audit table records the operation: " + operationTable);
     }
 
     @Test

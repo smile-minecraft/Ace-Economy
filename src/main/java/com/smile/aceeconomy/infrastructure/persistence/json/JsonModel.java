@@ -35,6 +35,14 @@ public final class JsonModel {
     public final List<JsonTransaction> transactions = new ArrayList<>();
     /** Consumed single-use keys (nonce -> ISO-8601 consumption timestamp). Optional when reading. */
     public final Map<String, String> nonces = new LinkedHashMap<>();
+    /**
+     * Independent restore audits. Optional additive section: files written
+     * before operation tracking load with an empty list, and it is written only
+     * when non-empty so snapshots without restore audits keep their exact shape.
+     * The stored backup file itself is never rewritten by a restore; only the
+     * in-memory bytes handed to the backend carry the merged collection.
+     */
+    public final List<JsonOperationAudit> operationAudits = new ArrayList<>();
 
     // ---------------- (de)serialization ----------------
 
@@ -119,6 +127,18 @@ public final class JsonModel {
                 model.nonces.put(rawKey, s);
             }
         }
+        // Restore audits are an optional additive section. Absent means the file was written
+        // before operation tracking and loads empty. A present value must be an array: an explicit
+        // null or a mistyped value would otherwise drop the audit trail without any signal.
+        if (obj.containsKey("operationAudits")) {
+            Object auditObj = obj.get("operationAudits");
+            if (!(auditObj instanceof List)) {
+                throw new PersistenceException("Invalid 'operationAudits' section in JSON model: expected array");
+            }
+            for (Object raw : (List<Object>) auditObj) {
+                model.operationAudits.add(JsonOperationAudit.fromJson(raw));
+            }
+        }
         return model;
     }
 
@@ -136,6 +156,15 @@ public final class JsonModel {
         }
         root.put("transactions", tx);
         root.put("nonces", new LinkedHashMap<>(nonces));
+        // Written only when present, so a snapshot without restore audits keeps the exact key set
+        // that the backup tests compare against.
+        if (!operationAudits.isEmpty()) {
+            List<Object> audits = new ArrayList<>(operationAudits.size());
+            for (JsonOperationAudit a : operationAudits) {
+                audits.add(a.toJsonObject());
+            }
+            root.put("operationAudits", audits);
+        }
         return root;
     }
 
@@ -270,6 +299,10 @@ public final class JsonModel {
         public String timestamp;
         public String reason;
         public boolean reverted;
+        // Administrative identity. Both are nullable: legacy and player records omit them, and a
+        // console record has a name marker with no id. Written only when non-null.
+        public String operatorId;
+        public String operatorName;
 
         static JsonTransaction fromDomain(Transaction t) {
             JsonTransaction j = new JsonTransaction();
@@ -284,6 +317,8 @@ public final class JsonModel {
             j.timestamp = t.timestamp().toString();
             j.reason = t.reason();
             j.reverted = false;
+            j.operatorId = t.operatorId() == null ? null : t.operatorId().toString();
+            j.operatorName = t.operatorName();
             return j;
         }
 
@@ -303,6 +338,8 @@ public final class JsonModel {
             t.balanceAfter = asStringOrNull(m.get("balanceAfter"));
             t.timestamp = asString(m.get("timestamp"));
             t.reason = asStringOrNull(m.get("reason"));
+            t.operatorId = asStringOrNull(m.get("operatorId"));
+            t.operatorName = asStringOrNull(m.get("operatorName"));
             if (!m.containsKey("reverted")) {
                 t.reverted = false;
             } else {
@@ -329,6 +366,12 @@ public final class JsonModel {
             m.put("timestamp", timestamp);
             m.put("reason", reason);
             m.put("reverted", reverted);
+            if (operatorId != null) {
+                m.put("operatorId", operatorId);
+            }
+            if (operatorName != null) {
+                m.put("operatorName", operatorName);
+            }
             return m;
         }
 
@@ -343,7 +386,150 @@ public final class JsonModel {
                     balanceBefore == null ? null : stringToAmount(balanceBefore),
                     balanceAfter == null ? null : stringToAmount(balanceAfter),
                     Instant.parse(timestamp),
-                    reason);
+                    reason,
+                    operatorId == null ? null : UUID.fromString(operatorId),
+                    operatorName);
+        }
+    }
+
+    // ---------------- operation audit ----------------
+
+    /**
+     * Independent restore record. Read and written by {@link #fromJson} and
+     * {@link #toJsonObject}; the operator fields are nullable so a record can
+     * name a console operator with no id.
+     */
+    public static final class JsonOperationAudit {
+        public String id;
+        public String operation;
+        public String operatorId;
+        public String operatorName;
+        public String reason;
+        public String timestamp;
+        public String sourceBackupId;
+        public String safetyBackupId;
+
+        public static JsonOperationAudit fromDomain(
+                com.smile.aceeconomy.domain.OperationAudit record) {
+            JsonOperationAudit json = new JsonOperationAudit();
+            json.id = record.id().toString();
+            json.operation = record.operation();
+            json.operatorId = record.operatorId() == null ? null : record.operatorId().toString();
+            json.operatorName = record.operatorName();
+            json.reason = record.reason();
+            json.timestamp = record.timestamp().toString();
+            json.sourceBackupId = record.sourceBackupId();
+            json.safetyBackupId = record.safetyBackupId();
+            return json;
+        }
+
+        @SuppressWarnings("unchecked")
+        static JsonOperationAudit fromJson(Object raw) {
+            if (!(raw instanceof Map)) {
+                throw new PersistenceException(
+                        "Invalid operation audit record: expected an object");
+            }
+            Map<String, Object> map = (Map<String, Object>) raw;
+            JsonOperationAudit record = new JsonOperationAudit();
+            record.id = operationString(map.get("id"), "id");
+            record.operation = operationString(map.get("operation"), "operation");
+            record.operatorId = operationStringOrNull(map.get("operatorId"), "operatorId");
+            record.operatorName = operationString(map.get("operatorName"), "operatorName");
+            record.reason = operationString(map.get("reason"), "reason");
+            record.timestamp = operationString(map.get("timestamp"), "timestamp");
+            record.sourceBackupId = operationString(map.get("sourceBackupId"), "sourceBackupId");
+            record.safetyBackupId = operationString(map.get("safetyBackupId"), "safetyBackupId");
+            return record;
+        }
+
+        /**
+         * String coercion that names only the field. The stored value is never
+         * interpolated: a mistyped field may itself carry a secret.
+         */
+        private static String operationString(Object value, String field) {
+            if (value instanceof String s) {
+                return s;
+            }
+            throw new PersistenceException(
+                    "Invalid operation audit record: field " + field + " must be a string");
+        }
+
+        private static String operationStringOrNull(Object value, String field) {
+            if (value == null) {
+                return null;
+            }
+            if (value instanceof String s) {
+                return s;
+            }
+            throw new PersistenceException(
+                    "Invalid operation audit record: field " + field + " must be a string or null");
+        }
+
+        Map<String, Object> toJsonObject() {
+            Map<String, Object> map = new LinkedHashMap<>();
+            map.put("id", id);
+            map.put("operation", operation);
+            map.put("operatorId", operatorId);
+            map.put("operatorName", operatorName);
+            map.put("reason", reason);
+            map.put("timestamp", timestamp);
+            map.put("sourceBackupId", sourceBackupId);
+            map.put("safetyBackupId", safetyBackupId);
+            return map;
+        }
+
+        /**
+         * Materializes the stored form without echoing any field value. A
+         * corrupt field may itself carry a secret, and the parsing failures
+         * underneath quote the offending text, so refusals name only the
+         * problem with a fixed detail and never attach the parsing failure
+         * as a cause.
+         */
+        com.smile.aceeconomy.domain.OperationAudit toDomain() {
+            UUID parsedId;
+            UUID parsedOperator;
+            java.time.Instant parsedTime;
+            try {
+                parsedId = UUID.fromString(id);
+            } catch (RuntimeException e) {
+                throw new PersistenceException(
+                        "Invalid operation audit record: malformed id");
+            }
+            if (!parsedId.toString().equals(id)) {
+                throw new PersistenceException(
+                        "Invalid operation audit record: non-canonical id");
+            }
+            try {
+                if (operatorId != null) {
+                    parsedOperator = UUID.fromString(operatorId);
+                    if (!parsedOperator.toString().equals(operatorId)) {
+                        throw new PersistenceException(
+                                "Invalid operation audit record: non-canonical operator id");
+                    }
+                } else {
+                    parsedOperator = null;
+                }
+            } catch (PersistenceException e) {
+                throw e;
+            } catch (RuntimeException e) {
+                throw new PersistenceException(
+                        "Invalid operation audit record: malformed operator id");
+            }
+            try {
+                parsedTime = java.time.Instant.parse(timestamp);
+            } catch (RuntimeException e) {
+                throw new PersistenceException(
+                        "Invalid operation audit record: malformed timestamp");
+            }
+            return com.smile.aceeconomy.domain.OperationAudit.rehydrate(
+                    parsedId,
+                    operation,
+                    parsedOperator,
+                    operatorName,
+                    reason,
+                    parsedTime,
+                    sourceBackupId,
+                    safetyBackupId);
         }
     }
 }

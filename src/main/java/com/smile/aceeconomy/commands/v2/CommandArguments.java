@@ -142,6 +142,20 @@ public final class CommandArguments {
         return token("confirm", "[confirm]", prefix -> List.of());
     }
 
+    /**
+     * Optional audit reason slot ({@code [reason]}): a single token. The policy
+     * itself lives in {@code AdminAuditSupport.resolve}, which validates the
+     * token through {@code AdminAudit.validateReason} and maps a rejection to
+     * the fixed {@code ACELIB-CMD-INVALID-REASON} error without echoing the raw
+     * value; blank, over-long, multi-word and secret-looking values are
+     * rejected there, omission falls back to the default. When both currency
+     * and reason are given, currency comes first and reason comes last; a
+     * reason never substitutes for an unknown currency.
+     */
+    public static CommandArgument<String> reason() {
+        return token("reason", "[reason]", prefix -> List.of());
+    }
+
     /** Plain single-token slot with no completion (labels, ids, confirm literals). */
     public static CommandArgument<String> token(String name, String usage) {
         return token(name, usage, prefix -> List.of());

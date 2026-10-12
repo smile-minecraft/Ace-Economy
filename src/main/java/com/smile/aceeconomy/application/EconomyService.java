@@ -2,13 +2,13 @@ package com.smile.aceeconomy.application;
 
 import com.smile.aceeconomy.domain.Account;
 import com.smile.aceeconomy.domain.AccountSnapshot;
+import com.smile.aceeconomy.domain.AdminAudit;
 import com.smile.aceeconomy.domain.Amount;
 import com.smile.aceeconomy.domain.AmountCap;
 import com.smile.aceeconomy.domain.Currency;
 import com.smile.aceeconomy.domain.CurrencyRegistry;
 import com.smile.aceeconomy.domain.CurrencyScaleCheck;
-import com.smile.aceeconomy.domain.DebtPolicy;
-import com.smile.aceeconomy.domain.EconomyError;
+import com.smile.aceeconomy.domain.DebtPolicy;import com.smile.aceeconomy.domain.EconomyError;
 import com.smile.aceeconomy.domain.EconomyResult;
 import com.smile.aceeconomy.domain.Transaction;
 import com.smile.aceeconomy.domain.TransactionEvent;
@@ -18,8 +18,11 @@ import com.smile.aceeconomy.ports.AuditException;
 import com.smile.aceeconomy.ports.AuditSink;
 import com.smile.aceeconomy.ports.Clock;
 import com.smile.aceeconomy.ports.TransactionEventPublisher;
+import com.smile.aceeconomy.ports.persistence.AdminMutationResult;
 import com.smile.aceeconomy.ports.persistence.AtomicRedemptionStore;
+import com.smile.aceeconomy.ports.persistence.AtomicAdminMutationStore;
 import com.smile.aceeconomy.ports.persistence.AtomicTransferStore;
+import com.smile.aceeconomy.ports.persistence.CommittedAdminMutationException;
 import com.smile.aceeconomy.ports.persistence.CommittedTransferException;
 import com.smile.aceeconomy.ports.persistence.IndeterminatePersistenceException;
 import com.smile.aceeconomy.ports.persistence.PersistenceException;
@@ -28,6 +31,7 @@ import com.smile.aceeconomy.ports.persistence.RedemptionResult;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -72,6 +76,7 @@ public final class EconomyService {
     private final Clock clock;
     private final TransactionEventPublisher events;
     private final AtomicTransferStore transferStore;
+    private final AtomicAdminMutationStore adminStore;
     private final LockRegistry locks = new LockRegistry();
     /**
      * Read-only balance acceleration. Populated only from successful persistence
@@ -88,6 +93,25 @@ public final class EconomyService {
     public EconomyService(CurrencyRegistry currencies, DebtPolicy debtPolicy, Amount startBalance,
                            AccountRepository accounts, AuditSink audit, Clock clock,
                            TransactionEventPublisher events, AtomicTransferStore transferStore) {
+        this(currencies, debtPolicy, startBalance, accounts, audit, clock, events, transferStore, null);
+    }
+
+    /**
+     * Full wiring for the audited administrative path. When {@code adminStore} is null the
+     * service reuses the backend instance behind {@code accounts} when it implements
+     * {@link AtomicAdminMutationStore}; production JSON/SQL backends always do, so the
+     * administrative mutations commit balance and audit in one storage transaction there.
+     * When no atomic store is available the audited overloads fail closed with
+     * {@code AUDIT_FAILURE} and no balance, record or notification side effect; they
+     * never fall back to separate save plus audit commits and never compensate a
+     * half-applied balance with a second write.
+     * The audited overloads commit through {@code adminStore} (live-derived balances, debt
+     * enforced inside the commit, post-commit notification only after success).
+     */
+    public EconomyService(CurrencyRegistry currencies, DebtPolicy debtPolicy, Amount startBalance,
+                           AccountRepository accounts, AuditSink audit, Clock clock,
+                           TransactionEventPublisher events, AtomicTransferStore transferStore,
+                           AtomicAdminMutationStore adminStore) {
         this.currencies = currencies;
         this.debtPolicy = debtPolicy;
         this.startBalance = startBalance;
@@ -97,6 +121,8 @@ public final class EconomyService {
         this.events = events;
         this.transferStore = transferStore != null ? transferStore
                 : (accounts instanceof AtomicTransferStore ats ? ats : null);
+        this.adminStore = adminStore != null ? adminStore
+                : (accounts instanceof AtomicAdminMutationStore aams ? aams : null);
     }
 
     // ---------- account lifecycle ----------
@@ -700,6 +726,227 @@ public final class EconomyService {
         } finally {
             lock.unlock();
         }
+    }
+
+    // ---------- administrative mutations with operator audit ----------
+
+    /**
+     * Audited deposit for administrative commands. Runs the single-commit path in
+     * {@link #adminMutation}. The ordinary non-audited {@link #deposit(UUID, String, Amount)}
+     * keeps its existing success-with-{@code auditFailure} behaviour and is never used here.
+     */
+    public EconomyResult<Amount> deposit(UUID uuid, String currencyId, Amount amount, AdminAudit audit) {
+        return adminMutation(uuid, currencyId, amount, TransactionType.DEPOSIT, audit);
+    }
+
+    /**
+     * Audited withdrawal; same single-commit contract as
+     * {@link #deposit(UUID, String, Amount, AdminAudit)}.
+     */
+    public EconomyResult<Amount> withdraw(UUID uuid, String currencyId, Amount amount, AdminAudit audit) {
+        return adminMutation(uuid, currencyId, amount, TransactionType.WITHDRAW, audit);
+    }
+
+    /**
+     * Audited balance assignment; same single-commit contract as
+     * {@link #deposit(UUID, String, Amount, AdminAudit)}.
+     */
+    public EconomyResult<Amount> setBalance(UUID uuid, String currencyId, Amount amount, AdminAudit audit) {
+        return adminMutation(uuid, currencyId, amount, TransactionType.SET, audit);
+    }
+
+    /**
+     * Shared single-commit path for give, take and set. Under the account lock it checks the
+     * request and the previewed outcome, fires the pre-commit event, then hands the prepared
+     * record to {@code adminStore}. The store applies the balance effect and appends the audit
+     * record in ONE storage transaction, so there is no separate save plus audit commit and no
+     * compensation. A failure before the commit leaves balance, record and notification
+     * untouched. Notification fires only after a committed result.
+     */
+    private EconomyResult<Amount> adminMutation(UUID uuid, String currencyId, Amount amount,
+                                                TransactionType type, AdminAudit audit) {
+        java.util.Objects.requireNonNull(audit, "audit");
+        if (type == TransactionType.SET) {
+            if (amount == null) {
+                return EconomyResult.failure(EconomyError.INVALID_AMOUNT, "amount null");
+            }
+        } else {
+            EconomyResult<Void> v = validateAmountPositive(amount);
+            if (v.isFailure()) {
+                return EconomyResult.failure(v.error(), v.message());
+            }
+        }
+        if (!currencies.contains(currencyId)) {
+            return EconomyResult.failure(EconomyError.CURRENCY_NOT_FOUND, currencyId);
+        }
+        Optional<EconomyResult<Amount>> capRefusal = refuseOnRequestAmountCap(currencyId, amount);
+        if (capRefusal.isPresent()) {
+            return capRefusal.get();
+        }
+        if (adminStore == null) {
+            return EconomyResult.failure(EconomyError.AUDIT_FAILURE, STORAGE_UNAVAILABLE);
+        }
+        ReentrantLock lock = locks.lockFor(uuid);
+        lock.lock();
+        try {
+            AccountBalanceCache.CacheStamp stamp = balanceCache.stampOf(uuid);
+            Optional<Account> acc;
+            try {
+                acc = accounts.load(uuid);
+            } catch (PersistenceException e) {
+                return adminFailedBeforeCommit(uuid, e);
+            }
+            if (acc.isEmpty()) {
+                return EconomyResult.failure(EconomyError.ACCOUNT_NOT_FOUND, "no account for " + uuid);
+            }
+            Optional<EconomyResult<Amount>> scaleRefusal =
+                    refuseOnScaleMismatch(currencyId, acc.get().balanceOf(currencyId), amount);
+            if (scaleRefusal.isPresent()) {
+                return scaleRefusal.get();
+            }
+            Optional<EconomyResult<Amount>> storedCapRefusal =
+                    refuseOnStoredAmountCap(currencyId, acc.get().balanceOf(currencyId));
+            if (storedCapRefusal.isPresent()) {
+                return storedCapRefusal.get();
+            }
+            Amount before = orZero(acc.get().balanceOf(currencyId), amount);
+            Amount after = previewAdminBalance(type, before, amount);
+            Optional<EconomyResult<Amount>> resultCapRefusal =
+                    refuseOnResultAmountCap(currencyId, after);
+            if (resultCapRefusal.isPresent()) {
+                return resultCapRefusal.get();
+            }
+            TransactionEvent event = new TransactionEvent(uuid, amount, type, before);
+            events.publishPreCommit(event);
+            if (event.isCancelled()) {
+                return EconomyResult.failure(EconomyError.TRANSACTION_CANCELLED,
+                        type.name().toLowerCase(Locale.ROOT) + " cancelled");
+            }
+            if (!debtPolicy.allows(after)) {
+                return refuseAdminDebt(type);
+            }
+            Transaction prepared = new Transaction(newId(), uuid, null, norm(currencyId), amount, type,
+                    before, after, now(), auditReason(audit), audit.operatorId(), audit.operatorName());
+            AdminMutationResult result;
+            try {
+                result = adminStore.commitAdminMutation(prepared, debtPolicy);
+            } catch (AtomicAdminMutationStore.CapExceededException e) {
+                return EconomyResult.failure(EconomyError.AMOUNT_EXCEEDS_CAP, e.getMessage());
+            } catch (AtomicAdminMutationStore.DebtLimitExceededException e) {
+                return refuseAdminDebt(type);
+            } catch (CommittedAdminMutationException e) {
+                // The balance and the audit record are durable with the authoritative
+                // live-derived balances; only the post-commit report failed. Notify
+                // once with the real receipt and never retry or compensate.
+                LOG.log(Level.WARNING,
+                        "Administrative mutation committed but reported a storage error afterwards", e);
+                Transaction authoritative = new Transaction(e.transactionId(),
+                        prepared.accountId(), prepared.counterparty(), prepared.currencyId(),
+                        prepared.amount(), prepared.type(), e.balanceBefore(), e.balanceAfter(),
+                        prepared.timestamp(), prepared.reason(),
+                        prepared.operatorId(), prepared.operatorName());
+                balanceCache.putIfStamp(uuid, currencyId, e.balanceAfter(), stamp);
+                publishPostCommit(authoritative);
+                return EconomyResult.success(e.balanceAfter());
+            } catch (IndeterminatePersistenceException e) {
+                // Uncertain outcome: it must propagate so boundaries warn against retrying.
+                balanceCache.invalidate(uuid);
+                throw e;
+            } catch (PersistenceException e) {
+                if (e.isCommitted()) {
+                    // Balance and record are durable but no authoritative receipt travelled
+                    // with the failure. Re-read the committed record by its stable id and
+                    // notify with it; when it cannot be safely read, propagate as
+                    // committed-unknown instead of forging a preview notification.
+                    Transaction authoritative = loadCommittedAdmin(prepared);
+                    if (authoritative != null) {
+                        LOG.log(Level.WARNING,
+                                "Administrative mutation committed but reported a storage error afterwards", e);
+                        balanceCache.putIfStamp(uuid, currencyId,
+                                authoritative.balanceAfter(), stamp);
+                        publishPostCommit(authoritative);
+                        return EconomyResult.success(authoritative.balanceAfter());
+                    }
+                    LOG.log(Level.WARNING,
+                            "Administrative mutation committed but its record could not be re-read;"
+                                    + " propagating as committed-unknown without notification", e);
+                    balanceCache.invalidate(uuid);
+                    throw e;
+                }
+                return adminFailedBeforeCommit(uuid, e);
+            }
+            if (result.isCommitted()) {
+                balanceCache.putIfStamp(uuid, currencyId, result.balanceAfter(), stamp);
+                publishPostCommit(authoritativeAdmin(prepared, result));
+                return EconomyResult.success(result.balanceAfter());
+            }
+            if (result.isDebtLimitExceeded()) {
+                return refuseAdminDebt(type);
+            }
+            balanceCache.invalidate(uuid);
+            return EconomyResult.failure(EconomyError.ACCOUNT_NOT_FOUND, "no account for " + uuid);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private EconomyResult<Amount> adminFailedBeforeCommit(UUID uuid, PersistenceException e) {
+        balanceCache.invalidate(uuid);
+        LOG.log(Level.WARNING,
+                "Administrative mutation failed before commit; answering AUDIT_FAILURE without changing anything",
+                e);
+        return EconomyResult.failure(EconomyError.AUDIT_FAILURE, STORAGE_UNAVAILABLE);
+    }
+
+    private EconomyResult<Amount> refuseAdminDebt(TransactionType type) {
+        if (type == TransactionType.WITHDRAW) {
+            return rejectWithdraw();
+        }
+        if (!debtPolicy.isAllowNegative()) {
+            return EconomyResult.failure(EconomyError.DEBT_DISABLED, "negative balance not allowed");
+        }
+        return EconomyResult.failure(EconomyError.DEBT_LIMIT_EXCEEDED, "debt limit exceeded");
+    }
+
+    private static Amount previewAdminBalance(TransactionType type, Amount before, Amount amount) {
+        return switch (type) {
+            case DEPOSIT -> before.add(amount);
+            case WITHDRAW -> before.subtract(amount);
+            case SET -> amount;
+            default -> throw new IllegalArgumentException("unsupported administrative mutation: " + type);
+        };
+    }
+
+    /**
+     * Re-read the committed admin record by its stable id after a committed
+     * cleanup failure that carried no receipt. Returns null when the record
+     * cannot be safely read, so the caller propagates instead of forging.
+     */
+    private Transaction loadCommittedAdmin(Transaction prepared) {
+        if (!(accounts instanceof com.smile.aceeconomy.ports.persistence.TransactionRepository store)) {
+            return null;
+        }
+        try {
+            for (Transaction row : store.loadByAccount(prepared.accountId())) {
+                if (row.id().equals(prepared.id())) {
+                    return row;
+                }
+            }
+        } catch (RuntimeException ignored) {
+            return null;
+        }
+        return null;
+    }
+
+    private static String auditReason(AdminAudit audit) {
+        return audit.reason() == null ? AdminAudit.DEFAULT_REASON : audit.reason();
+    }
+
+    private Transaction authoritativeAdmin(Transaction prepared, AdminMutationResult result) {
+        return new Transaction(result.transactionId(), prepared.accountId(), prepared.counterparty(),
+                prepared.currencyId(), prepared.amount(), prepared.type(),
+                result.balanceBefore(), result.balanceAfter(), prepared.timestamp(), prepared.reason(),
+                prepared.operatorId(), prepared.operatorName());
     }
 
     // ---------- transfer ----------

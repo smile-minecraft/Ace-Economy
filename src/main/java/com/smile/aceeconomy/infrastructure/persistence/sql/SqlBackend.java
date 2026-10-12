@@ -126,7 +126,9 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 public final class SqlBackend
         implements AccountRepository, TransactionRepository, PersistenceLifecycle,
         AtomicReversalStore, AtomicRedemptionStore, AtomicTransferStore, AtomicImportStore,
-        NonceStore, LeaderboardRepository {
+        com.smile.aceeconomy.ports.persistence.AtomicAdminMutationStore,
+        NonceStore, LeaderboardRepository,
+        com.smile.aceeconomy.ports.operations.OperationAuditStore {
 
     private final SqlConnectionProvider provider;
     private final SqlDialect dialect;
@@ -586,6 +588,9 @@ public final class SqlBackend
                             st.executeUpdate("DELETE FROM " + V2Schema.balancesTable());
                             st.executeUpdate("DELETE FROM " + V2Schema.accountsTable());
                             st.executeUpdate("DELETE FROM " + V2Schema.noncesTable());
+                            if (tableExists(V2Schema.operationAuditsTable(), conn)) {
+                                st.executeUpdate("DELETE FROM " + V2Schema.operationAuditsTable());
+                            }
                         }
                         for (JsonModel.JsonAccount a : candidate.accounts.values()) {
                             insertAccount(a, conn);
@@ -594,6 +599,7 @@ public final class SqlBackend
                             insertTransaction(t, conn);
                         }
                         insertNonces(candidate, conn);
+                        insertOperationAudits(candidate, conn);
                         commitOrIndeterminate(conn, "Restore");
                     } catch (Throwable e) {
                         // A failed restore may leave part of the transaction applied. The cleanup
@@ -1124,6 +1130,32 @@ public final class SqlBackend
                 });
             } catch (SQLException e) {
                 throw new PersistenceException("Failed to load transactions", e);
+            }
+        } finally {
+            access.unlock();
+        }
+    }
+
+    // ---------------- operation audit ----------------
+
+    /**
+     * Internal restore-audit read. The additive {@code ace_v2_operation_audits}
+     * table is created by initialization, written by restore in the same
+     * transaction as the world, and read back here. A database written before
+     * operation tracking gains the table on the next start and reads as an
+     * empty list; old builds never query this table and ignore it harmlessly.
+     */
+    @Override
+    public List<com.smile.aceeconomy.domain.OperationAudit> listOperationAudits() {
+        Lock access = accessLock();
+        access.lock();
+        try {
+            ensureInitialized();
+            try {
+                return withBorrowed((borrowed, conn) ->
+                        readOperationAudits(V2Schema.operationAuditsTable(), conn));
+            } catch (SQLException e) {
+                throw new PersistenceException("Failed to load operation audits", e);
             }
         } finally {
             access.unlock();
@@ -1939,6 +1971,182 @@ public final class SqlBackend
         }
     }
 
+    // ---------------- atomic admin mutation ----------------
+
+    /**
+     * Single JDBC transaction: the live balance row is locked, the effect is
+     * derived from it by the prepared type (a general transaction that
+     * committed first is observed, never overwritten by the caller's
+     * snapshot), the public amount cap and the debt policy are enforced
+     * against the live-derived outcome inside the same transaction, and the
+     * updated balance plus the prepared record (operator identity and reason
+     * as-is) commit together. An unknown account decides {@code ACCOUNT_MISSING}
+     * with nothing written; a debt violation decides {@code DEBT_LIMIT_EXCEEDED}
+     * with nothing written; a cap violation throws with the cap diagnosis and
+     * nothing written; an undecided storage failure throws and leaves the
+     * previous state intact. A commit that succeeded but lost its cleanup
+     * confirmation travels as a committed receipt with the authoritative
+     * balances instead of a bare retryable failure.
+     */
+    @Override
+    public com.smile.aceeconomy.ports.persistence.AdminMutationResult commitAdminMutation(
+            com.smile.aceeconomy.domain.Transaction preparedTx,
+            com.smile.aceeconomy.domain.DebtPolicy debtPolicy) throws PersistenceException {
+        Lock access = accessLock();
+        access.lock();
+        java.util.concurrent.atomic.AtomicBoolean committedFlag =
+                new java.util.concurrent.atomic.AtomicBoolean(false);
+        java.util.concurrent.atomic.AtomicReference<Amount> beforeRef =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<Amount> afterRef =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        try {
+            ensureInitialized();
+            try {
+                return withBorrowed((borrowed, conn) -> {
+                    boolean entered = false;
+                    boolean decided = false;
+                    boolean committed = false;
+                    Amount beforeHolder = null;
+                    Amount afterHolder = null;
+                    try {
+                        // Begin before the read: the live row lock and the write must sit
+                        // inside one transaction so the derived before/after cannot be
+                        // invalidated between the read and the write.
+                        conn.setAutoCommit(false);
+                        entered = true;
+                        String cid = Currency.normalizeId(preparedTx.currencyId());
+                        Optional<Account> existing =
+                                loadForUpdateWithConnection(preparedTx.accountId(), conn);
+                        if (existing.isEmpty()) {
+                            cleanupMissingAccount(borrowed, conn);
+                            decided = true;
+                            return com.smile.aceeconomy.ports.persistence.AdminMutationResult
+                                    .accountMissing();
+                        }
+                        Account live = existing.get();
+                        Amount current = live.balanceOf(cid);
+                        Amount before = current == null
+                                ? Amount.zero(preparedTx.amount().scale()) : current;
+                        if (AmountCap.exceeds(before)) {
+                            cleanupMissingAccount(borrowed, conn);
+                            decided = true;
+                            throw new com.smile.aceeconomy.ports.persistence.AtomicAdminMutationStore.CapExceededException(
+                                    AmountCap.describeStored(cid, before));
+                        }
+                        if (preparedTx.amount() != null && AmountCap.exceeds(preparedTx.amount())) {
+                            cleanupMissingAccount(borrowed, conn);
+                            decided = true;
+                            throw new com.smile.aceeconomy.ports.persistence.AtomicAdminMutationStore.CapExceededException(
+                                    AmountCap.describeRequest(cid, preparedTx.amount()));
+                        }
+                        Account updated = switch (preparedTx.type()) {
+                            case DEPOSIT -> live.deposit(cid, preparedTx.amount());
+                            case WITHDRAW -> live.withdraw(cid, preparedTx.amount());
+                            case SET -> live.setBalance(cid, preparedTx.amount());
+                            default -> throw new PersistenceException(
+                                    "Unsupported administrative mutation type: " + preparedTx.type());
+                        };
+                        Amount after = updated.balanceOf(cid);
+                        if (AmountCap.exceeds(after)) {
+                            cleanupMissingAccount(borrowed, conn);
+                            decided = true;
+                            throw new com.smile.aceeconomy.ports.persistence.AtomicAdminMutationStore.CapExceededException(
+                                    AmountCap.describeResult(cid, after));
+                        }
+                        if (debtPolicy != null && !debtPolicy.allows(after)) {
+                            cleanupMissingAccount(borrowed, conn);
+                            decided = true;
+                            return com.smile.aceeconomy.ports.persistence.AdminMutationResult
+                                    .debtLimitExceeded();
+                        }
+                        Transaction authoritative = new Transaction(preparedTx.id(),
+                                preparedTx.accountId(), preparedTx.counterparty(), cid,
+                                preparedTx.amount(), preparedTx.type(), before, after,
+                                preparedTx.timestamp(), preparedTx.reason(),
+                                preparedTx.operatorId(), preparedTx.operatorName());
+                        beforeHolder = before;
+                        afterHolder = after;
+                        beforeRef.set(before);
+                        afterRef.set(after);
+                        saveAccountRows(updated, conn);
+                        insertTransactionRow(authoritative, false, conn);
+                        commitOrIndeterminate(conn, "Administrative mutation");
+                        committed = true;
+                        committedFlag.set(true);
+                    } catch (Throwable e) {
+                        if (!decided && !committed) {
+                            rollbackForFailure(borrowed, conn, e, entered);
+                        }
+                        if (e instanceof SQLException sql) {
+                            throw sql;
+                        }
+                        if (e instanceof RuntimeException re) {
+                            throw re;
+                        }
+                        if (e instanceof Error err) {
+                            throw err;
+                        }
+                        throw new RuntimeException(e);
+                    }
+                    try {
+                        restoreAutoCommitAfterCommit(borrowed, conn, "Administrative mutation");
+                    } catch (PersistenceException e) {
+                        throw new com.smile.aceeconomy.ports.persistence.CommittedAdminMutationException(
+                                e.getMessage(), e.getCause() != null ? e.getCause() : e,
+                                beforeHolder, afterHolder, preparedTx.id());
+                    }
+                    return com.smile.aceeconomy.ports.persistence.AdminMutationResult.committed(
+                            beforeHolder, afterHolder, preparedTx.id());
+                });
+            } catch (com.smile.aceeconomy.ports.persistence.CommittedAdminMutationException e) {
+                throw e;
+            } catch (PersistenceException e) {
+                if (e.isCommitted() || committedFlag.get()) {
+                    Amount before = beforeRef.get();
+                    Amount after = afterRef.get();
+                    if (before != null && after != null) {
+                        throw new com.smile.aceeconomy.ports.persistence.CommittedAdminMutationException(
+                                e.getMessage(), e.getCause() != null ? e.getCause() : e,
+                                before, after, preparedTx.id());
+                    }
+                    if (!e.isCommitted()) {
+                        throw new PersistenceException(e.getMessage(),
+                                e.getCause() != null ? e.getCause() : e, true);
+                    }
+                    throw e;
+                }
+                throw e;
+            } catch (SQLException e) {
+                if (committedFlag.get() && beforeRef.get() != null) {
+                    throw new com.smile.aceeconomy.ports.persistence.CommittedAdminMutationException(
+                            "Administrative mutation committed successfully, but post-commit"
+                                    + " cleanup failed; the data is committed — do not treat this"
+                                    + " as a rollback.",
+                            e, beforeRef.get(), afterRef.get(), preparedTx.id());
+                }
+                throw new PersistenceException(
+                        "Failed to commit administrative mutation " + preparedTx.id(), e);
+            } catch (RuntimeException | Error e) {
+                if (committedFlag.get() && beforeRef.get() != null) {
+                    if (e instanceof PersistenceException pe && pe.isCommitted()) {
+                        throw pe;
+                    }
+                    Throwable cause = e.getCause();
+                    Throwable committedCause = cause != null ? cause : e;
+                    throw new com.smile.aceeconomy.ports.persistence.CommittedAdminMutationException(
+                            "Administrative mutation committed successfully, but post-commit"
+                                    + " cleanup failed; the data is committed — do not treat this"
+                                    + " as a rollback.",
+                            committedCause, beforeRef.get(), afterRef.get(), preparedTx.id());
+                }
+                throw e;
+            }
+        } finally {
+            access.unlock();
+        }
+    }
+
     /**
      * Import variant of the post-commit restore: on failure the already-committed balances
      * and transaction id travel with the exception so the caller can report success with
@@ -2132,6 +2340,130 @@ public final class SqlBackend
 
     // ---------------- internals ----------------
 
+    /**
+     * Additive migration for databases created before operator tracking: adds
+     * the nullable operator columns when they are missing. Idempotent and
+     * forward-safe: new databases already carry the columns from the DDL, old
+     * readers ignore the extra columns, and existing rows keep NULL (read as
+     * unrecorded).
+     */
+    private void ensureTransactionAuditColumns(Connection conn) throws SQLException {
+        if (!hasColumn(conn, V2Schema.transactionsTable(), "operator_id")) {
+            String type = dialect.isMySQL() ? "VARCHAR(36)" : "TEXT";
+            try (Statement st = conn.createStatement()) {
+                st.execute("ALTER TABLE " + V2Schema.transactionsTable()
+                        + " ADD COLUMN operator_id " + type);
+            }
+        }
+        if (!hasColumn(conn, V2Schema.transactionsTable(), "operator_name")) {
+            String type = dialect.isMySQL() ? "VARCHAR(255)" : "TEXT";
+            try (Statement st = conn.createStatement()) {
+                st.execute("ALTER TABLE " + V2Schema.transactionsTable()
+                        + " ADD COLUMN operator_name " + type);
+            }
+        }
+    }
+
+    /**
+     * Widens a narrow MySQL reason column to hold a policy-legal reason plus
+     * the machine prefix. Only narrows are altered: an already wider TEXT or
+     * VARCHAR is left alone and never shrunk. SQLite uses unbounded TEXT and
+     * is never altered here.
+     */
+    private void ensureReasonWidth(Connection conn) throws SQLException {
+        if (!dialect.isMySQL()) {
+            return;
+        }
+        Integer width = varcharWidth(conn, V2Schema.transactionsTable(), "reason");
+        if (width == null) {
+            return;
+        }
+        if (width < V2Schema.MYSQL_REASON_WIDTH) {
+            try (Statement st = conn.createStatement()) {
+                st.execute("ALTER TABLE " + V2Schema.transactionsTable()
+                        + " MODIFY reason VARCHAR(" + V2Schema.MYSQL_REASON_WIDTH + ")");
+            }
+        }
+        Integer auditWidth = varcharWidth(conn, V2Schema.operationAuditsTable(), "reason");
+        if (auditWidth != null && auditWidth < V2Schema.MYSQL_REASON_WIDTH) {
+            try (Statement st = conn.createStatement()) {
+                st.execute("ALTER TABLE " + V2Schema.operationAuditsTable()
+                        + " MODIFY reason VARCHAR(" + V2Schema.MYSQL_REASON_WIDTH + ")");
+            }
+        }
+    }
+
+    /**
+     * Column presence probe that tolerates dialect identifier casing: unquoted
+     * DDL is stored uppercase by some engines (H2, MySQL), so the metadata
+     * name is compared case-insensitively instead of relying on the catalog
+     * pattern, which is case-sensitive on those engines.
+     */
+    /**
+     * Column presence probe with the same case tolerance as
+     * {@link #tableExists}: the row's own names decide the match, never the
+     * catalog pattern, which is case-sensitive on engines that store unquoted
+     * identifiers uppercase (H2, MySQL).
+     */
+    private boolean hasColumn(Connection conn, String table, String column) throws SQLException {
+        DatabaseMetaData meta = conn.getMetaData();
+        if (meta == null) {
+            return false;
+        }
+        try (ResultSet rs = meta.getColumns(null, null, null, null)) {
+            while (rs != null && rs.next()) {
+                String tableName = rs.getString("TABLE_NAME");
+                String columnName = rs.getString("COLUMN_NAME");
+                if (tableName != null && tableName.equalsIgnoreCase(table)
+                        && columnName != null && columnName.equalsIgnoreCase(column)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
+    /**
+     * Returns the declared VARCHAR width for a column, or null when the column
+     * is not a VARCHAR (for example SQLite TEXT) or cannot be inspected.
+     */
+    private Integer varcharWidth(Connection conn, String table, String column) throws SQLException {
+        DatabaseMetaData meta = conn.getMetaData();
+        if (meta == null) {
+            return null;
+        }
+        try (ResultSet rs = meta.getColumns(null, null, null, null)) {
+            while (rs != null && rs.next()) {
+                String tableName = rs.getString("TABLE_NAME");
+                String columnName = rs.getString("COLUMN_NAME");
+                if (tableName == null || !tableName.equalsIgnoreCase(table)
+                        || columnName == null || !columnName.equalsIgnoreCase(column)) {
+                    continue;
+                }
+                String typeName;
+                try {
+                    typeName = rs.getString("TYPE_NAME");
+                } catch (SQLException e) {
+                    return null;
+                }
+                if (typeName == null || !typeName.toUpperCase(java.util.Locale.ROOT).contains("VARCHAR")) {
+                    return null;
+                }
+                int size;
+                try {
+                    size = rs.getInt("COLUMN_SIZE");
+                } catch (SQLException e) {
+                    return null;
+                }
+                if (rs.wasNull()) {
+                    return null;
+                }
+                return size;
+            }
+            return null;
+        }
+    }
+
     private void createSchema(BorrowedConnection borrowed, Connection conn) throws SQLException {
         boolean entered = false;
         try {
@@ -2142,6 +2474,8 @@ public final class SqlBackend
                     st.execute(ddl);
                 }
             }
+            ensureTransactionAuditColumns(conn);
+            ensureReasonWidth(conn);
             try (PreparedStatement ps = conn.prepareStatement(V2Schema.versionInsertSql(dialect))) {
                 ps.setString(1, Instant.now().toString());
                 ps.executeUpdate();
@@ -2173,6 +2507,7 @@ public final class SqlBackend
                 st.executeUpdate("DROP TABLE IF EXISTS " + V2Schema.balancesTable());
                 st.executeUpdate("DROP TABLE IF EXISTS " + V2Schema.accountsTable());
                 st.executeUpdate("DROP TABLE IF EXISTS " + V2Schema.noncesTable());
+                st.executeUpdate("DROP TABLE IF EXISTS " + V2Schema.operationAuditsTable());
                 st.executeUpdate("DROP TABLE IF EXISTS " + V2Schema.schemaTable());
             }
             conn.commit();
@@ -2265,8 +2600,9 @@ public final class SqlBackend
         // caller's transaction boundary rolls back instead of silently dropping a record.
         return "INSERT INTO " + V2Schema.transactionsTable()
                 + " (id, account_id, counterparty, currency_id, amount, type,"
-                + " balance_before, balance_after, timestamp, reason, reverted)"
-                + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                + " balance_before, balance_after, timestamp, reason,"
+                + " operator_id, operator_name, reverted)"
+                + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
     }
 
     private void bindTransaction(PreparedStatement ps, Transaction t, boolean reverted) throws SQLException {
@@ -2280,7 +2616,9 @@ public final class SqlBackend
         ps.setString(8, evidenceToString(t.balanceAfter()));
         ps.setString(9, t.timestamp().toString());
         ps.setString(10, t.reason());
-        ps.setBoolean(11, reverted);
+        ps.setString(11, t.operatorId() == null ? null : t.operatorId().toString());
+        ps.setString(12, t.operatorName());
+        ps.setBoolean(13, reverted);
     }
 
     private void bindTransaction(PreparedStatement ps, JsonModel.JsonTransaction t, boolean reverted)
@@ -2295,12 +2633,19 @@ public final class SqlBackend
         ps.setString(8, t.balanceAfter);
         ps.setString(9, t.timestamp);
         ps.setString(10, t.reason);
-        ps.setBoolean(11, reverted);
+        ps.setString(11, t.operatorId);
+        ps.setString(12, t.operatorName);
+        ps.setBoolean(13, reverted);
     }
 
     private List<Transaction> readTransactions(ResultSet rs) throws SQLException {
+        java.sql.ResultSetMetaData meta = rs.getMetaData();
+        boolean hasOperatorId = hasResultColumn(meta, "operator_id");
+        boolean hasOperatorName = hasResultColumn(meta, "operator_name");
         List<Transaction> result = new ArrayList<>();
         while (rs.next()) {
+            String operatorIdRaw = hasOperatorId ? rs.getString("operator_id") : null;
+            String operatorName = hasOperatorName ? rs.getString("operator_name") : null;
             result.add(new Transaction(
                     UUID.fromString(rs.getString("id")),
                     UUID.fromString(rs.getString("account_id")),
@@ -2311,9 +2656,22 @@ public final class SqlBackend
                     rs.getString("balance_before") == null ? null : stringToAmount(rs.getString("balance_before")),
                     rs.getString("balance_after") == null ? null : stringToAmount(rs.getString("balance_after")),
                     Instant.parse(rs.getString("timestamp")),
-                    rs.getString("reason")));
+                    rs.getString("reason"),
+                    operatorIdRaw == null ? null : UUID.fromString(operatorIdRaw),
+                    operatorName));
         }
         return result;
+    }
+
+    private static boolean hasResultColumn(java.sql.ResultSetMetaData meta, String name)
+            throws SQLException {
+        for (int i = 1; i <= meta.getColumnCount(); i++) {
+            if (name.equalsIgnoreCase(meta.getColumnName(i))
+                    || name.equalsIgnoreCase(meta.getColumnLabel(i))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private JsonModel loadAllIntoModel(Connection conn) throws PersistenceException {
@@ -2346,6 +2704,9 @@ public final class SqlBackend
         try (PreparedStatement tx = conn.prepareStatement(
                 "SELECT * FROM " + V2Schema.transactionsTable());
              ResultSet trs = tx.executeQuery()) {
+            java.sql.ResultSetMetaData txMeta = trs.getMetaData();
+            boolean hasOpId = txMeta != null && hasResultColumn(txMeta, "operator_id");
+            boolean hasOpName = txMeta != null && hasResultColumn(txMeta, "operator_name");
             while (trs.next()) {
                 JsonModel.JsonTransaction t = new JsonModel.JsonTransaction();
                 t.id = trs.getString("id");
@@ -2358,6 +2719,8 @@ public final class SqlBackend
                 t.balanceAfter = trs.getString("balance_after");
                 t.timestamp = trs.getString("timestamp");
                 t.reason = trs.getString("reason");
+                t.operatorId = hasOpId ? trs.getString("operator_id") : null;
+                t.operatorName = hasOpName ? trs.getString("operator_name") : null;
                 t.reverted = trs.getBoolean("reverted");
                 model.transactions.add(t);
             }
@@ -2373,17 +2736,177 @@ public final class SqlBackend
         } catch (SQLException e) {
             throw new PersistenceException("Failed to read nonces for backup", e);
         }
+        boolean hasAuditTable;
+        try {
+            hasAuditTable = tableExists(V2Schema.operationAuditsTable(), conn);
+        } catch (SQLException e) {
+            throw new PersistenceException("Failed to read operation audits for backup", e);
+        }
+        if (hasAuditTable) {
+            try (PreparedStatement ops = conn.prepareStatement(
+                    "SELECT id, operation, operator_id, operator_name, reason,"
+                            + " timestamp, source_backup_id, safety_backup_id FROM "
+                            + V2Schema.operationAuditsTable());
+                 ResultSet ors = ops.executeQuery()) {
+                while (ors.next()) {
+                    JsonModel.JsonOperationAudit audit = new JsonModel.JsonOperationAudit();
+                    audit.id = ors.getString("id");
+                    audit.operation = ors.getString("operation");
+                    audit.operatorId = ors.getString("operator_id");
+                    audit.operatorName = ors.getString("operator_name");
+                    audit.reason = ors.getString("reason");
+                    audit.timestamp = ors.getString("timestamp");
+                    audit.sourceBackupId = ors.getString("source_backup_id");
+                    audit.safetyBackupId = ors.getString("safety_backup_id");
+                    model.operationAudits.add(audit);
+                }
+            } catch (SQLException e) {
+                throw new PersistenceException("Failed to read operation audits for backup", e);
+            }
+        }
         return model;
     }
 
+    /**
+     * Table presence probe that tolerates dialect identifier casing: unquoted
+     * DDL is stored uppercase by some engines (H2, MySQL), so the catalog
+     * pattern is skipped and each metadata row is compared case-insensitively
+     * in Java. Runs once per initialize, so the wider scan costs nothing.
+     */
     private boolean tableExists(String tableName, Connection conn) throws SQLException {
         DatabaseMetaData meta = conn.getMetaData();
         if (meta == null) {
             return false;
         }
-        try (ResultSet rs = meta.getTables(null, null, tableName, null)) {
-            return rs != null && rs.next();
+        try (ResultSet rs = meta.getTables(null, null, null, null)) {
+            while (rs != null && rs.next()) {
+                String name = rs.getString("TABLE_NAME");
+                if (name != null && name.equalsIgnoreCase(tableName)) {
+                    return true;
+                }
+            }
+            return false;
         }
+    }
+
+    /**
+     * Writes the candidate's independent restore audits inside an OPEN
+     * transaction (no commit / no autocommit handling), so the audit table is
+     * replaced together with the world it describes. A candidate that carries
+     * no audit writes nothing, which also covers a database whose table has
+     * not been created yet. Called by the restore path after the matching
+     * delete of the table.
+     */
+    private void insertOperationAudits(JsonModel candidate, Connection conn) throws SQLException {
+        if (candidate.operationAudits.isEmpty()) {
+            return;
+        }
+        if (!tableExists(V2Schema.operationAuditsTable(), conn)) {
+            return;
+        }
+        try (PreparedStatement ps = conn.prepareStatement(
+                "INSERT INTO " + V2Schema.operationAuditsTable()
+                        + " (id, operation, operator_id, operator_name, reason, timestamp,"
+                        + " source_backup_id, safety_backup_id)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?)")) {
+            for (JsonModel.JsonOperationAudit audit : candidate.operationAudits) {
+                ps.setString(1, audit.id);
+                ps.setString(2, audit.operation);
+                ps.setString(3, audit.operatorId);
+                ps.setString(4, audit.operatorName);
+                ps.setString(5, audit.reason);
+                ps.setString(6, audit.timestamp);
+                ps.setString(7, audit.sourceBackupId);
+                ps.setString(8, audit.safetyBackupId);
+                ps.addBatch();
+            }
+            ps.executeBatch();
+        }
+    }
+
+    /**
+     * Reads every restore audit from the additive table. A database written
+     * before operation tracking has no table and reads as an empty list, never
+     * a failure. Records are returned in stored order; query ordering is the
+     * caller's job.
+     *
+     * <p>A damaged row is refused without echoing any stored value. A corrupt
+     * id, operator id or timestamp may itself carry a secret, and the parsing
+     * failures underneath quote the offending text, so refusals name only the
+     * row index and the field with a fixed detail and never attach the parsing
+     * failure as a cause.
+     */
+    private List<com.smile.aceeconomy.domain.OperationAudit> readOperationAudits(
+            String tableName, Connection conn) throws SQLException {
+        if (!tableExists(tableName, conn)) {
+            return List.of();
+        }
+        List<com.smile.aceeconomy.domain.OperationAudit> audits = new ArrayList<>();
+        try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT id, operation, operator_id, operator_name, reason, timestamp,"
+                        + " source_backup_id, safety_backup_id FROM " + tableName);
+             ResultSet rs = ps.executeQuery()) {
+            int index = -1;
+            while (rs.next()) {
+                index++;
+                String rawId = rs.getString("id");
+                String rawOperatorId = rs.getString("operator_id");
+                String rawTimestamp = rs.getString("timestamp");
+                UUID parsedId;
+                try {
+                    parsedId = UUID.fromString(rawId);
+                } catch (RuntimeException e) {
+                    throw new PersistenceException(
+                            "Invalid operation audit record at index " + index + ": malformed id");
+                }
+                if (!parsedId.toString().equals(rawId)) {
+                    throw new PersistenceException(
+                            "Invalid operation audit record at index " + index + ": non-canonical id");
+                }
+                UUID parsedOperator;
+                try {
+                    if (rawOperatorId != null) {
+                        parsedOperator = UUID.fromString(rawOperatorId);
+                        if (!parsedOperator.toString().equals(rawOperatorId)) {
+                            throw new PersistenceException(
+                                    "Invalid operation audit record at index " + index
+                                            + ": non-canonical operator id");
+                        }
+                    } else {
+                        parsedOperator = null;
+                    }
+                } catch (PersistenceException e) {
+                    throw e;
+                } catch (RuntimeException e) {
+                    throw new PersistenceException(
+                            "Invalid operation audit record at index " + index + ": malformed operator id");
+                }
+                Instant parsedTime;
+                try {
+                    parsedTime = Instant.parse(rawTimestamp);
+                } catch (RuntimeException e) {
+                    throw new PersistenceException(
+                            "Invalid operation audit record at index " + index + ": malformed timestamp");
+                }
+                try {
+                    audits.add(com.smile.aceeconomy.domain.OperationAudit.rehydrate(
+                            parsedId,
+                            rs.getString("operation"),
+                            parsedOperator,
+                            rs.getString("operator_name"),
+                            rs.getString("reason"),
+                            parsedTime,
+                            rs.getString("source_backup_id"),
+                            rs.getString("safety_backup_id")));
+                } catch (RuntimeException e) {
+                    throw new PersistenceException(
+                            "Invalid operation audit record at index " + index + ": unreadable record");
+                }
+            }
+        } catch (PersistenceException e) {
+            throw e;
+        }
+        return audits;
     }
 
     /**

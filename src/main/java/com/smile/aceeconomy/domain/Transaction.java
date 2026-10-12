@@ -20,10 +20,26 @@ public final class Transaction {
     private final Amount balanceAfter;
     private final Instant timestamp;
     private final String reason;
+    private final UUID operatorId;
+    private final String operatorName;
 
     public Transaction(UUID id, UUID accountId, UUID counterparty, String currencyId,
                        Amount amount, TransactionType type, Amount balanceBefore,
                        Amount balanceAfter, Instant timestamp, String reason) {
+        this(id, accountId, counterparty, currencyId, amount, type, balanceBefore,
+                balanceAfter, timestamp, reason, null, null);
+    }
+
+    /**
+     * Full record including the administrative audit identity. A null id with a
+     * null name means the record predates operator tracking; a null id with the
+     * console marker means a console sender. The identity is informational only:
+     * atomicity and ordering never depend on it.
+     */
+    public Transaction(UUID id, UUID accountId, UUID counterparty, String currencyId,
+                       Amount amount, TransactionType type, Amount balanceBefore,
+                       Amount balanceAfter, Instant timestamp, String reason,
+                       UUID operatorId, String operatorName) {
         this.id = id;
         this.accountId = accountId;
         this.counterparty = counterparty;
@@ -34,6 +50,8 @@ public final class Transaction {
         this.balanceAfter = balanceAfter;
         this.timestamp = timestamp;
         this.reason = reason;
+        this.operatorId = operatorId;
+        this.operatorName = operatorName;
     }
 
     public UUID id() {
@@ -74,5 +92,13 @@ public final class Transaction {
 
     public String reason() {
         return reason;
+    }
+
+    public UUID operatorId() {
+        return operatorId;
+    }
+
+    public String operatorName() {
+        return operatorName;
     }
 }

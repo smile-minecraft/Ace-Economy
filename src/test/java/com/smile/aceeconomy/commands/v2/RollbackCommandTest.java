@@ -8,6 +8,7 @@ import com.smile.acelib.command.ReplySink;
 import com.smile.acelib.command.Sender;
 import com.smile.aceeconomy.commands.v2.ports.EconomyCommandService;
 import com.smile.aceeconomy.commands.v2.ports.RollbackCommandService;
+import com.smile.aceeconomy.domain.AdminAudit;
 import com.smile.aceeconomy.operations.RollbackError;
 import com.smile.aceeconomy.operations.RollbackResult;
 import org.junit.jupiter.api.Test;
@@ -100,7 +101,7 @@ class RollbackCommandTest {
         assertNotNull(rollback, "/aceeco must expose a rollback subcommand");
         assertEquals("aceeconomy.admin.rollback", rollback.permission());
         assertEquals(1, rollback.minArgs(), "rollback requires exactly one transaction id");
-        assertEquals(1, rollback.maxArgs(), "rollback accepts no extra arguments");
+        assertEquals(2, rollback.maxArgs(), "rollback accepts one optional reason");
         assertTrue(rollback.consoleOnly(),
                 "rollback is a destructive admin operation and must be console-only");
         assertFalse(rollback.playerOnly());
@@ -127,6 +128,8 @@ class RollbackCommandTest {
         verify(sink, never()).send(
                 org.mockito.ArgumentMatchers.any(Sender.class), org.mockito.ArgumentMatchers.anyString());
         verify(rollbackFacade, never()).rollback(org.mockito.ArgumentMatchers.any(UUID.class));
+        verify(rollbackFacade, never()).rollback(org.mockito.ArgumentMatchers.any(UUID.class),
+                org.mockito.ArgumentMatchers.any(AdminAudit.class));
     }
 
     @Test
@@ -141,6 +144,8 @@ class RollbackCommandTest {
         assertEquals("ACELIB-CMD-003", ((CommandException) capturedError(sink)).getCode(),
                 "missing aceeconomy.admin.rollback must be rejected as no-permission");
         verify(rollbackFacade, never()).rollback(org.mockito.ArgumentMatchers.any(UUID.class));
+        verify(rollbackFacade, never()).rollback(org.mockito.ArgumentMatchers.any(UUID.class),
+                org.mockito.ArgumentMatchers.any(AdminAudit.class));
     }
 
     @Test
@@ -155,6 +160,8 @@ class RollbackCommandTest {
         assertEquals("ACELIB-CMD-003", ((CommandException) capturedError(sink)).getCode(),
                 "missing root aceeconomy.admin must be rejected before the child check matters");
         verify(rollbackFacade, never()).rollback(org.mockito.ArgumentMatchers.any(UUID.class));
+        verify(rollbackFacade, never()).rollback(org.mockito.ArgumentMatchers.any(UUID.class),
+                org.mockito.ArgumentMatchers.any(AdminAudit.class));
     }
 
     @Test
@@ -164,7 +171,8 @@ class RollbackCommandTest {
         CommandRegistryImpl registry = registryFor(services, sink);
         UUID transactionId = UUID.randomUUID();
         UUID reversalId = UUID.randomUUID();
-        when(rollbackFacade.rollback(transactionId)).thenReturn(
+        when(rollbackFacade.rollback(org.mockito.ArgumentMatchers.eq(transactionId),
+                org.mockito.ArgumentMatchers.any(AdminAudit.class))).thenReturn(
                 CompletableFuture.completedFuture(RollbackResult.success(List.of(reversalId))));
 
         registry.dispatch(consoleSender(true, true), "aceeco",
@@ -175,6 +183,12 @@ class RollbackCommandTest {
                 "success reply must identify the rolled back transaction: " + reply);
         assertTrue(reply.contains(reversalId.toString()),
                 "success reply must report the reversal audit record ids: " + reply);
+        ArgumentCaptor<AdminAudit> audit = ArgumentCaptor.forClass(AdminAudit.class);
+        verify(rollbackFacade).rollback(org.mockito.ArgumentMatchers.eq(transactionId), audit.capture());
+        assertEquals(AdminAudit.CONSOLE_OPERATOR_NAME, audit.getValue().operatorName(),
+                "a console dispatch without a reason still files a console audit");
+        assertEquals(AdminAudit.DEFAULT_REASON, audit.getValue().reason(),
+                "an omitted rollback reason falls back to the default");
         verify(sink, never()).sendError(
                 org.mockito.ArgumentMatchers.any(Sender.class),
                 org.mockito.ArgumentMatchers.any(Throwable.class));
@@ -186,7 +200,8 @@ class RollbackCommandTest {
         ReplySink sink = mock(ReplySink.class);
         CommandRegistryImpl registry = registryFor(services, sink);
         UUID transactionId = UUID.randomUUID();
-        when(rollbackFacade.rollback(transactionId)).thenReturn(
+        when(rollbackFacade.rollback(org.mockito.ArgumentMatchers.eq(transactionId),
+                org.mockito.ArgumentMatchers.any(AdminAudit.class))).thenReturn(
                 CompletableFuture.completedFuture(RollbackResult.alreadyReverted()));
 
         registry.dispatch(consoleSender(true, true), "aceeco",
@@ -206,7 +221,8 @@ class RollbackCommandTest {
         ReplySink sink = mock(ReplySink.class);
         CommandRegistryImpl registry = registryFor(services, sink);
         UUID transactionId = UUID.randomUUID();
-        when(rollbackFacade.rollback(transactionId)).thenReturn(CompletableFuture.completedFuture(
+        when(rollbackFacade.rollback(org.mockito.ArgumentMatchers.eq(transactionId),
+                org.mockito.ArgumentMatchers.any(AdminAudit.class))).thenReturn(CompletableFuture.completedFuture(
                 RollbackResult.failure(RollbackError.UNKNOWN_TRANSACTION,
                         "no transaction with id " + transactionId)));
 
@@ -226,7 +242,8 @@ class RollbackCommandTest {
         ReplySink sink = mock(ReplySink.class);
         CommandRegistryImpl registry = registryFor(services, sink);
         UUID transactionId = UUID.randomUUID();
-        when(rollbackFacade.rollback(transactionId)).thenReturn(CompletableFuture.completedFuture(
+        when(rollbackFacade.rollback(org.mockito.ArgumentMatchers.eq(transactionId),
+                org.mockito.ArgumentMatchers.any(AdminAudit.class))).thenReturn(CompletableFuture.completedFuture(
                 RollbackResult.failure(RollbackError.COUNTERPART_NOT_FOUND, "counterpart leg not found")));
 
         registry.dispatch(consoleSender(true, true), "aceeco",
@@ -242,7 +259,8 @@ class RollbackCommandTest {
         ReplySink sink = mock(ReplySink.class);
         CommandRegistryImpl registry = registryFor(services, sink);
         UUID transactionId = UUID.randomUUID();
-        when(rollbackFacade.rollback(transactionId)).thenReturn(CompletableFuture.completedFuture(
+        when(rollbackFacade.rollback(org.mockito.ArgumentMatchers.eq(transactionId),
+                org.mockito.ArgumentMatchers.any(AdminAudit.class))).thenReturn(CompletableFuture.completedFuture(
                 RollbackResult.failure(RollbackError.EXECUTION_FAILED, "account not found for reversal")));
 
         registry.dispatch(consoleSender(true, true), "aceeco",
@@ -260,7 +278,8 @@ class RollbackCommandTest {
         ReplySink sink = mock(ReplySink.class);
         CommandRegistryImpl registry = registryFor(services, sink);
         UUID transactionId = UUID.randomUUID();
-        when(rollbackFacade.rollback(transactionId)).thenReturn(CompletableFuture.completedFuture(
+        when(rollbackFacade.rollback(org.mockito.ArgumentMatchers.eq(transactionId),
+                org.mockito.ArgumentMatchers.any(AdminAudit.class))).thenReturn(CompletableFuture.completedFuture(
                 RollbackResult.failure(RollbackError.MARK_FAILED,
                         "reversal applied but marker persist failed: disk full")));
 
@@ -288,6 +307,25 @@ class RollbackCommandTest {
         assertEquals("ACELIB-CMD-INVALID-UUID", ((CommandException) capturedError(sink)).getCode(),
                 "an unparseable transaction id must fail with the stable invalid-uuid code");
         verify(rollbackFacade, never()).rollback(org.mockito.ArgumentMatchers.any(UUID.class));
+        verify(rollbackFacade, never()).rollback(org.mockito.ArgumentMatchers.any(UUID.class),
+                org.mockito.ArgumentMatchers.any(AdminAudit.class));
+    }
+
+    @Test
+    void rollbackWithExtraArgumentsNeverReachesTheFacade() {
+        CommandServices services = services();
+        ReplySink sink = mock(ReplySink.class);
+        CommandRegistryImpl registry = registryFor(services, sink);
+
+        registry.dispatch(consoleSender(true, true), "aceeco",
+                List.of("rollback", UUID.randomUUID().toString(), "harbor-rollback", "extra"));
+
+        Throwable error = capturedError(sink);
+        assertTrue(error instanceof CommandException,
+                "the dispatcher must reject extra arguments as a typed error");
+        verify(rollbackFacade, never()).rollback(org.mockito.ArgumentMatchers.any(UUID.class));
+        verify(rollbackFacade, never()).rollback(org.mockito.ArgumentMatchers.any(UUID.class),
+                org.mockito.ArgumentMatchers.any(AdminAudit.class));
     }
 
     @Test
@@ -296,7 +334,8 @@ class RollbackCommandTest {
         ReplySink sink = mock(ReplySink.class);
         CommandRegistryImpl registry = registryFor(services, sink);
         UUID transactionId = UUID.randomUUID();
-        when(rollbackFacade.rollback(transactionId)).thenReturn(
+        when(rollbackFacade.rollback(org.mockito.ArgumentMatchers.eq(transactionId),
+                org.mockito.ArgumentMatchers.any(AdminAudit.class))).thenReturn(
                 CompletableFuture.failedFuture(new IllegalStateException("storage boom")));
 
         registry.dispatch(consoleSender(true, true), "aceeco",
@@ -314,7 +353,8 @@ class RollbackCommandTest {
         ReplySink sink = mock(ReplySink.class);
         CommandRegistryImpl registry = registryFor(services, sink);
         UUID transactionId = UUID.randomUUID();
-        when(rollbackFacade.rollback(transactionId))
+        when(rollbackFacade.rollback(org.mockito.ArgumentMatchers.eq(transactionId),
+                org.mockito.ArgumentMatchers.any(AdminAudit.class)))
                 .thenThrow(new IllegalStateException("facade sync boom"));
 
         registry.dispatch(consoleSender(true, true), "aceeco",
@@ -326,7 +366,9 @@ class RollbackCommandTest {
                         + "not as a generic dispatcher error");
         verify(sink, never()).send(
                 org.mockito.ArgumentMatchers.any(Sender.class), org.mockito.ArgumentMatchers.anyString());
-        verify(rollbackFacade, org.mockito.Mockito.times(1)).rollback(transactionId);
+        verify(rollbackFacade, org.mockito.Mockito.times(1)).rollback(
+                org.mockito.ArgumentMatchers.eq(transactionId),
+                org.mockito.ArgumentMatchers.any(AdminAudit.class));
     }
 
     @Test
@@ -335,7 +377,8 @@ class RollbackCommandTest {
         ReplySink sink = mock(ReplySink.class);
         CommandRegistryImpl registry = registryFor(services, sink);
         UUID transactionId = UUID.randomUUID();
-        when(rollbackFacade.rollback(transactionId)).thenReturn(null);
+        when(rollbackFacade.rollback(org.mockito.ArgumentMatchers.eq(transactionId),
+                org.mockito.ArgumentMatchers.any(AdminAudit.class))).thenReturn(null);
 
         registry.dispatch(consoleSender(true, true), "aceeco",
                 List.of("rollback", transactionId.toString()));
@@ -347,7 +390,9 @@ class RollbackCommandTest {
                 "the null-future code must be distinct from the empty-result code");
         verify(sink, never()).send(
                 org.mockito.ArgumentMatchers.any(Sender.class), org.mockito.ArgumentMatchers.anyString());
-        verify(rollbackFacade, org.mockito.Mockito.times(1)).rollback(transactionId);
+        verify(rollbackFacade, org.mockito.Mockito.times(1)).rollback(
+                org.mockito.ArgumentMatchers.eq(transactionId),
+                org.mockito.ArgumentMatchers.any(AdminAudit.class));
     }
 
     @Test
@@ -356,7 +401,8 @@ class RollbackCommandTest {
         ReplySink sink = mock(ReplySink.class);
         CommandRegistryImpl registry = registryFor(services, sink);
         UUID transactionId = UUID.randomUUID();
-        when(rollbackFacade.rollback(transactionId)).thenReturn(CompletableFuture.completedFuture(
+        when(rollbackFacade.rollback(org.mockito.ArgumentMatchers.eq(transactionId),
+                org.mockito.ArgumentMatchers.any(AdminAudit.class))).thenReturn(CompletableFuture.completedFuture(
                 RollbackResult.failure(null, "malformed failure without a typed error")));
 
         registry.dispatch(consoleSender(true, true), "aceeco",
@@ -371,6 +417,8 @@ class RollbackCommandTest {
                 "the underlying message must stay visible for diagnosis");
         verify(sink, never()).send(
                 org.mockito.ArgumentMatchers.any(Sender.class), org.mockito.ArgumentMatchers.anyString());
-        verify(rollbackFacade, org.mockito.Mockito.times(1)).rollback(transactionId);
+        verify(rollbackFacade, org.mockito.Mockito.times(1)).rollback(
+                org.mockito.ArgumentMatchers.eq(transactionId),
+                org.mockito.ArgumentMatchers.any(AdminAudit.class));
     }
 }

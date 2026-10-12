@@ -138,39 +138,43 @@ Java 玩家開啟的是箱子選單，按鈕與格子對應如下：
 
 ## 管理員權限
 
-管理員的主指令是 `/aceeco`，v2 指令規格未提供別名。想動餘額就用 `give`、`take`、`set`；想查紀錄就用 `history`，它只讀取已記錄的交易，不會變更餘額。`reload`、`rollback`、`restore` 與 `import` 只能由主控台執行；`rollback` 要帶交易 ID，`restore` 要帶備份 ID 與精確的 `confirm`，`import` 要帶來源與路徑（寫入時需精確的 `apply confirm`）。搞混執行者或參數就看[常見指令錯誤](#常見指令錯誤)。
+管理員的主指令是 `/aceeco`，v2 指令規格未提供別名。想動餘額就用 `give`、`take`、`set`；想查紀錄就用 `history`，它只讀取已記錄的交易，不會變更餘額。`reload`、`rollback`、`restore` 與 `import` 只能由主控台執行；`rollback` 要帶交易 ID，`restore` 要帶備份 ID 與精確的 `confirm`，`import` 要帶來源與路徑（寫入時需精確的 `apply confirm`）。會動到餘額的六個操作（`give`、`take`、`set`、`rollback`、`restore`、`import`）都可在尾段加上可選的 `reason` 留作稽核；權限維持不變。搞混執行者或參數就看[常見指令錯誤](#常見指令錯誤)。
 
 | 子指令 | 用法 | 執行者 | 子指令權限 | 別名 |
 |---|---|---|---|---|
-| `give` | `/aceeco give <player> <amount> [currency]` | 玩家或主控台 | `aceeconomy.admin.give` | 無 |
-| `take` | `/aceeco take <player> <amount> [currency]` | 玩家或主控台 | `aceeconomy.admin.take` | 無 |
-| `set` | `/aceeco set <player> <amount> [currency]` | 玩家或主控台 | `aceeconomy.admin.set` | 無 |
+| `give` | `/aceeco give <player> <amount> [currency] [reason]` | 玩家或主控台 | `aceeconomy.admin.give` | 無 |
+| `take` | `/aceeco take <player> <amount> [currency] [reason]` | 玩家或主控台 | `aceeconomy.admin.take` | 無 |
+| `set` | `/aceeco set <player> <amount> [currency] [reason]` | 玩家或主控台 | `aceeconomy.admin.set` | 無 |
 | `history` | `/aceeco history [player] [currency] [page]` | 玩家或主控台 | `aceeconomy.admin.history` | 無 |
 | `reload` | `/aceeco reload` | 僅限主控台 | `aceeconomy.admin.reload` | 無 |
-| `rollback` | `/aceeco rollback <transaction-id>` | 僅限主控台 | `aceeconomy.admin.rollback` | 無 |
+| `rollback` | `/aceeco rollback <transaction-id> [reason]` | 僅限主控台 | `aceeconomy.admin.rollback` | 無 |
 | `backup` | `/aceeco backup [label]` | 玩家或主控台 | `aceeconomy.admin.backup` | 無 |
-| `restore` | `/aceeco restore <backup-id> confirm` | 僅限主控台 | `aceeconomy.admin.restore` | 無 |
-| `import` | `/aceeco import <essentials\|cmi> <path> [currency] [apply confirm]` | 僅限主控台 | `aceeconomy.admin.import` | 無 |
+| `restore` | `/aceeco restore <backup-id> confirm [reason]` | 僅限主控台 | `aceeconomy.admin.restore` | 無 |
+| `import` | `/aceeco import <essentials\|cmi> <path> [currency] [apply confirm] [reason]` | 僅限主控台 | `aceeconomy.admin.import` | 無 |
 
 每個操作除了主權限 `aceeconomy.admin`，還要各自的子指令權限。插件宣告的預設值是：玩家指令權限為 `true`，管理員權限為 `op`。另外，插件也宣告 `aceeconomy.bypass.debt`，預設值為 `op`，用於跳過債務上限的權限。
 
+### 管理操作稽核：操作者與原因
+
+上述六個操作（`give`、`take`、`set`、`rollback`、`restore`、`import`）的稽核規則是：每次成功執行都要記下誰做的、為什麼做。操作者一律從指令執行者自動取得，不能用參數指定：玩家執行時記下其 UUID 與當時的顯示名稱，主控台執行時記下固定的主控台標記，因此無法冒充別的操作者。可選的尾段 `reason` 是單一 token（不可含空白）；空白的原因會被拒絕，超過 256 個字元會被拒絕，看起來像敏感資料的值（例如 IPv4 或 IPv6 位址的壓縮、完整、中括號、映射或區域形式、網址或 token）會被拒絕且不會把原文回顯出來，也不會做任何網路查詢。完整形式的 IPv6 位址即使嵌在較長的 token 裡（例如帶有 `ip=` 前綴）也會同樣被拒，一般含單一冒號的 token 不受影響。還原快照若帶有損壞的操作紀錄，會在動到線上資料之前被拒，診斷只會指出紀錄的位置與欄位，不會回顯儲存的值，線上資料保持不動。這層檢查只是基本的過濾，不宣稱能識別所有敏感字串。省略 `reason` 時，紀錄會記下明確的預設值 `unspecified`，不會留空。同時給貨幣與原因時，貨幣在前、原因在最後。稽核欄位只在交易成功寫入時跟交易放在同一次原子提交裡存檔；失敗或回滾不會留下孤立的稽核紀錄。`restore` 會另外留一筆獨立的操作紀錄，記下來源備份與安全備份兩個 ID，並跟還原放在同一次提交裡，不會另外產生一筆零元存入；這筆紀錄只在內部保存，不新增公開查詢指令。一般操作的原由跟交易存在一起，仍可透過 `/aceeco history` 的 `reasonContains` 過濾命中；獨立的還原操作紀錄不會顯示為明細項目。
+
 ### 增加餘額：`/aceeco give`
 
-需要替玩家增加餘額時使用 `give`。
+需要替玩家增加餘額時使用 `give`。尾段可加上可選的 `reason` 留作稽核，規則見上方稽核一節。
 
-範例：`/aceeco give Alex 500 <currency>`
+範例：`/aceeco give Alex 500 <currency>`。附原因：`/aceeco give Alex 500 <currency> monthly-reward`。
 
 ### 扣除餘額：`/aceeco take`
 
-需要從玩家餘額扣除金額時使用 `take`。
+需要從玩家餘額扣除金額時使用 `take`。尾段可加上可選的 `reason` 留作稽核，規則見上方稽核一節。
 
-範例：`/aceeco take Alex 125 <currency>`
+範例：`/aceeco take Alex 125 <currency>`。附原因：`/aceeco take Alex 125 <currency> penalty-case`。
 
 ### 設定餘額：`/aceeco set`
 
-需要把玩家餘額直接設成指定金額時使用 `set`。
+需要把玩家餘額直接設成指定金額時使用 `set`。尾段可加上可選的 `reason` 留作稽核，規則見上方稽核一節。
 
-範例：`/aceeco set Alex 1000 <currency>`
+範例：`/aceeco set Alex 1000 <currency>`。附原因：`/aceeco set Alex 1000 <currency> balance-fix`。
 
 ### 查詢交易歷史：`/aceeco history`
 
@@ -200,7 +204,7 @@ Java 玩家開啟的是箱子選單，按鈕與格子對應如下：
 
 ### 回溯交易：`/aceeco rollback`
 
-管理員需要依 ID 復原一筆已記錄的交易時使用 `rollback`。這是具破壞性的管理操作，因此僅限主控台執行，而且需要同時擁有 `aceeconomy.admin` 與 `aceeconomy.admin.rollback`。交易 ID 是該筆交易的 UUID；格式不正確時會在查詢前就被拒絕。回溯遵循與一般交易相同的負債規則：`economy.allow-negative-balance` 為 `false` 時，會導致餘額變負的回溯會被拒絕且不變更任何資料；為 `true` 時，回溯可以在設定的負債額度內產生負餘額。
+管理員需要依 ID 復原一筆已記錄的交易時使用 `rollback`。這是具破壞性的管理操作，因此僅限主控台執行，而且需要同時擁有 `aceeconomy.admin` 與 `aceeconomy.admin.rollback`。交易 ID 是該筆交易的 UUID；格式不正確時會在查詢前就被拒絕。回溯遵循與一般交易相同的負債規則：`economy.allow-negative-balance` 為 `false` 時，會導致餘額變負的回溯會被拒絕且不變更任何資料；為 `true` 時，回溯可以在設定的負債額度內產生負餘額。尾段可加上可選的 `reason`，會跟回溯一起記錄（規則見上方稽核一節）。
 
 各種結果都會有明確回覆：
 
@@ -215,7 +219,7 @@ Java 玩家開啟的是箱子選單，按鈕與格子對應如下：
 | 執行失敗 | 錯誤提示：回溯未生效，該交易仍可重試。 |
 | 標記寫入失敗 | 錯誤提示：回溯效果可能已發生但回溯標記缺失；請先檢查儲存並人工核對，再考慮重試。 |
 
-範例：`/aceeco rollback 0b5f8a2e-1c3d-4e5f-6a7b-8c9d0e1f2a3b`
+範例：`/aceeco rollback 0b5f8a2e-1c3d-4e5f-6a7b-8c9d0e1f2a3b`。附原因：`/aceeco rollback 0b5f8a2e-1c3d-4e5f-6a7b-8c9d0e1f2a3b duplicate-payout`。
 
 `rollback` 指令已經接入實際上線的指令介面，也有自動化合約測試覆蓋，但**尚未在實際運作的伺服器上驗證過**：Folia/Bukkit 橋接的實機執行、真實 MySQL 儲存，以及用真實資料進行的故障注入演練，都還是未完成的發布門檻。在這些驗證完成之前，上表內容應視為設計規格，而不是實測結果。
 
@@ -235,26 +239,26 @@ Java 玩家開啟的是箱子選單，按鈕與格子對應如下：
 
 ### 還原邏輯備份：`/aceeco restore`
 
-還原會替換正式經濟資料，因此只能從主控台執行，且需要主權限與子指令權限。確認字串區分大小寫，只接受小寫 `confirm`。執行前先請所有玩家離線，失敗就看[常見指令錯誤](#常見指令錯誤)。
+還原會替換正式經濟資料，因此只能從主控台執行，且需要主權限與子指令權限。確認字串區分大小寫，只接受小寫 `confirm`。尾段可加上可選的 `reason`；這次執行會另外留一筆獨立操作紀錄，規則見上方稽核一節。執行前先請所有玩家離線，失敗就看[常見指令錯誤](#常見指令錯誤)。
 
 | 項目 | 說明 |
 |---|---|
-| 用法 | `/aceeco restore <backup-id> confirm` |
+| 用法 | `/aceeco restore <backup-id> confirm [reason]` |
 | 執行者 | 僅限主控台；有任何玩家在線時會拒絕 |
 | 權限 | `aceeconomy.admin.restore`（另需主權限 `aceeconomy.admin`） |
-| 執行前檢查 | 在動到正式資料前，先檢查 JSON 結構、schema 版本、紀錄與設定貨幣的相容性 |
+| 執行前檢查 | 在動到正式資料前，先檢查 JSON 結構、schema 版本、紀錄（含還原操作紀錄）與設定貨幣的相容性；損壞的快照會被拒絕且正式資料保持不變 |
 | 安全備份 | 先備份目前狀態；安全備份失敗時中止還原 |
 | 成功後 | 清除排行榜快取，但不會熱刷新 session 或 GUI。讓玩家回來前必須重啟伺服器。 |
 
-範例：`/aceeco restore 20260824T093000-aaaa1111 confirm`
+範例：`/aceeco restore 20260824T093000-aaaa1111 confirm`。附原因：`/aceeco restore 20260824T093000-aaaa1111 confirm wrong-payout`。
 
 ### 匯入餘額：`/aceeco import`
 
-當 EssentialsX 或 CMI 伺服器的餘額需要帶進 v2 時使用。指令只能從主控台執行，且需要 `aceeconomy.admin` 與 `aceeconomy.admin.import`。沒有精確的 `apply confirm` 時一律是預演：不寫入、不備份、不消耗防重複狀態。
+當 EssentialsX 或 CMI 伺服器的餘額需要帶進 v2 時使用。指令只能從主控台執行，且需要 `aceeconomy.admin` 與 `aceeconomy.admin.import`。沒有精確的 `apply confirm` 時一律是預演：不寫入、不備份、不消耗防重複狀態。預演或套用都可在尾段加上可選的 `reason`，套用時會跟該次執行一起記錄（規則見上方稽核一節）。
 
 | 項目 | 說明 |
 |---|---|
-| 用法 | `/aceeco import <essentials\|cmi> <path> [currency] [apply confirm]` |
+| 用法 | `/aceeco import <essentials\|cmi> <path> [currency] [apply confirm] [reason]` |
 | 執行者 | 僅限主控台 |
 | 權限 | `aceeconomy.admin.import`（另需主權限 `aceeconomy.admin`） |
 | 來源格式 | Essentials：`<uuid>.yml` 玩家檔案或其目錄（`money:` 餘額、可選 `last-account-name:`）。支援 EssentialsX 2.x userdata。CMI：管理員整理好的 UTF-8 對帳檔（每行 `uuid,name,balance`，可有表頭，`.csv`/`.txt`）。CMI 的 `cmi.sqlite.db` 二進位檔不支援，會直接拒絕。 |
@@ -270,6 +274,7 @@ Java 玩家開啟的是箱子選單，按鈕與格子對應如下：
 /aceeco import essentials userdata coin apply confirm
 /aceeco import cmi balances.csv
 /aceeco import cmi balances.csv coin apply confirm
+/aceeco import cmi balances.csv coin apply confirm migration-topup
 ```
 
 先把 Essentials 的 `plugins/Essentials/userdata/` 檔案（或整理好的 CMI 對帳檔）複製到 `plugins/AceEconomy/import/`；指令不會讀取該目錄以外的任何位置。詳細用法見本頁 `import` 章節。
@@ -286,9 +291,10 @@ Java 玩家開啟的是箱子選單，按鈕與格子對應如下：
 | 金額格式錯誤 | 請輸入大於零、符合貨幣小數位數且未超過指令上限的數字。 |
 | 經濟操作被拒絕 | 依回傳的錯誤修正帳戶或經濟條件，例如餘額不足或超過債務上限。 |
 | 回溯被拒絕 | 依錯誤提示判別：需要有效的交易 UUID、已回溯的交易是空操作、標記失敗需先人工核對再重試。 |
-| 還原確認被拒絕 | 必須使用精確的小寫 `confirm`：`/aceeco restore <backup-id> confirm`。`CONFIRM`、`Confirm` 與其他拼法都會被拒絕。 |
+| 還原確認被拒絕 | 必須使用精確的小寫 `confirm`：`/aceeco restore <backup-id> confirm [reason]`。`CONFIRM`、`Confirm` 與其他拼法都會被拒絕。 |
 | 還原時有玩家在線 | 先讓所有玩家離線，再從主控台重試。 |
 | 還原的安全備份或快照檢查失敗 | 保留正式資料，依錯誤提示檢查原因；不要刪除目前儲存內容來強行還原。 |
-| 匯入確認被拒絕 | 沒有精確的 `apply confirm` 就只是預覽。請重跑為 `/aceeco import <essentials\|cmi> <path> [currency] apply confirm`。 |
+| 匯入確認被拒絕 | 沒有精確的 `apply confirm` 就只是預覽。請重跑為 `/aceeco import <essentials\|cmi> <path> [currency] apply confirm [reason]`。 |
 | 匯入路徑被拒絕 | 路徑必須相對於 `<plugin data folder>/import`。絕對路徑、`..`、symlink、敏感檔名與不支援的副檔名都會在讀檔前拒絕。 |
+| 稽核原因被拒絕 | `reason` 必須是單一 token（不含空白、至多 256 個字元），也可省略；看起來像敏感資料的值會被拒絕且不會回顯原文。 |
 | 匯入回報失敗 | 看失敗摘要：未知格式、無效數字與負餘額不會被靜默當成零。修好來源後重跑，只會補上還沒套用的部分。 |

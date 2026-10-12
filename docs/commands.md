@@ -138,39 +138,43 @@ For a valid v2 banknote, durable replay protection and credit complete before th
 
 ## For administrators
 
-The administrator root is `/aceeco`, with no alias listed by the v2 command specification. The root permission is `aceeconomy.admin`; each operation also declares its own permission node. The mutation commands accept the same player, amount, and optional currency pattern as the player commands. `history` reads recorded transactions instead of changing balances. `reload`, `rollback`, `restore`, and `import` are console-only; `rollback` takes a transaction id, `restore` takes a backup id plus the exact confirmation word `confirm`, and `import` takes a source plus a gate-relative path (writes only with the exact `apply confirm` pair).
+The administrator root is `/aceeco`, with no alias listed by the v2 command specification. The root permission is `aceeconomy.admin`; each operation also declares its own permission node. The mutation commands accept the same player, amount, and optional currency pattern as the player commands. `history` reads recorded transactions instead of changing balances. `reload`, `rollback`, `restore`, and `import` are console-only; `rollback` takes a transaction id, `restore` takes a backup id plus the exact confirmation word `confirm`, and `import` takes a source plus a gate-relative path (writes only with the exact `apply confirm` pair). The six balance-changing operations (`give`, `take`, `set`, `rollback`, `restore`, and `import`) accept an optional trailing `reason` for the audit record; their permissions are unchanged.
 
 | Subcommand | Usage | Sender | Subcommand permission | Alias |
 |---|---|---|---|---|
-| `give` | `/aceeco give <player> <amount> [currency]` | Player or console | `aceeconomy.admin.give` | None |
-| `take` | `/aceeco take <player> <amount> [currency]` | Player or console | `aceeconomy.admin.take` | None |
-| `set` | `/aceeco set <player> <amount> [currency]` | Player or console | `aceeconomy.admin.set` | None |
+| `give` | `/aceeco give <player> <amount> [currency] [reason]` | Player or console | `aceeconomy.admin.give` | None |
+| `take` | `/aceeco take <player> <amount> [currency] [reason]` | Player or console | `aceeconomy.admin.take` | None |
+| `set` | `/aceeco set <player> <amount> [currency] [reason]` | Player or console | `aceeconomy.admin.set` | None |
 | `history` | `/aceeco history [player] [currency] [page]` | Player or console | `aceeconomy.admin.history` | None |
 | `reload` | `/aceeco reload` | Console only | `aceeconomy.admin.reload` | None |
-| `rollback` | `/aceeco rollback <transaction-id>` | Console only | `aceeconomy.admin.rollback` | None |
+| `rollback` | `/aceeco rollback <transaction-id> [reason]` | Console only | `aceeconomy.admin.rollback` | None |
 | `backup` | `/aceeco backup [label]` | Player or console | `aceeconomy.admin.backup` | None |
-| `restore` | `/aceeco restore <backup-id> confirm` | Console only | `aceeconomy.admin.restore` | None |
-| `import` | `/aceeco import <essentials\|cmi> <path> [currency] [apply confirm]` | Console only | `aceeconomy.admin.import` | None |
+| `restore` | `/aceeco restore <backup-id> confirm [reason]` | Console only | `aceeconomy.admin.restore` | None |
+| `import` | `/aceeco import <essentials\|cmi> <path> [currency] [apply confirm] [reason]` | Console only | `aceeconomy.admin.import` | None |
 
 The declared defaults are `true` for the player command permissions and `op` for the administrator permissions. The plugin also declares `aceeconomy.bypass.debt` with an `op` default for debt-limit bypass access.
 
+### Administrative audit: operator and reason
+
+The audit rule for the six operations above (`give`, `take`, `set`, `rollback`, `restore`, `import`) is: every successful run records who did it and why. The operator is taken from the command sender automatically and is never an argument: a player sender records its UUID with its display name at the time, while the console records a fixed console marker, so one operator cannot pose as another. The optional trailing `reason` is a single token (no spaces); an empty or blank reason is rejected, a reason longer than 256 characters is rejected, and a value that looks like sensitive material (for example an IPv4 or IPv6 address in compressed, full, bracketed, mapped, or zoned form, a URL, or a token) is refused without repeating the value back and without any network lookup. A full-form IPv6 address embedded in a longer token (for example after an `ip=` prefix) is refused the same way, while ordinary single-colon tokens stay allowed. When a restore snapshot carries a corrupt operation record, the refusal names only the record position and the field, never the stored value, and live data is left untouched. That screen is only a best-effort filter and does not claim to catch every sensitive string. When `reason` is omitted, the record keeps the explicit default `unspecified` instead of a blank. When both currency and reason are given, currency comes first and reason comes last. Audit fields are stored together with the transaction in the same atomic commit, and only on success: failed or rolled-back runs leave no orphan audit record. A `restore` run keeps a separate operation record holding both the source and safety-backup ids, committed together with the restore and without creating a zero-value deposit; that record is kept internally and no new public command queries it. Reasons on ordinary operations travel with their transactions and stay reachable through the existing `reasonContains` filter on `/aceeco history`; the separate restore record is not shown as a history entry.
+
 ### Add to a balance: `/aceeco give`
 
-Use `give` when an administrator needs to add an amount to a player's balance.
+Use `give` when an administrator needs to add an amount to a player's balance. An optional trailing reason may be added for the audit record; see the audit rule above.
 
-Example: `/aceeco give Alex 500 <currency>`
+Example: `/aceeco give Alex 500 <currency>`. With a reason: `/aceeco give Alex 500 <currency> monthly-reward`.
 
 ### Remove from a balance: `/aceeco take`
 
-Use `take` when an administrator needs to subtract an amount from a player's balance.
+Use `take` when an administrator needs to subtract an amount from a player's balance. An optional trailing reason may be added for the audit record; see the audit rule above.
 
-Example: `/aceeco take Alex 125 <currency>`
+Example: `/aceeco take Alex 125 <currency>`. With a reason: `/aceeco take Alex 125 <currency> penalty-case`.
 
 ### Set a balance: `/aceeco set`
 
-Use `set` when an administrator needs to assign a player's balance to a specific amount.
+Use `set` when an administrator needs to assign a player's balance to a specific amount. An optional trailing reason may be added for the audit record; see the audit rule above.
 
-Example: `/aceeco set Alex 1000 <currency>`
+Example: `/aceeco set Alex 1000 <currency>`. With a reason: `/aceeco set Alex 1000 <currency> balance-fix`.
 
 ### Query the transaction history: `/aceeco history`
 
@@ -200,7 +204,7 @@ Example: `/aceeco reload`
 
 ### Roll back a transaction: `/aceeco rollback`
 
-Use `rollback` when an administrator needs to reverse a recorded transaction by its id. This is a destructive administrative action, so it is console-only and requires both `aceeconomy.admin` and `aceeconomy.admin.rollback`. The transaction id is the UUID shown for the transaction; it must be a valid UUID or the command is rejected before anything is touched. A rollback follows the same debt policy as ordinary transactions: when `economy.allow-negative-balance` is `false`, a reversal that would drive a balance negative is refused and nothing is changed; when `true`, the reversal may go negative within the configured debt limit.
+Use `rollback` when an administrator needs to reverse a recorded transaction by its id. This is a destructive administrative action, so it is console-only and requires both `aceeconomy.admin` and `aceeconomy.admin.rollback`. The transaction id is the UUID shown for the transaction; it must be a valid UUID or the command is rejected before anything is touched. A rollback follows the same debt policy as ordinary transactions: when `economy.allow-negative-balance` is `false`, a reversal that would drive a balance negative is refused and nothing is changed; when `true`, the reversal may go negative within the configured debt limit. An optional trailing reason may be added; it is recorded with the reversal (see the audit rule above).
 
 Outcomes are reported explicitly:
 
@@ -215,7 +219,7 @@ Outcomes are reported explicitly:
 | Execution failed | Typed error: the reversal was not applied and the transaction stays retryable. |
 | Marker persist failed | Typed error stating the reversal may already be applied while the reverted marker is missing; inspect storage and reconcile manually before any retry. |
 
-Example: `/aceeco rollback 0b5f8a2e-1c3d-4e5f-6a7b-8c9d0e1f2a3b`
+Example: `/aceeco rollback 0b5f8a2e-1c3d-4e5f-6a7b-8c9d0e1f2a3b`. With a reason: `/aceeco rollback 0b5f8a2e-1c3d-4e5f-6a7b-8c9d0e1f2a3b duplicate-payout`.
 
 The rollback command is wired into the production command surface and covered by automated contract tests, but it has **not** been verified on a live server yet: Folia/Bukkit bridge execution, live MySQL storage, and fault-injection drills with real data are still open release gates. Treat the outcomes above as the designed contract until that validation is done.
 
@@ -235,26 +239,26 @@ The snapshot is a logical v2 JSON model. It includes accounts, balances, transac
 
 ### Restore a logical backup: `/aceeco restore`
 
-Restore replaces the live economy state, so it is console-only and requires both the root and child permissions. The confirmation token is case-sensitive: only lowercase `confirm` is accepted.
+Restore replaces the live economy state, so it is console-only and requires both the root and child permissions. The confirmation token is case-sensitive: only lowercase `confirm` is accepted. An optional trailing reason may be added; the run keeps a separate operation record as described in the audit rule above.
 
 | Item | Details |
 |---|---|
-| Usage | `/aceeco restore <backup-id> confirm` |
+| Usage | `/aceeco restore <backup-id> confirm [reason]` |
 | Sender | Console only; restore is rejected while any player is online |
 | Permission | `aceeconomy.admin.restore` (with the root `aceeconomy.admin`) |
-| Preflight | JSON shape, schema version, records, and configured-currency compatibility are checked before live data is touched |
+| Preflight | JSON shape, schema version, records (including the restore operation records), and configured-currency compatibility are checked before live data is touched; a corrupt snapshot leaves the live state unchanged |
 | Safety | A safety backup of the current state is created first; if it fails, restore is aborted |
 | Success boundary | The leaderboard cache is cleared, but sessions and GUIs are not hot-refreshed. Restart the server before players return. |
 
-Example: `/aceeco restore 20260824T093000-aaaa1111 confirm`
+Example: `/aceeco restore 20260824T093000-aaaa1111 confirm`. With a reason: `/aceeco restore 20260824T093000-aaaa1111 confirm wrong-payout`.
 
 ### Import balances: `/aceeco import`
 
-Use `import` when balances from an EssentialsX or CMI server must be carried into v2. The command is console-only and requires both `aceeconomy.admin` and `aceeconomy.admin.import`. Without the exact `apply confirm` pair it is a dry-run preview: nothing is written, no backup is taken, and no idempotency state is consumed.
+Use `import` when balances from an EssentialsX or CMI server must be carried into v2. The command is console-only and requires both `aceeconomy.admin` and `aceeconomy.admin.import`. Without the exact `apply confirm` pair it is a dry-run preview: nothing is written, no backup is taken, and no idempotency state is consumed. An optional trailing reason may follow in either the preview or the apply form; on apply it is recorded with the run (see the audit rule above).
 
 | Item | Details |
 |---|---|
-| Usage | `/aceeco import <essentials\|cmi> <path> [currency] [apply confirm]` |
+| Usage | `/aceeco import <essentials\|cmi> <path> [currency] [apply confirm] [reason]` |
 | Sender | Console only |
 | Permission | `aceeconomy.admin.import` (with the root `aceeconomy.admin`) |
 | Source input | Essentials: a `<uuid>.yml` userdata file or a directory of them (`money:` balance, optional `last-account-name:`). Supported: EssentialsX 2.x userdata. CMI: an operator-prepared UTF-8 balance sheet (`uuid,name,balance` per line, header optional, `.csv`/`.txt`). The raw `cmi.sqlite.db` binary is not supported and is rejected. |
@@ -270,6 +274,7 @@ Examples:
 /aceeco import essentials userdata coin apply confirm
 /aceeco import cmi balances.csv
 /aceeco import cmi balances.csv coin apply confirm
+/aceeco import cmi balances.csv coin apply confirm migration-topup
 ```
 
 Copy the Essentials `plugins/Essentials/userdata/` files (or the prepared CMI sheet) into `plugins/AceEconomy/import/` first; the command never reads outside that directory. See the `import` row in the administrator table above.
@@ -286,9 +291,10 @@ Copy the Essentials `plugins/Essentials/userdata/` files (or the prepared CMI sh
 | Invalid amount | Use a number that is positive, within the currency scale, and within the command limit. |
 | Economy operation rejected | Read the returned error and correct the account or economy condition, such as insufficient funds or a debt limit. |
 | Rollback rejected | Check the typed error: a valid transaction UUID is required, an already reverted transaction is a no-op, and a marker failure needs manual reconciliation before retrying. |
-| Restore confirmation rejected | Use the exact lowercase word `confirm`: `/aceeco restore <backup-id> confirm`. `CONFIRM`, `Confirm`, and other spellings are rejected. |
+| Restore confirmation rejected | Use the exact lowercase word `confirm`: `/aceeco restore <backup-id> confirm [reason]`. `CONFIRM`, `Confirm`, and other spellings are rejected. |
 | Restore rejected because players are online | Run restore from the console after all players have left. |
 | Restore safety or snapshot check failed | Keep the live data unchanged, inspect the typed error, and do not delete the current store to force a restore. |
-| Import confirmation rejected | Without the exact pair `apply confirm` the command only previews. Re-run as `/aceeco import <essentials\|cmi> <path> [currency] apply confirm`. |
+| Import confirmation rejected | Without the exact pair `apply confirm` the command only previews. Re-run as `/aceeco import <essentials\|cmi> <path> [currency] apply confirm [reason]`. |
 | Import path rejected | The path must be relative to `<plugin data folder>/import`. Absolute paths, `..`, symlinks, sensitive names, and unsupported extensions are refused before anything is read. |
+| Audit reason rejected | Use a single token (`reason`) of at most 256 characters with no spaces, or omit it; values that look like sensitive material are refused without repeating them back. |
 | Import reports failures | Read the failure summary: unknown formats, invalid numbers, and negative balances never become silent zeroes. Re-running after a fix only applies what is still missing. |

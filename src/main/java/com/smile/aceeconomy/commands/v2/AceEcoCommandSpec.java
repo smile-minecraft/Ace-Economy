@@ -8,6 +8,7 @@ import com.smile.acelib.command.TypedContext;
 import com.smile.acelib.command.TypedSubCommand;
 import com.smile.aceeconomy.commands.v2.CommandModels.CurrencyInfo;
 import com.smile.aceeconomy.commands.v2.CommandModels.PlayerIdentity;
+import com.smile.aceeconomy.domain.AdminAudit;
 import com.smile.aceeconomy.infrastructure.acelib.ConfigLangAdapter;
 import com.smile.aceeconomy.operations.AuditPage;
 import com.smile.aceeconomy.operations.BackupResult;
@@ -113,14 +114,16 @@ public final class AceEcoCommandSpec {
         CommandArgument<String> player = CommandArguments.playerName(services);
         CommandArgument<String> amount = CommandArguments.amountToken(services);
         CommandArgument<CurrencyInfo> currency = CommandArguments.currency(services);
+        CommandArgument<String> reason = CommandArguments.reason();
         return TypedSubCommand.builder(operation)
                 .description(operation + " a player's balance")
-                .usage("<player> <amount> [currency]")
+                .usage("<player> <amount> [currency] [reason]")
                 .permission("aceeconomy.admin." + operation)
                 .argument(player)
                 .argument(amount)
                 .optional(currency, sender -> CommandArguments.defaultCurrency(services))
-                .executes(context -> executeMutation(services, context, operation, player, amount, currency))
+                .optional(reason, sender -> "")
+                .executes(context -> executeMutation(services, context, operation, player, amount, currency, reason))
                 .build();
     }
 
@@ -141,13 +144,15 @@ public final class AceEcoCommandSpec {
 
     private static TypedSubCommand rollback(CommandServices services) {
         CommandArgument<UUID> transactionId = CommandArguments.transactionId(services);
+        CommandArgument<String> reason = CommandArguments.reason();
         return TypedSubCommand.builder("rollback")
                 .description("Roll back a transaction by id (destructive, console only)")
-                .usage("<transaction-id>")
+                .usage("<transaction-id> [reason]")
                 .permission("aceeconomy.admin.rollback")
                 .consoleOnly()
                 .argument(transactionId)
-                .executes(context -> executeRollback(services, context, transactionId))
+                .optional(reason, sender -> "")
+                .executes(context -> executeRollback(services, context, transactionId, reason))
                 .build();
     }
 
@@ -165,14 +170,16 @@ public final class AceEcoCommandSpec {
     private static TypedSubCommand restore(CommandServices services) {
         CommandArgument<String> backupId = CommandArguments.token("backup-id", "<backup-id>");
         CommandArgument<String> confirm = CommandArguments.token("confirm", "<confirm>");
+        CommandArgument<String> reason = CommandArguments.reason();
         return TypedSubCommand.builder("restore")
                 .description("Restore live economy state from a backup (destructive, console only)")
-                .usage("<backup-id> confirm")
+                .usage("<backup-id> confirm [reason]")
                 .permission("aceeconomy.admin.restore")
                 .consoleOnly()
                 .argument(backupId)
                 .argument(confirm)
-                .executes(context -> executeRestore(services, context, backupId, confirm))
+                .optional(reason, sender -> "")
+                .executes(context -> executeRestore(services, context, backupId, confirm, reason))
                 .build();
     }
 
@@ -182,9 +189,10 @@ public final class AceEcoCommandSpec {
         CommandArgument<String> third = CommandArguments.importCurrencySlot();
         CommandArgument<String> fourth = CommandArguments.importApplySlot();
         CommandArgument<String> fifth = CommandArguments.importConfirmSlot();
+        CommandArgument<String> reason = CommandArguments.reason();
         return TypedSubCommand.builder("import")
                 .description("Preview or apply an Essentials/CMI balance import (console only, dry-run by default)")
-                .usage("<essentials|cmi> <path> [currency] [apply confirm]")
+                .usage("<essentials|cmi> <path> [currency] [apply confirm] [reason]")
                 .permission("aceeconomy.admin.import")
                 .consoleOnly()
                 .argument(source)
@@ -192,6 +200,7 @@ public final class AceEcoCommandSpec {
                 .optional(third, sender -> "")
                 .optional(fourth, sender -> "")
                 .optional(fifth, sender -> "")
+                .optional(reason, sender -> "")
                 .executes(context -> executeImport(services, context, source, path))
                 .build();
     }
@@ -213,6 +222,7 @@ public final class AceEcoCommandSpec {
         String path = context.get(pathArg);
         List<String> rest = context.commandArgs().subList(2, context.commandArgs().size());
         String rawCurrency = null;
+        String rawReason = null;
         boolean apply = false;
         if (rest.isEmpty()) {
             // dry-run with the default currency
@@ -223,18 +233,39 @@ public final class AceEcoCommandSpec {
             }
             rawCurrency = token;
         } else if (rest.size() == 2) {
-            if (isApplyWord(rest.get(0)) && "confirm".equals(rest.get(1))) {
+            if (isApplyWord(rest.get(0))) {
+                // `apply confirm`: the default currency, applied
+                if (!"confirm".equals(rest.get(1))) {
+                    throw confirmRequired(messages, source, path);
+                }
                 apply = true;
             } else {
-                throw confirmRequired(messages, source, path);
+                // `currency reason`: a dry run; the trailing token is only the reason
+                if (isApplyWord(rest.get(1)) || "confirm".equals(rest.get(1))) {
+                    throw confirmRequired(messages, source, path);
+                }
+                rawCurrency = rest.get(0);
+                rawReason = rest.get(1);
             }
         } else if (rest.size() == 3) {
-            if (isApplyWord(rest.get(1)) && "confirm".equals(rest.get(2))) {
+            if (isApplyWord(rest.get(0)) && "confirm".equals(rest.get(1))) {
+                // `apply confirm reason` on the default currency
+                apply = true;
+                rawReason = rest.get(2);
+            } else if (isApplyWord(rest.get(1)) && "confirm".equals(rest.get(2))) {
                 rawCurrency = rest.get(0);
                 apply = true;
             } else {
                 throw confirmRequired(messages, source, path);
             }
+        } else if (rest.size() == 4) {
+            // `currency apply confirm reason`
+            if (!(isApplyWord(rest.get(1)) && "confirm".equals(rest.get(2)))) {
+                throw confirmRequired(messages, source, path);
+            }
+            rawCurrency = rest.get(0);
+            apply = true;
+            rawReason = rest.get(3);
         } else {
             throw confirmRequired(messages, source, path);
         }
@@ -245,9 +276,10 @@ public final class AceEcoCommandSpec {
             V2CommandSupport.replyFailure(context, CommandException.custom("ACELIB-CMD-EMPTY-RESULT", msg));
             return;
         }
+        AdminAudit audit = AdminAuditSupport.resolve(context.sender(), rawReason);
         CompletableFuture<ImportOutcome> pending;
         try {
-            pending = apply ? services.imports().apply(source, path, currency.id())
+            pending = apply ? services.imports().apply(source, path, currency.id(), audit)
                     : services.imports().preview(source, path, currency.id());
         } catch (RuntimeException e) {
             V2CommandSupport.replyFailure(context, ImportErrors.from(messages, e));
@@ -394,7 +426,8 @@ public final class AceEcoCommandSpec {
 
     private static void executeRestore(CommandServices services, TypedContext context,
                                        CommandArgument<String> backupIdArg,
-                                       CommandArgument<String> confirmArg) {
+                                       CommandArgument<String> confirmArg,
+                                       CommandArgument<String> reasonArg) {
         var messages = services.messages();
         String backupId = context.get(backupIdArg);
         String confirmation = context.get(confirmArg);
@@ -404,9 +437,10 @@ public final class AceEcoCommandSpec {
                     : "command.restore-confirm-required";
             throw CommandException.custom("ACELIB-CMD-RESTORE-CONFIRM-REQUIRED", msg);
         }
+        AdminAudit audit = AdminAuditSupport.resolve(context.sender(), context.get(reasonArg));
         CompletableFuture<RestoreResult> pending;
         try {
-            pending = services.backupRestore().restore(backupId);
+            pending = services.backupRestore().restore(backupId, audit);
         } catch (RuntimeException e) {
             V2CommandSupport.replyFailure(context, e);
             return;
@@ -435,12 +469,14 @@ public final class AceEcoCommandSpec {
     }
 
     private static void executeRollback(CommandServices services, TypedContext context,
-                                        CommandArgument<UUID> transactionIdArg) {
+                                        CommandArgument<UUID> transactionIdArg,
+                                        CommandArgument<String> reasonArg) {
         var messages = services.messages();
         UUID transactionId = context.get(transactionIdArg);
+        AdminAudit audit = AdminAuditSupport.resolve(context.sender(), context.get(reasonArg));
         CompletableFuture<RollbackResult> pending;
         try {
-            pending = services.rollback().rollback(transactionId);
+            pending = services.rollback().rollback(transactionId, audit);
         } catch (RuntimeException e) {
             V2CommandSupport.replyFailure(context, e);
             return;
@@ -517,10 +553,12 @@ public final class AceEcoCommandSpec {
     private static void executeMutation(CommandServices services, TypedContext context, String operation,
                                         CommandArgument<String> playerArg,
                                         CommandArgument<String> amountArg,
-                                        CommandArgument<CurrencyInfo> currencyArg) {
+                                        CommandArgument<CurrencyInfo> currencyArg,
+                                        CommandArgument<String> reasonArg) {
         var messages = services.messages();
         String name = context.get(playerArg);
         CurrencyInfo currency = context.get(currencyArg);
+        AdminAudit audit = AdminAuditSupport.resolve(context.sender(), context.get(reasonArg));
         var amount = V2CommandSupport.amount(messages, context.get(amountArg), currency);
         services.players().resolve(name).whenComplete((target, failure) -> {
             if (failure != null) {
@@ -533,9 +571,9 @@ public final class AceEcoCommandSpec {
             } else {
                 PlayerIdentity identity = target.get();
                 var result = switch (operation) {
-                    case "give" -> services.admin().give(identity.uuid(), currency.id(), amount);
-                    case "take" -> services.admin().take(identity.uuid(), currency.id(), amount);
-                    case "set" -> services.admin().setBalance(identity.uuid(), currency.id(), amount);
+                    case "give" -> services.admin().give(identity.uuid(), currency.id(), amount, audit);
+                    case "take" -> services.admin().take(identity.uuid(), currency.id(), amount, audit);
+                    case "set" -> services.admin().setBalance(identity.uuid(), currency.id(), amount, audit);
                     default -> throw new IllegalArgumentException("unsupported operation: " + operation);
                 };
                 V2CommandSupport.replyLocalized(context, messages, result, ignored -> {

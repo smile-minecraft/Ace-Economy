@@ -3,6 +3,7 @@ package com.smile.aceeconomy.infrastructure.persistence.json;
 import com.smile.aceeconomy.application.TransferResult;
 import com.smile.aceeconomy.domain.Account;
 import com.smile.aceeconomy.domain.Amount;
+import com.smile.aceeconomy.domain.AmountCap;
 import com.smile.aceeconomy.domain.Currency;
 import com.smile.aceeconomy.domain.DebtPolicy;
 import com.smile.aceeconomy.domain.Transaction;
@@ -10,6 +11,7 @@ import com.smile.aceeconomy.domain.TransactionType;
 import com.smile.aceeconomy.ports.AccountRepository;
 import com.smile.aceeconomy.ports.operations.LeaderboardRepository;
 import com.smile.aceeconomy.ports.operations.LeaderboardRow;
+import com.smile.aceeconomy.ports.persistence.AdminMutationResult;
 import com.smile.aceeconomy.ports.persistence.AtomicImportStore;
 import com.smile.aceeconomy.ports.persistence.AtomicRedemptionStore;
 import com.smile.aceeconomy.ports.persistence.AtomicReversalStore;
@@ -84,7 +86,9 @@ import java.util.concurrent.locks.ReentrantLock;
 public final class JsonPersistenceBackend
         implements AccountRepository, TransactionRepository, PersistenceLifecycle,
         AtomicReversalStore, AtomicRedemptionStore, AtomicTransferStore, AtomicImportStore,
-        NonceStore, LeaderboardRepository {
+        com.smile.aceeconomy.ports.persistence.AtomicAdminMutationStore,
+        NonceStore, LeaderboardRepository,
+        com.smile.aceeconomy.ports.operations.OperationAuditStore {
 
     private final Path dataFile;
     /** Instance-local only: not a file lock, not cross-process. See class javadoc. */
@@ -552,6 +556,24 @@ public final class JsonPersistenceBackend
         }
     }
 
+    // ---------------- operation audit ----------------
+
+    /**
+     * Internal restore-audit read in stored order; ordering for queries is the caller's job.
+     */
+    @Override
+    public List<com.smile.aceeconomy.domain.OperationAudit> listOperationAudits() {
+        lock.lock();
+        try {
+            ensureInitialized();
+            return model.operationAudits.stream()
+                    .map(JsonModel.JsonOperationAudit::toDomain)
+                    .toList();
+        } finally {
+            lock.unlock();
+        }
+    }
+
     // ---------------- atomic reversal store ----------------
 
     @Override
@@ -877,7 +899,8 @@ public final class JsonPersistenceBackend
             }
             Transaction authoritative = new Transaction(preparedTx.id(), preparedTx.accountId(),
                     preparedTx.counterparty(), cid, target, TransactionType.SET, before, target,
-                    preparedTx.timestamp(), preparedTx.reason());
+                    preparedTx.timestamp(), preparedTx.reason(),
+                    preparedTx.operatorId(), preparedTx.operatorName());
 
             // Copy-on-write: the successor carries balance + audit record + consumed key, then
             // publishes once. A pre-publish failure (for example a duplicate audit id) leaves
@@ -901,6 +924,81 @@ public final class JsonPersistenceBackend
                 throw e;
             }
             return ImportCommitResult.committed(before, target, preparedTx.id());
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    // ---------------- atomic admin mutation ----------------
+
+    /**
+     * Single publish: the updated account, the authoritative record and nothing else land in
+     * one model swap. Before/after come from the live row inside the lock, so a general
+     * transaction that committed first is observed. The public amount cap is re-checked
+     * against the live-derived outcome inside the same swap (a spend that landed after the
+     * caller's pre-check is visible here), and a debt violation returns without touching
+     * the model; a failed publish throws and leaves the previous model live. A publish
+     * that replaced the file but lost its durability confirmation travels as a committed
+     * receipt with the authoritative balances instead of a bare retryable failure.
+     */
+    @Override
+    public AdminMutationResult commitAdminMutation(Transaction preparedTx, DebtPolicy debtPolicy)
+            throws PersistenceException {
+        lock.lock();
+        try {
+            ensureInitialized();
+            ensureWritable();
+            String cid = Currency.normalizeId(preparedTx.currencyId());
+            JsonModel.JsonAccount stored = model.accounts.get(preparedTx.accountId().toString());
+            if (stored == null) {
+                return AdminMutationResult.accountMissing();
+            }
+            Account live = toAccount(stored);
+            Amount current = live.balanceOf(cid);
+            Amount before = current == null ? Amount.zero(preparedTx.amount().scale()) : current;
+            if (AmountCap.exceeds(before)) {
+                throw new com.smile.aceeconomy.ports.persistence.AtomicAdminMutationStore.CapExceededException(
+                        AmountCap.describeStored(cid, before));
+            }
+            if (preparedTx.amount() != null && AmountCap.exceeds(preparedTx.amount())) {
+                throw new com.smile.aceeconomy.ports.persistence.AtomicAdminMutationStore.CapExceededException(
+                        AmountCap.describeRequest(cid, preparedTx.amount()));
+            }
+            Account updated = switch (preparedTx.type()) {
+                case DEPOSIT -> live.deposit(cid, preparedTx.amount());
+                case WITHDRAW -> live.withdraw(cid, preparedTx.amount());
+                case SET -> live.setBalance(cid, preparedTx.amount());
+                default -> throw new PersistenceException(
+                        "Unsupported administrative mutation type: " + preparedTx.type());
+            };
+            Amount after = updated.balanceOf(cid);
+            if (AmountCap.exceeds(after)) {
+                throw new com.smile.aceeconomy.ports.persistence.AtomicAdminMutationStore.CapExceededException(
+                        AmountCap.describeResult(cid, after));
+            }
+            if (debtPolicy != null && !debtPolicy.allows(after)) {
+                return AdminMutationResult.debtLimitExceeded();
+            }
+            Transaction authoritative = new Transaction(preparedTx.id(), preparedTx.accountId(),
+                    preparedTx.counterparty(), cid, preparedTx.amount(), preparedTx.type(), before, after,
+                    preparedTx.timestamp(), preparedTx.reason(),
+                    preparedTx.operatorId(), preparedTx.operatorName());
+
+            JsonModel previous = model;
+            JsonModel next = shallowCopy(previous);
+            next.accounts.put(updated.owner().toString(), toJsonAccount(updated));
+            insertInto(next, authoritative);
+            try {
+                commit(previous, next, "Failed to persist administrative mutation " + preparedTx.id());
+            } catch (PersistenceException e) {
+                if (e.isCommitted()) {
+                    throw new com.smile.aceeconomy.ports.persistence.CommittedAdminMutationException(
+                            e.getMessage(), e.getCause() != null ? e.getCause() : e,
+                            before, after, preparedTx.id());
+                }
+                throw e;
+            }
+            return AdminMutationResult.committed(before, after, preparedTx.id());
         } finally {
             lock.unlock();
         }
@@ -960,7 +1058,7 @@ public final class JsonPersistenceBackend
         Amount auditAmount = record.type() == TransactionType.SET ? after : record.amount().abs();
         return new Transaction(record.id(), record.accountId(), record.counterparty(),
                 Currency.normalizeId(record.currencyId()), auditAmount, record.type(), before, after,
-                record.timestamp(), record.reason());
+                record.timestamp(), record.reason(), record.operatorId(), record.operatorName());
     }
 
     private static void insertInto(JsonModel target, Transaction t) {
@@ -983,6 +1081,7 @@ public final class JsonPersistenceBackend
         next.accounts.putAll(source.accounts);
         next.transactions.addAll(source.transactions);
         next.nonces.putAll(source.nonces);
+        next.operationAudits.addAll(source.operationAudits);
         return next;
     }
 
@@ -1012,6 +1111,8 @@ public final class JsonPersistenceBackend
         c.timestamp = t.timestamp;
         c.reason = t.reason;
         c.reverted = true;
+        c.operatorId = t.operatorId;
+        c.operatorName = t.operatorName;
         return c;
     }
 

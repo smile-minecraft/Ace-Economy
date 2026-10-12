@@ -9,6 +9,7 @@ import com.smile.aceeconomy.commands.v2.ports.AdminCommandService;
 import com.smile.aceeconomy.commands.v2.ports.EconomyCommandService;
 import com.smile.aceeconomy.commands.v2.ports.HistoryQueryService;
 import com.smile.aceeconomy.commands.v2.ports.PlayerLookupService;
+import com.smile.aceeconomy.domain.AdminAudit;
 import com.smile.aceeconomy.domain.Amount;
 import com.smile.aceeconomy.domain.EconomyResult;
 import com.smile.aceeconomy.ports.persistence.PersistenceException;
@@ -184,7 +185,7 @@ class StorageFailureReplyTest {
         UUID bob = UUID.randomUUID();
         EconomyCommandService economy = economy();
         AdminCommandService admin = mock(AdminCommandService.class);
-        when(admin.give(any(UUID.class), any(String.class), any(Amount.class)))
+        when(admin.give(any(UUID.class), any(String.class), any(Amount.class), any(AdminAudit.class)))
                 .thenReturn(CompletableFuture.failedFuture(uncommitted()));
         CommandServices services = services(economy, playersResolving("Bob", bob), admin);
         ReplySink sink = mock(ReplySink.class);
@@ -202,7 +203,7 @@ class StorageFailureReplyTest {
         UUID bob = UUID.randomUUID();
         EconomyCommandService economy = economy();
         AdminCommandService admin = mock(AdminCommandService.class);
-        when(admin.give(any(UUID.class), any(String.class), any(Amount.class)))
+        when(admin.give(any(UUID.class), any(String.class), any(Amount.class), any(AdminAudit.class)))
                 .thenReturn(CompletableFuture.failedFuture(committed()));
         CommandServices services = services(economy, playersResolving("Bob", bob), admin);
         ReplySink sink = mock(ReplySink.class);

@@ -48,10 +48,27 @@ public final class ImportRunner {
 
     /** Backup-gated apply: a failed safety snapshot aborts before any write. */
     public ImportOutcome apply(ImportSource source, String userPath, String currencyId) {
-        return run(source, userPath, currencyId, false);
+        return run(source, userPath, currencyId, false, com.smile.aceeconomy.domain.AdminAudit.unrecorded());
+    }
+
+    /**
+     * Audited apply. Every applied record's transaction carries the operator
+     * identity and the reason composed after the {@code import:<source>}
+     * machine prefix; the safety backup still precedes all writes. A preview
+     * never writes, so it stays on the preview path with no audit.
+     */
+    public ImportOutcome apply(ImportSource source, String userPath, String currencyId,
+                               com.smile.aceeconomy.domain.AdminAudit audit) {
+        return run(source, userPath, currencyId, false, audit);
     }
 
     private ImportOutcome run(ImportSource source, String userPath, String currencyId, boolean dryRun) {
+        return run(source, userPath, currencyId, dryRun,
+                com.smile.aceeconomy.domain.AdminAudit.unrecorded());
+    }
+
+    private ImportOutcome run(ImportSource source, String userPath, String currencyId, boolean dryRun,
+                              com.smile.aceeconomy.domain.AdminAudit audit) {
         if (source == null) {
             throw new ImportException(ImportFailureReason.SOURCE_UNKNOWN,
                     "unknown import source; supported: essentials, cmi");
@@ -76,7 +93,7 @@ public final class ImportRunner {
                 : CmiParser.parse(gated, normalizedCurrency, scale);
         if (dryRun) {
             ImportReport report = imports.importRecords(parsed.records(),
-                    new ImportOptions(true, true));
+                    new ImportOptions(true, true), audit);
             return new ImportOutcome(true, null, report, parsed.failures());
         }
         BackupResult safety = backup.createBackup(SAFETY_LABEL);
@@ -86,7 +103,7 @@ public final class ImportRunner {
                     "pre-import safety snapshot failed; live state untouched — " + detail);
         }
         ImportReport report = imports.importRecords(parsed.records(),
-                new ImportOptions(false, true));
+                new ImportOptions(false, true), audit);
         return new ImportOutcome(false, safety.backupId(), report, parsed.failures());
     }
 }

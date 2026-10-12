@@ -388,14 +388,14 @@ class TypedMigrationContractTest {
         assertEquals(List.of("currency"),
                 BaltopCommandSpec.create(services).findSubCommand("top").argNames());
         CommandSpec aceeco = AceEcoCommandSpec.create(services);
-        assertEquals(List.of("player", "amount", "currency"),
+        assertEquals(List.of("player", "amount", "currency", "reason"),
                 aceeco.findSubCommand("give").argNames());
         assertEquals(List.of("player", "currency", "page"),
                 aceeco.findSubCommand("history").argNames());
-        assertEquals(List.of("transaction-id"), aceeco.findSubCommand("rollback").argNames());
+        assertEquals(List.of("transaction-id", "reason"), aceeco.findSubCommand("rollback").argNames());
         assertEquals(List.of("label"), aceeco.findSubCommand("backup").argNames());
-        assertEquals(List.of("backup-id", "confirm"), aceeco.findSubCommand("restore").argNames());
-        assertEquals(List.of("source", "path", "currency", "apply", "confirm"),
+        assertEquals(List.of("backup-id", "confirm", "reason"), aceeco.findSubCommand("restore").argNames());
+        assertEquals(List.of("source", "path", "currency", "apply", "confirm", "reason"),
                 aceeco.findSubCommand("import").argNames());
         // No subcommand configures a cooldown today; the typed builders must not add one.
         for (CommandSpec root : List.of(money, aceeco)) {

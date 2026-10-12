@@ -102,20 +102,42 @@ final class ProductionAdapters {
     }
 
     static final class Admin implements AdminCommandService {
-        private final EconomyApi api; private final Executor executor;
+        private final EconomyService service; private final Executor executor;
         private final Supplier<com.smile.aceeconomy.infrastructure.acelib.ReloadResult> reload;
-        Admin(EconomyApi api, Executor executor,
+        Admin(EconomyService service, Executor executor,
               Supplier<com.smile.aceeconomy.infrastructure.acelib.ReloadResult> reload) {
-            this.api = api; this.executor = executor; this.reload = reload;
+            this.service = java.util.Objects.requireNonNull(service, "service");
+            this.executor = executor; this.reload = reload;
         }
         public CompletableFuture<EconomyResult<Amount>> give(UUID id, String c, Amount a) {
-            return CompletableFuture.supplyAsync(() -> api.deposit(id, c, a), executor);
+            return CompletableFuture.supplyAsync(
+                    () -> service.deposit(id, c, a, com.smile.aceeconomy.domain.AdminAudit.unrecorded()),
+                    executor);
         }
         public CompletableFuture<EconomyResult<Amount>> take(UUID id, String c, Amount a) {
-            return CompletableFuture.supplyAsync(() -> api.withdraw(id, c, a), executor);
+            return CompletableFuture.supplyAsync(
+                    () -> service.withdraw(id, c, a, com.smile.aceeconomy.domain.AdminAudit.unrecorded()),
+                    executor);
         }
         public CompletableFuture<EconomyResult<Amount>> setBalance(UUID id, String c, Amount a) {
-            return CompletableFuture.supplyAsync(() -> api.setBalance(id, c, a), executor);
+            return CompletableFuture.supplyAsync(
+                    () -> service.setBalance(id, c, a, com.smile.aceeconomy.domain.AdminAudit.unrecorded()),
+                    executor);
+        }
+        @Override
+        public CompletableFuture<EconomyResult<Amount>> give(UUID id, String c, Amount a,
+                                                             com.smile.aceeconomy.domain.AdminAudit audit) {
+            return CompletableFuture.supplyAsync(() -> service.deposit(id, c, a, audit), executor);
+        }
+        @Override
+        public CompletableFuture<EconomyResult<Amount>> take(UUID id, String c, Amount a,
+                                                             com.smile.aceeconomy.domain.AdminAudit audit) {
+            return CompletableFuture.supplyAsync(() -> service.withdraw(id, c, a, audit), executor);
+        }
+        @Override
+        public CompletableFuture<EconomyResult<Amount>> setBalance(UUID id, String c, Amount a,
+                                                                   com.smile.aceeconomy.domain.AdminAudit audit) {
+            return CompletableFuture.supplyAsync(() -> service.setBalance(id, c, a, audit), executor);
         }
         public CompletableFuture<EconomyResult<Void>> reload() {
             return CompletableFuture.supplyAsync(() -> {
@@ -260,6 +282,10 @@ final class ProductionAdapters {
         public CompletableFuture<RollbackResult> rollback(UUID transactionId) {
             return CompletableFuture.supplyAsync(() -> service.rollback(transactionId), executor);
         }
+        public CompletableFuture<RollbackResult> rollback(UUID transactionId,
+                                                          com.smile.aceeconomy.domain.AdminAudit audit) {
+            return CompletableFuture.supplyAsync(() -> service.rollback(transactionId, audit), executor);
+        }
     }
 
     /**
@@ -283,6 +309,10 @@ final class ProductionAdapters {
         public CompletableFuture<com.smile.aceeconomy.operations.RestoreResult> restore(String backupId) {
             return CompletableFuture.supplyAsync(() -> service.restore(backupId), executor);
         }
+        public CompletableFuture<com.smile.aceeconomy.operations.RestoreResult> restore(
+                String backupId, com.smile.aceeconomy.domain.AdminAudit audit) {
+            return CompletableFuture.supplyAsync(() -> service.restore(backupId, audit), executor);
+        }
     }
 
     /**
@@ -304,6 +334,12 @@ final class ProductionAdapters {
         public CompletableFuture<com.smile.aceeconomy.operations.ImportOutcome> apply(
                 com.smile.aceeconomy.ports.operations.ImportSource source, String path, String currencyId) {
             return CompletableFuture.supplyAsync(() -> runner.apply(source, path, currencyId), executor);
+        }
+        public CompletableFuture<com.smile.aceeconomy.operations.ImportOutcome> apply(
+                com.smile.aceeconomy.ports.operations.ImportSource source, String path, String currencyId,
+                com.smile.aceeconomy.domain.AdminAudit audit) {
+            return CompletableFuture.supplyAsync(
+                    () -> runner.apply(source, path, currencyId, audit), executor);
         }
     }
 

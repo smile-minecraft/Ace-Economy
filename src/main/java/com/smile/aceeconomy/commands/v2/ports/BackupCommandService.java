@@ -1,5 +1,6 @@
 package com.smile.aceeconomy.commands.v2.ports;
 
+import com.smile.aceeconomy.domain.AdminAudit;
 import com.smile.aceeconomy.operations.BackupResult;
 import com.smile.aceeconomy.operations.RestoreResult;
 
@@ -23,4 +24,14 @@ public interface BackupCommandService {
     CompletableFuture<BackupResult> createBackup(String label);
 
     CompletableFuture<RestoreResult> restore(String backupId);
+
+    /**
+     * Audited restore. The operator identity and reason travel with the replaced
+     * world into a single durable publish; a rejection leaves the live state
+     * untouched with no orphaned audit. The default drops the audit and behaves
+     * exactly like {@link #restore(String)}.
+     */
+    default CompletableFuture<RestoreResult> restore(String backupId, AdminAudit audit) {
+        return restore(backupId);
+    }
 }

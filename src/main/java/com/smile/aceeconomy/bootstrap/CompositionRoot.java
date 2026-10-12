@@ -443,7 +443,7 @@ public final class CompositionRoot {
                 () -> currencies, config, banknoteFlow);
         BankOpenRouter bankCommands = new BankOpenRouter(
                 javaBankCommands, bankForms::open, config.bedrockDetector(), ioExecutor);
-        ProductionAdapters.Admin adminCommands = new ProductionAdapters.Admin(api, ioExecutor,
+        ProductionAdapters.Admin adminCommands = new ProductionAdapters.Admin(economy, ioExecutor,
                 () -> {
                     com.smile.aceeconomy.infrastructure.acelib.ReloadResult result =
                             config.reloadWithRuntime(reloadRuntime());

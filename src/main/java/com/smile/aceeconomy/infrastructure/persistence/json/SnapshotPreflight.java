@@ -1,16 +1,21 @@
 package com.smile.aceeconomy.infrastructure.persistence.json;
 
 import com.smile.aceeconomy.domain.Account;
+import com.smile.aceeconomy.domain.AdminAudit;
 import com.smile.aceeconomy.domain.AmountCap;
+import com.smile.aceeconomy.domain.OperationAudit;
 import com.smile.aceeconomy.domain.Transaction;
 import com.smile.aceeconomy.ports.persistence.PersistenceException;
 
+import java.time.Instant;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 /**
  * Restore preflight for v2 logical snapshots.
@@ -29,6 +34,8 @@ import java.util.UUID;
  * <p>This validator adds no new backend semantics; it only runs the existing ones early.</p>
  */
 public final class SnapshotPreflight {
+
+    private static final Pattern SAFE_BACKUP_ID = Pattern.compile("[A-Za-z0-9._-]{1,128}");
 
     private SnapshotPreflight() {
     }
@@ -113,6 +120,9 @@ public final class SnapshotPreflight {
                 if (t.counterparty != null) {
                     requireCanonicalUUID(t.counterparty, "transaction counterparty");
                 }
+                if (t.operatorId != null) {
+                    requireCanonicalUUID(t.operatorId, "transaction operatorId");
+                }
             } catch (PersistenceException e) {
                 throw new PersistenceException(
                         "Invalid transaction record in snapshot: " + t.id + " (" + e.getMessage() + ")", e);
@@ -133,6 +143,136 @@ public final class SnapshotPreflight {
                 throw new PersistenceException(
                         "Duplicate transaction id in snapshot: " + domain.id());
             }
+        }
+        validateOperationAudits(model);
+    }
+
+    /**
+     * Joint preflight over the independent restore-audit collection. Every
+     * record is materialized through the same conversion the backends use at
+     * load time, so a snapshot carrying a corrupt operation record is refused
+     * before any live row moves. An absent collection (files written before
+     * operation tracking) reads as empty and passes; a present record must
+     * carry a canonical id, the known operation, a consistent operator
+     * identity, a policy-legal reason, an ISO instant and legal backup ids,
+     * with no duplicate ids. Transaction reasons are deliberately not
+     * re-validated here: legacy rows keep loading verbatim.
+     *
+     * @throws PersistenceException when any operation record must not be published
+     */
+    /**
+     * Joint preflight over the independent restore-audit collection. Every
+     * record is materialized through the same conversion the backends use at
+     * load time, so a snapshot carrying a corrupt operation record is refused
+     * before any live row moves. An absent collection (files written before
+     * operation tracking) reads as empty and passes; a present record must
+     * carry a canonical id, the known operation, a consistent operator
+     * identity, a policy-legal reason, an ISO instant and legal backup ids,
+     * with no duplicate ids. Transaction reasons are deliberately not
+     * re-validated here: legacy rows keep loading verbatim.
+     *
+     * <p>Diagnostics never echo a field value: every refusal names only the
+     * record index and the field, with a fixed detail. A corrupt field may
+     * itself carry a secret, and the parsing failures underneath (UUID,
+     * instant) quote the offending text, so their exceptions are never
+     * attached as causes and never interpolated into a message. The only
+     * attached cause is the reason-policy rejection, whose message is a fixed
+     * sentence that carries no input.
+     *
+     * @throws PersistenceException when any operation record must not be published
+     */
+    static void validateOperationAudits(JsonModel model) throws PersistenceException {
+        Set<String> seenOperationIds = new HashSet<>();
+        List<JsonModel.JsonOperationAudit> audits = model.operationAudits;
+        for (int index = 0; index < audits.size(); index++) {
+            JsonModel.JsonOperationAudit audit = audits.get(index);
+            try {
+                requireOperationUuid(audit.id, "id", index);
+                if (!OperationAudit.OPERATION_RESTORE.equals(audit.operation)) {
+                    throw operationAuditError(index, "unsupported operation");
+                }
+                if (audit.operatorId != null) {
+                    requireOperationUuid(audit.operatorId, "operatorId", index);
+                }
+                if (audit.operatorName == null || audit.operatorName.isBlank()) {
+                    throw operationAuditError(index, "operator name must not be blank");
+                }
+                if (audit.operatorId == null) {
+                    if (!AdminAudit.CONSOLE_OPERATOR_NAME.equals(audit.operatorName)) {
+                        throw operationAuditError(index,
+                                "null operator id requires the console marker");
+                    }
+                } else if (AdminAudit.CONSOLE_OPERATOR_NAME.equals(audit.operatorName)) {
+                    throw operationAuditError(index,
+                            "a player record must not carry the console marker");
+                }
+                if (audit.reason == null) {
+                    throw operationAuditError(index, "reason must not be null");
+                }
+                String normalized;
+                try {
+                    normalized = AdminAudit.validateReason(audit.reason);
+                } catch (IllegalArgumentException e) {
+                    throw new PersistenceException(
+                            "Invalid operation audit record at index " + index
+                                    + ": rejected reason (" + e.getMessage() + ")", e);
+                }
+                if (!normalized.equals(audit.reason)) {
+                    throw operationAuditError(index, "reason must already be normalized");
+                }
+                try {
+                    Instant.parse(audit.timestamp);
+                } catch (RuntimeException e) {
+                    throw operationAuditError(index, "malformed timestamp");
+                }
+                requireOperationBackupId(audit.sourceBackupId, "sourceBackupId", index);
+                requireOperationBackupId(audit.safetyBackupId, "safetyBackupId", index);
+            } catch (PersistenceException e) {
+                if (e.getMessage() != null
+                        && e.getMessage().startsWith("Invalid operation audit record at index")) {
+                    throw e;
+                }
+                throw operationAuditError(index, "unreadable record");
+            } catch (RuntimeException e) {
+                throw operationAuditError(index, "unreadable record");
+            }
+            if (!seenOperationIds.add(audit.id)) {
+                throw operationAuditError(index, "duplicate operation audit id");
+            }
+            try {
+                audit.toDomain();
+            } catch (RuntimeException e) {
+                throw operationAuditError(index, "unreadable record");
+            }
+        }
+    }
+
+    private static PersistenceException operationAuditError(int index, String detail) {
+        return new PersistenceException(
+                "Invalid operation audit record at index " + index + ": " + detail);
+    }
+
+    private static void requireOperationUuid(String raw, String field, int index) {
+        if (raw == null) {
+            throw operationAuditError(index, field + " must not be null");
+        }
+        UUID parsed;
+        try {
+            parsed = UUID.fromString(raw);
+        } catch (IllegalArgumentException e) {
+            throw operationAuditError(index, "malformed " + field);
+        }
+        if (!parsed.toString().equals(raw)) {
+            throw operationAuditError(index, "non-canonical " + field);
+        }
+    }
+
+    private static void requireOperationBackupId(String raw, String field, int index) {
+        if (raw == null || raw.isBlank()) {
+            throw operationAuditError(index, field + " must not be blank");
+        }
+        if (".".equals(raw) || "..".equals(raw) || !SAFE_BACKUP_ID.matcher(raw).matches()) {
+            throw operationAuditError(index, "illegal " + field);
         }
     }
 

@@ -146,25 +146,38 @@ public final class ImportService {
     }
 
     public ImportReport importRecords(List<ImportRecord> records, ImportOptions options) {
+        return importRecords(records, options, com.smile.aceeconomy.domain.AdminAudit.unrecorded());
+    }
+
+    /**
+     * Audited import. Every committed record's transaction carries the operator
+     * identity and the reason composed after the {@code import:<source>}
+     * machine marker; validation failures still consume nothing. An unrecorded
+     * audit (legacy callers) keeps the bare marker, exactly like records
+     * written before operator tracking.
+     */
+    public ImportReport importRecords(List<ImportRecord> records, ImportOptions options,
+                                      com.smile.aceeconomy.domain.AdminAudit audit) {
         Objects.requireNonNull(records, "records");
         Objects.requireNonNull(options, "options");
 
         if (options.dryRun() || importStore != null) {
-            return runAll(records, options);
+            return runAll(records, options, audit);
         }
         synchronized (IMPORT_MUTEX) {
-            return runAll(records, options);
+            return runAll(records, options, audit);
         }
     }
 
-    private ImportReport runAll(List<ImportRecord> records, ImportOptions options) {
+    private ImportReport runAll(List<ImportRecord> records, ImportOptions options,
+                                com.smile.aceeconomy.domain.AdminAudit audit) {
         List<ImportRecordResult> results = new ArrayList<>();
         int applied = 0;
         int skipped = 0;
         int failed = 0;
 
         for (ImportRecord r : records) {
-            ImportRecordResult result = process(r, options);
+            ImportRecordResult result = process(r, options, audit);
             results.add(result);
             switch (result.status()) {
                 case APPLIED -> applied++;
@@ -178,7 +191,8 @@ public final class ImportService {
                 List.copyOf(results));
     }
 
-    private ImportRecordResult process(ImportRecord r, ImportOptions options) {
+    private ImportRecordResult process(ImportRecord r, ImportOptions options,
+                                       com.smile.aceeconomy.domain.AdminAudit audit) {
         // Structural validation (record itself is already non-null with non-blank ids by construction).
         if (!currencies.contains(r.currencyId())) {
             return ImportRecordResult.failed(r, "unknown currency: " + r.currencyId());
@@ -187,9 +201,9 @@ public final class ImportService {
             return ImportRecordResult.failed(r, "amount must be non-negative");
         }
         if (importStore != null) {
-            return processAtomic(r, options);
+            return processAtomic(r, options, audit);
         }
-        return processLegacy(r, options);
+        return processLegacy(r, options, audit);
     }
 
     /**
@@ -198,7 +212,8 @@ public final class ImportService {
      * commit, so a validation failure consumes nothing and a retry still reports
      * {@code FAILED} instead of a duplicate skip.
      */
-    private ImportRecordResult processAtomic(ImportRecord r, ImportOptions options) {
+    private ImportRecordResult processAtomic(ImportRecord r, ImportOptions options,
+                                             com.smile.aceeconomy.domain.AdminAudit audit) {
         UUID key = idempotencyKey(r);
 
         if (options.dryRun()) {
@@ -234,7 +249,11 @@ public final class ImportService {
         Amount provisionalBefore = stored != null ? stored : cur.zero();
         Transaction preparedTx = new Transaction(UUID.randomUUID(), r.accountUuid(), null,
                 cur.id(), r.amount(), TransactionType.SET, provisionalBefore, r.amount(),
-                clock.instant(), "import:" + r.source().name());
+                clock.instant(),
+                com.smile.aceeconomy.domain.AdminAudit.composeReason(
+                        "import:" + r.source().name(), audit),
+                audit == null ? null : audit.operatorId(),
+                audit == null ? null : audit.operatorName());
 
         ImportCommitResult result;
         try {
@@ -299,7 +318,8 @@ public final class ImportService {
         return ImportRecordResult.failed(r, result.diagnosis());
     }
 
-    private ImportRecordResult processLegacy(ImportRecord r, ImportOptions options) {
+    private ImportRecordResult processLegacy(ImportRecord r, ImportOptions options,
+                                             com.smile.aceeconomy.domain.AdminAudit audit) {
         UUID key = idempotencyKey(r);
 
         if (options.dryRun()) {
@@ -347,7 +367,7 @@ public final class ImportService {
                 UUID txId;
                 try {
                     Amount after = updated.balanceOf(cur.id());
-                    txId = appendImportRecord(r, cur, before, after);
+                    txId = appendImportRecord(r, cur, before, after, audit);
                 } catch (RuntimeException appendFailure) {
                     // Best-effort rollback of the balance write; the claim
                     // above cannot be undone, which the class javadoc discloses.
@@ -372,7 +392,7 @@ public final class ImportService {
             initial.put(cur.id(), r.amount());
             accounts.create(r.accountUuid(),
                     r.ownerName() != null ? r.ownerName() : r.accountUuid().toString(), initial);
-            UUID txId = appendImportRecord(r, cur, cur.zero(), r.amount());
+            UUID txId = appendImportRecord(r, cur, cur.zero(), r.amount(), audit);
             notifyInvalidated(r.accountUuid());
             return ImportRecordResult.applied(r, txId, null);
         } catch (RuntimeException e) {
@@ -404,7 +424,8 @@ public final class ImportService {
                                             UUID txId) {
         return new Transaction(txId, prepared.accountId(), prepared.counterparty(),
                 Currency.normalizeId(prepared.currencyId()), prepared.amount(),
-                TransactionType.SET, before, after, prepared.timestamp(), prepared.reason());
+                TransactionType.SET, before, after, prepared.timestamp(), prepared.reason(),
+                prepared.operatorId(), prepared.operatorName());
     }
 
     /**
@@ -434,9 +455,19 @@ public final class ImportService {
     }
 
     private UUID appendImportRecord(ImportRecord r, Currency cur, Amount before, Amount after) {
+        return appendImportRecord(r, cur, before, after,
+                com.smile.aceeconomy.domain.AdminAudit.unrecorded());
+    }
+
+    private UUID appendImportRecord(ImportRecord r, Currency cur, Amount before, Amount after,
+                                    com.smile.aceeconomy.domain.AdminAudit audit) {
         Transaction t = new Transaction(
                 UUID.randomUUID(), r.accountUuid(), null, cur.id(), r.amount(),
-                TransactionType.SET, before, after, clock.instant(), "import:" + r.source().name());
+                TransactionType.SET, before, after, clock.instant(),
+                com.smile.aceeconomy.domain.AdminAudit.composeReason(
+                        "import:" + r.source().name(), audit),
+                audit == null ? null : audit.operatorId(),
+                audit == null ? null : audit.operatorName());
         try {
             transactions.append(t);
         } catch (PersistenceException e) {

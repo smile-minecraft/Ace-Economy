@@ -1,5 +1,6 @@
 package com.smile.aceeconomy.commands.v2.ports;
 
+import com.smile.aceeconomy.domain.AdminAudit;
 import com.smile.aceeconomy.operations.ImportOutcome;
 import com.smile.aceeconomy.ports.operations.ImportSource;
 
@@ -18,4 +19,7 @@ public interface ImportCommandService {
     CompletableFuture<ImportOutcome> preview(ImportSource source, String path, String currencyId);
 
     CompletableFuture<ImportOutcome> apply(ImportSource source, String path, String currencyId);
+
+    CompletableFuture<ImportOutcome> apply(ImportSource source, String path, String currencyId,
+                                          AdminAudit audit);
 }

@@ -1,5 +1,7 @@
 package com.smile.aceeconomy.operations;
 
+import com.smile.aceeconomy.domain.AdminAudit;
+import com.smile.aceeconomy.domain.OperationAudit;
 import com.smile.aceeconomy.infrastructure.persistence.json.JsonModel;
 import com.smile.aceeconomy.infrastructure.persistence.json.SnapshotPreflight;
 import com.smile.aceeconomy.ports.Clock;
@@ -28,6 +30,7 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.EnumSet;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.locks.ReentrantLock;
@@ -148,9 +151,127 @@ public final class BackupRestoreService {
 
     /**
      * Restore the live state from the managed snapshot {@code backupId} after all safety
-     * gates pass.
+     * gates pass. Internal compatibility path: the restored world carries no operation
+     * record, so a restore that predates operator tracking behaves exactly as before.
      */
     public RestoreResult restore(String backupId) {
+        return restore(backupId, AdminAudit.unrecorded());
+    }
+
+    /**
+     * Audited restore. The operator identity and reason are published atomically
+     * with the replaced world as one independent {@code OperationAudit} record,
+     * never as a fabricated money transaction: the candidate snapshot is augmented
+     * in memory (the stored backup file itself is never rewritten) and the
+     * augmented model commits through the same backend publish as the restored
+     * world, inside the same exclusive window as the safety snapshot.
+     *
+     * <p>Inside the exclusive window, after the safety snapshot: the live
+     * operation audits and the candidate snapshot's operation audits are
+     * de-duplicated by record id, the current restore record carrying the source
+     * and safety backup ids is appended, and the augmented snapshot is published
+     * once. JSON commits it with the single file publish; SQL deletes and
+     * re-inserts the world plus the audit table in the same transaction. A
+     * record that already survived an earlier restore is never wiped by a later
+     * one. A missing audit context is rejected before any live state is
+     * touched; a failed publish leaves no orphaned record.
+     *
+     * <p>An explicitly unrecorded audit (no sender context, used by internal
+     * legacy callers) keeps the historical behaviour with no record; a null
+     * audit is a caller mistake and is refused.
+     */
+    public RestoreResult restore(String backupId, AdminAudit audit) {
+        if (audit == null) {
+            return RestoreResult.failure(BackupRestoreError.INVALID_REQUEST,
+                    "restore requires the operator identity and reason of the sender");
+        }
+        if (!audit.isRecorded()) {
+            return restoreWithoutRecord(backupId);
+        }
+        // 1. Token validation + resolve/read candidate. No live state is touched yet.
+        String id;
+        try {
+            id = normalizeId(backupId);
+        } catch (IllegalArgumentException e) {
+            return RestoreResult.failure(BackupRestoreError.INVALID_REQUEST, e.getMessage());
+        }
+        byte[] snapshot;
+        try {
+            snapshot = readCandidateSnapshot(id);
+        } catch (BackupMissingException e) {
+            return RestoreResult.failure(BackupRestoreError.BACKUP_NOT_FOUND, e.getMessage());
+        } catch (IOException e) {
+            return RestoreResult.failure(BackupRestoreError.IO_FAILED,
+                    "could not read backup '" + id + "': " + e.getMessage());
+        }
+        // 2. Preflight: parse / schema / records / currency compatibility (still read-only).
+        JsonModel candidate;
+        try {
+            candidate = SnapshotPreflight.parse(new String(snapshot, StandardCharsets.UTF_8));
+            SnapshotPreflight.checkSchemaVersion(candidate);
+            SnapshotPreflight.validateRecords(candidate);
+            SnapshotPreflight.checkCurrencies(candidate, knownCurrencyIds.get());
+        } catch (PersistenceException e) {
+            return classifyPreflightFailure(e);
+        }
+        // 3. Operation lock serializes against concurrent backups/restores.
+        if (!operationLock.tryLock()) {
+            return RestoreResult.failure(BackupRestoreError.BUSY,
+                    "another backup or restore operation is already running");
+        }
+        try {
+            // 4. Hard online-player gate, re-checked inside the lock before any write.
+            if (onlineProbe.hasOnlinePlayers()) {
+                return RestoreResult.failure(BackupRestoreError.PLAYERS_ONLINE,
+                        "players are still online; ask everyone to leave before restoring");
+            }
+            // 5+6. Exclusive boundary on the SAME backend instance: ordinary repository
+            // writes cannot interleave between the safety snapshot and the restore. The
+            // backend lock/monitor is reentrant, so the safety backup inside may safely
+            // re-enter lifecycle.backup, and it is never rejected by the service busy gate
+            // because this thread already holds the service operation lock.
+            try {
+                return lifecycle.runExclusive(() -> {
+                    BackupResult safety = createBackup(SAFETY_LABEL);
+                    if (!safety.isSuccess()) {
+                        return RestoreResult.failure(BackupRestoreError.SAFETY_BACKUP_FAILED,
+                                "pre-restore safety snapshot failed; live state untouched — "
+                                        + safety.message());
+                    }
+                    OperationAudit record = OperationAudit.restore(audit, clock.instant(),
+                            id, safety.backupId());
+                    byte[] augmented = augmentCandidate(candidate, record);
+                    try {
+                        lifecycle.restore(new ByteArrayInputStream(augmented));
+                    } catch (PersistenceException | IOException e) {
+                        // Truthful contract: once lifecycle.restore has been entered, a
+                        // backend failure does NOT prove the live state is unchanged —
+                        // a failed SQL rollback or a post-commit autoCommit failure can
+                        // leave it changed or committed. Never claim a rollback here.
+                        return RestoreResult.failure(BackupRestoreError.RESTORE_FAILED,
+                                "backend restore failed; live state was not confirmed "
+                                        + "unchanged — inspect the safety backup and SQL "
+                                        + "connection before any retry: " + e.getMessage());
+                    }
+                    // 7. Success: stale cached rankings must never survive a replaced world.
+                    cacheReset.run();
+                    return RestoreResult.success(id, safety.backupId());
+                });
+            } catch (PersistenceException | IOException e) {
+                return RestoreResult.failure(BackupRestoreError.IO_FAILED,
+                        "exclusive restore window failed: " + e.getMessage());
+            }
+        } finally {
+            operationLock.unlock();
+        }
+    }
+
+    /**
+     * The historical restore body without an operation record. Reached only through the
+     * internal compatibility entry point; the audited path above shares the gates but
+     * publishes the merged audit collection.
+     */
+    private RestoreResult restoreWithoutRecord(String backupId) {
         // 1. Token validation + resolve/read candidate. No live state is touched yet.
         String id;
         try {
@@ -224,6 +345,50 @@ public final class BackupRestoreService {
         } finally {
             operationLock.unlock();
         }
+    }
+
+    // ---------------- internals: restore-audit merge ----------------
+
+    /**
+     * Merges the live operation audits and the candidate snapshot's operation
+     * audits by record id, appends the current restore record, and re-serializes
+     * the candidate so the single backend publish carries the merged collection
+     * together with the replaced world. De-duplication by id is what keeps a
+     * record that already survived an earlier restore from being appended twice
+     * when the candidate snapshot itself already contains it.
+     *
+     * <p>Re-serialization only ever touches the parsed model: the stored backup
+     * file on disk is never rewritten, and the model round trip carries exactly
+     * the fields a restore already persists.
+     */
+    private byte[] augmentCandidate(JsonModel candidate, OperationAudit record) {
+        java.util.Map<String, JsonModel.JsonOperationAudit> byId = new java.util.LinkedHashMap<>();
+        for (JsonModel.JsonOperationAudit live : liveOperationAudits()) {
+            byId.putIfAbsent(live.id, live);
+        }
+        for (JsonModel.JsonOperationAudit fromCandidate : candidate.operationAudits) {
+            byId.putIfAbsent(fromCandidate.id, fromCandidate);
+        }
+        byId.put(record.id().toString(), JsonModel.JsonOperationAudit.fromDomain(record));
+        candidate.operationAudits.clear();
+        candidate.operationAudits.addAll(byId.values());
+        return candidate.toJson().getBytes(StandardCharsets.UTF_8);
+    }
+
+    /**
+     * The live operation audits as snapshot-shaped records. A lifecycle that
+     * predates the store port (no backend in production does) reads as an
+     * empty collection rather than failing the restore.
+     */
+    private List<JsonModel.JsonOperationAudit> liveOperationAudits() {
+        if (!(lifecycle instanceof com.smile.aceeconomy.ports.operations.OperationAuditStore store)) {
+            return List.of();
+        }
+        List<JsonModel.JsonOperationAudit> audits = new java.util.ArrayList<>();
+        for (com.smile.aceeconomy.domain.OperationAudit record : store.listOperationAudits()) {
+            audits.add(JsonModel.JsonOperationAudit.fromDomain(record));
+        }
+        return audits;
     }
 
     // ---------------- internals: tokens ----------------

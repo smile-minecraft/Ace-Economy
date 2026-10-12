@@ -1,5 +1,6 @@
 package com.smile.aceeconomy.operations;
 
+import com.smile.aceeconomy.domain.AdminAudit;
 import com.smile.aceeconomy.domain.Currency;
 import com.smile.aceeconomy.domain.Transaction;
 import com.smile.aceeconomy.domain.TransactionType;
@@ -47,6 +48,17 @@ public final class RollbackService {
     }
 
     public RollbackResult rollback(UUID transactionId) {
+        return rollback(transactionId, AdminAudit.unrecorded());
+    }
+
+    /**
+     * Audited rollback. Every reversal record appended by the executor carries
+     * the operator identity and the reason composed after the machine prefix;
+     * the balance effects, the reversal records and the reverted markers still
+     * commit as one unit. An unrecorded audit (legacy callers) keeps the bare
+     * machine prefix, exactly like records written before operator tracking.
+     */
+    public RollbackResult rollback(UUID transactionId, AdminAudit audit) {
         if (transactionId == null) {
             return RollbackResult.failure(RollbackError.INVALID_REQUEST, "transactionId must not be null");
         }
@@ -84,7 +96,7 @@ public final class RollbackService {
             return RollbackResult.failure(RollbackError.COUNTERPART_NOT_FOUND, e.getMessage());
         }
 
-        ReversalOutcome outcome = executor.execute(plan);
+        ReversalOutcome outcome = executor.execute(plan, audit);
         if (!outcome.isSuccess()) {
             // Executor failed: do NOT mark reverted, so the operation remains retryable.
             return RollbackResult.failure(RollbackError.EXECUTION_FAILED, outcome.message());

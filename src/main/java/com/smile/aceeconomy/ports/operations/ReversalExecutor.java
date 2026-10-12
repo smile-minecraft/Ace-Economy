@@ -16,6 +16,15 @@ public interface ReversalExecutor {
     ReversalOutcome execute(ReversalPlan plan);
 
     /**
+     * Audited execution. The default drops the audit and behaves exactly like
+     * {@link #execute(ReversalPlan)}; executors that stamp reversal records
+     * override this so every appended record carries the operator and reason.
+     */
+    default ReversalOutcome execute(ReversalPlan plan, com.smile.aceeconomy.domain.AdminAudit audit) {
+        return execute(plan);
+    }
+
+    /**
      * Whether this executor persists the plan's reverted markers itself, inside the same
      * atomic storage commit as the balance effects and the reversal audit records.
      *

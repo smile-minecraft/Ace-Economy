@@ -1,5 +1,6 @@
 package com.smile.aceeconomy.commands.v2.ports;
 
+import com.smile.aceeconomy.domain.AdminAudit;
 import com.smile.aceeconomy.operations.RollbackResult;
 
 import java.util.UUID;
@@ -15,4 +16,6 @@ import java.util.concurrent.CompletableFuture;
 public interface RollbackCommandService {
 
     CompletableFuture<RollbackResult> rollback(UUID transactionId);
+
+    CompletableFuture<RollbackResult> rollback(UUID transactionId, AdminAudit audit);
 }
