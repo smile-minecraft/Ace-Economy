@@ -122,4 +122,62 @@ final class PlayerSessionFlushFailureCapacityTest {
         assertTrue(manager.getSession(first).isPresent());
         assertEquals(PlayerSessionHandle.State.PRELOGIN, session.state());
     }
+
+    @Test
+    void disablePastCapThrowsAfterCleanupAndSecondDisableIsNoOp() {
+        FakeSessionStore store = new FakeSessionStore();
+        PlayerSessionManager manager = manager(store, 1);
+
+        UUID first = UUID.randomUUID();
+        manager.login(first, player());
+        store.loadFuture(0).complete(account(first));
+        manager.markDirty(first);
+        manager.quit(first, 0L); // fills the failure map to cap (1)
+        assertEquals(SessionError.FLUSH_TIMEOUT, manager.flushFailure(first).orElse(null));
+
+        UUID second = UUID.randomUUID();
+        manager.login(second, player());
+        store.loadFuture(1).complete(account(second));
+        manager.markDirty(second);
+
+        // disable with 0ms deadline causes flush timeout for second
+        SessionException refused = assertThrows(SessionException.class,
+                () -> manager.disable(0L),
+                "recording failure past cap during disable must throw CAPACITY_EXCEEDED after cleanup");
+        assertEquals(SessionError.CAPACITY_EXCEEDED, refused.error());
+
+        // sessions must be cleaned up and disabled flag must be true
+        assertTrue(manager.isDisabled());
+        assertTrue(manager.getSession(second).isEmpty(),
+                "session cleanup must have completed before the exception was thrown");
+
+        // Existing diagnostic and map size remain unchanged across the overflow refusal
+        assertEquals(1, manager.flushFailureCount(),
+                "flush failure map size must remain at cap 1 without admitting the second failure");
+        assertEquals(SessionError.FLUSH_TIMEOUT, manager.flushFailure(first).orElse(null),
+                "existing first diagnostic must remain intact");
+        assertTrue(manager.flushFailure(second).isEmpty(),
+                "unrecordable second failure must not be added to the map");
+
+        // Invalidation count must be 2: once for first quit, once for second during disable cleanup
+        assertEquals(2, store.invalidateCallCount,
+                "must invalidate both sessions: once on first quit, once on disable cleanup");
+        int flushCountBeforeSecondDisable = store.flushCallCount;
+        assertEquals(2, flushCountBeforeSecondDisable,
+                "flush call count before second disable must be 2 (first quit and first disable)");
+
+        // second disable is an idempotent no-op and does not repeat flush, invalidate, or throw
+        manager.disable(0L);
+        assertTrue(manager.isDisabled());
+        assertEquals(flushCountBeforeSecondDisable, store.flushCallCount,
+                "second disable must not repeat flush");
+        assertEquals(2, store.invalidateCallCount,
+                "second disable must not repeat invalidate");
+        assertEquals(1, manager.flushFailureCount(),
+                "second disable must not alter diagnostic map size");
+        assertEquals(SessionError.FLUSH_TIMEOUT, manager.flushFailure(first).orElse(null),
+                "existing diagnostic must remain intact after second disable");
+        assertTrue(manager.flushFailure(second).isEmpty(),
+                "second diagnostic must still be absent after second disable");
+    }
 }

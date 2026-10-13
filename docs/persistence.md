@@ -52,7 +52,21 @@ The instance-local locks hold no entries: they only serialize work inside one ru
 | SQL connection pool | Concurrent SQL users | `pool-size` (default 10) | Borrowers wait, then fail with an explicit timeout — never silently. |
 | 64-bit epoch counters | Invalidations | No cap, by design | No overflow in practice: even one million invalidations per second leaves about 292,000 years of headroom. |
 
-How the cap was set: one `UUID -> counter` holder measures about 75 bytes of heap, so 100,000 tracked IDs cost about 7.5 MB worst case — a small fraction of a server heap. 10,000 tracked session loads (accounts, snapshots, and holders together) fit in 64 MB. One consumed nonce costs about 61 JSON characters. These figures come from the automated capacity tests; rerun them before changing the cap. A restart resets all three tracking maps, which is safe because no in-flight load or stale write survives a restart.
+How the cap was set:
+- **Scope of measurement**: UUID key arrays are pre-generated prior to baseline heap sampling in automated tests (`SessionTrackingCapacityMeasurementTest`). Measured deltas cover map entry structures and value objects (new `AtomicLong` instances or shared `SessionError` enum references), excluding the heap occupied by the UUID key objects themselves. If distinct UUID key objects are included (approximately 32 bytes each), total heap footprint increases further.
+- **Observed values on test JVM** (empirical figures subject to variation across runs, JVM versions, and GC settling — not static guarantees or worst-case bounds; all MB figures in this section are decimal, 1 MB = 1,000,000 bytes):
+  - **Session invalidations & balance-cache epochs** (`UUID -> AtomicLong`): observed at ~626 KB (~62.6 bytes/entry) at 10,000 entries and ~7.05 MB (~70.5 bytes/entry) at the full 100,000 cap.
+  - **Flush-failure diagnostics** (`UUID -> SessionError`): observed at ~386 KB (~38.6 bytes/entry) at 10,000 entries and ~4.87 MB (~48.7 bytes/entry) at the full 100,000 cap.
+  - **All three tracking maps populated simultaneously** (two epoch maps plus one flush-failure map at 100,000 entries each): directly measured on the test JVM at ~20.6 MB heap delta (~206 bytes per distinct key across all three maps), population time varies by machine and load; locally observed at ~60 to 80 ms.
+- **Thresholds protected by assertions**: What the test suite strictly enforces is not a fixed MB total, but upper bounds on per-entry allocation:
+  - Epoch holder maps: strictly under 120 bytes/entry at 100,000 entries (under 150 bytes/entry at 10,000 entries).
+  - Flush diagnostics map: strictly under 80 bytes/entry at 100,000 entries (under 120 bytes/entry at 10,000 entries).
+  - All three maps combined: strictly under 320 bytes per key at full 100,000 capacity.
+  If drift exceeds these thresholds, automated tests fail.
+- **Full session working set**: 10,000 tracked session loads (accounts, snapshots, and holders together) measured in automated tests fitting well within 64 MB heap.
+- **Durable consumed nonces**: measured in automated tests adding 61 characters for the first entry and an exact 61.9999 characters per entry across 10,000 entries (approximately 62 characters per entry).
+
+Measurement methodology: run within the automated capacity test suite (`SessionTrackingCapacityMeasurementTest`), where distinct UUID arrays are pre-generated, the JVM heap is settled with warm-up passes and garbage collection calls before recording baseline and populated heap usage, and regression assertions protect per-entry thresholds. A restart resets all three tracking maps, which is safe because no in-flight load or stale write survives a restart.
 
 Durable growth is capped by nothing, deliberately: consumed nonces and transaction history are never deleted, because deleting a consumed key would break first-writer-wins and deleting history would destroy audit evidence. Watch the file and table sizes as part of server maintenance, and move data between servers only through the managed backup and restore flow.
 

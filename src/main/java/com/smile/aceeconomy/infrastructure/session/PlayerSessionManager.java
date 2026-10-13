@@ -224,13 +224,17 @@ public final class PlayerSessionManager {
                     pending.put(s.uuid, store.flush(s.account));
                 }
             }
+            Map<UUID, SessionError> failures = Map.of();
             if (!pending.isEmpty()) {
-                recordFlushFailures(coordinator.awaitFlush(pending, deadlineMillis));
+                failures = coordinator.awaitFlush(pending, deadlineMillis);
             }
             for (PlayerSession s : sessions.values()) {
                 store.invalidate(s.uuid); // shutdown drops every snapshot with its session
             }
             sessions.clear();
+            if (!failures.isEmpty()) {
+                recordFlushFailures(failures);
+            }
         } finally {
             structuralLock.unlock();
         }

@@ -17,13 +17,31 @@ import java.util.UUID;
  *       flush failed and who has not logged in since).</li>
  * </ul>
  *
- * <p>Measurement (see the session capacity tests): a {@code UUID -> AtomicLong}
- * holder costs well under 1KB of heap, so {@link #MAX_TRACKED_IDS} distinct IDs
- * bound every map to roughly tens of megabytes worst case — a small fraction of a
- * server heap. Past the cap the maps refuse new IDs explicitly instead of growing
- * silently: session loads fail fast with a typed capacity error, the balance cache
- * degrades to uncached reads, and unrecordable flush diagnostics throw after the
- * session itself has been cleaned up. A restart resets all three maps, which is
+ * <p>Measurement scope and observations (see automated tests in {@code SessionTrackingCapacityMeasurementTest}):
+ * Distinct UUID arrays are generated before taking the baseline heap sample, so measured deltas
+ * cover only map entry nodes and value objects (new {@link java.util.concurrent.atomic.AtomicLong} instances
+ * or shared enum references), excluding the UUID key objects themselves. Counting distinct key objects
+ * in would increase total heap further.</p>
+ *
+ * <p>Observed values on the test JVM (subject to variation across runs, JVM versions, and GC settling; all MB figures are decimal, 1 MB = 1,000,000 bytes):
+ * <ul>
+ *   <li>A {@code UUID -> AtomicLong} holder map was observed at ~62.6 bytes/entry at 10,000 entries (~626 KB)
+ *       and ~70.5 bytes/entry at 100,000 entries (~7.05 MB).</li>
+ *   <li>A {@code UUID -> SessionError} diagnostics map was observed at ~38.6 bytes/entry at 10,000 entries
+ *       (~386 KB) and ~48.7 bytes/entry at 100,000 entries (~4.87 MB).</li>
+ *   <li>All three maps populated simultaneously to full capacity (100,000 entries each) were directly
+ *       measured at ~20.6 MB total heap (~206 bytes per distinct key across all three maps), population time varies by machine and load (locally observed at ~60 to 80 ms).</li>
+ * </ul>
+ * Megabyte figures are empirical observations, not absolute bounds or worst-case guarantees. Automated
+ * regression assertions protect upper thresholds on per-entry costs:
+ * <ul>
+ *   <li>Epoch holder map: strictly under 120 bytes/entry at 100,000 entries (and under 150 bytes/entry at 10,000 entries).</li>
+ *   <li>Flush-failure map: strictly under 80 bytes/entry at 100,000 entries (and under 120 bytes/entry at 10,000 entries).</li>
+ *   <li>All three maps combined: strictly under 320 bytes per key at full 100,000 capacity.</li>
+ * </ul>
+ * Past the cap the maps refuse new IDs explicitly instead of growing silently: session loads fail fast
+ * with a typed capacity error, the balance cache degrades to uncached reads, and unrecordable flush
+ * diagnostics throw after the session itself has been cleaned up. A restart resets all three maps, which is
  * safe because no in-flight load or stale write survives a restart.</p>
  *
  * <p>The 64-bit epoch counters themselves are deliberately uncapped:
@@ -36,9 +54,14 @@ import java.util.UUID;
 public final class LockEpochCapacity {
 
     /**
-     * Maximum distinct IDs tracked by any one in-memory lock/epoch map. Measured,
-     * not guessed: 100,000 holders fit in roughly tens of megabytes (see above),
-     * while a single server restart cycle serves far fewer distinct players.
+     * Maximum distinct IDs tracked by any one in-memory lock/epoch map.
+     * Evaluated through empirical measurement rather than guessed: on the test JVM,
+     * an epoch map at 100,000 entries was observed at ~7.05 MB (~70.5 bytes/entry)
+     * and a flush diagnostics map at ~4.87 MB (~48.7 bytes/entry), with both excluding
+     * pre-generated UUID key objects. Automated assertions protect upper thresholds of
+     * 120 bytes/entry and 80 bytes/entry respectively (and 320 bytes/key across all three
+     * maps combined), while a single server restart cycle serves far fewer distinct players.
+     * See class javadoc and {@code SessionTrackingCapacityMeasurementTest}.
      */
     public static final int MAX_TRACKED_IDS = 100_000;
 
