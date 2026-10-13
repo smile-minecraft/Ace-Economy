@@ -247,7 +247,7 @@ Outcomes are reported explicitly:
 
 Example: `/aceeco rollback 0b5f8a2e-1c3d-4e5f-6a7b-8c9d0e1f2a3b`. With a reason: `/aceeco rollback 0b5f8a2e-1c3d-4e5f-6a7b-8c9d0e1f2a3b duplicate-payout`.
 
-The rollback command is wired into the production command surface and covered by automated contract tests, but it has **not** been verified on a live server yet: Folia/Bukkit bridge execution, live MySQL storage, and fault-injection drills with real data are still open release gates. Treat the outcomes above as the designed contract until that validation is done.
+The rollback command is wired into the production command surface and covered by automated contract tests, and it has since been validated in controlled drills on Folia with the MySQL, SQLite, and JSON backends: bridge execution, live storage writes, and checks with test data. The rollback release gate is still open: until it closes, keep using it only in controlled drills with backups taken beforehand.
 
 ### Create a logical backup: `/aceeco backup`
 
